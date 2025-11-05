@@ -1,0 +1,46 @@
+extensions:
+  opamp:
+    server:
+      ws:
+        endpoint: ws://host.docker.internal:4321/v1/opamp
+    instance_uid: "550e8400-e29b-41d4-a716-446655440003"
+    agent_description:
+      non_identifying_attributes:
+        service.name: "Test Agent 3"
+        service.version: "1.0.0"
+        service.instance.id: "550e8400-e29b-41d4-a716-446655440003"
+        environment: "test"
+        deployment.location: "docker"
+        deployment.type: "docker"
+        docker.container.name: "otel-agent-3"
+        org_id: "1"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  debug:
+
+service:
+  extensions: [opamp]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

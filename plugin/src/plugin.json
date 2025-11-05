@@ -1,0 +1,144 @@
+{
+  "type": "app",
+  "name": "OTel Collector Agent Fleet Management",
+  "id": "otel-collector-agent-fleet-management",
+  "info": {
+    "author": {
+      "name": "Nitesh Vaidyanath",
+      "email": "niteshbv@ymail.com",
+      "url": "https://github.com/nitesh-bv"
+    },
+    "version": "0.1.0",
+    "description": "Fleet management for OpenTelemetry Collector agents using OpAMP protocol. Manage, monitor, and configure your OTel Collector fleet from Grafana.",
+    "keywords": ["opamp", "otel", "opentelemetry", "fleet", "collector", "observability"],
+    "links": [
+      {
+        "name": "Documentation",
+        "url": "https://github.com/nitesh-bv/grafana-agents-app"
+      },
+      {
+        "name": "Support",
+        "url": "https://github.com/nitesh-bv/grafana-agents-app/issues"
+      },
+      {
+        "name": "GitHub Repository",
+        "url": "https://github.com/nitesh-bv/grafana-agents-app"
+      },
+      {
+        "name": "Open Fleet Management UI",
+        "url": "/api/plugins/otel-collector-agent-fleet-management/resources/"
+      }
+    ],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "screenshots": [],
+    "updated": "2025-11-05"
+  },
+  "backend": true,
+  "executable": "plugin",
+  "includes": [
+    {
+      "type": "page",
+      "name": "Fleet Management",
+      "path": "/a/otel-collector-agent-fleet-management",
+      "role": "Viewer",
+      "addToNav": true,
+      "defaultNav": true
+    }
+  ],
+  "dependencies": {
+    "grafanaDependency": ">=11.0.0",
+    "plugins": []
+  },
+  "jsonData": [
+    {
+      "path": "dbType",
+      "name": "Database Type",
+      "defaultValue": "mysql",
+      "description": "Type of database to use for persistence",
+      "type": "select",
+      "options": [
+        {"label": "MySQL", "value": "mysql"},
+        {"label": "Google Cloud SQL (MySQL)", "value": "cloudsql-mysql"},
+        {"label": "AWS RDS (MySQL)", "value": "aws-rds-mysql"},
+        {"label": "Google Cloud Spanner", "value": "spanner"}
+      ]
+    },
+    {
+      "path": "dbHost",
+      "name": "Database Host",
+      "defaultValue": "localhost",
+      "description": "Database server hostname or IP address",
+      "type": "string"
+    },
+    {
+      "path": "dbPort",
+      "name": "Database Port",
+      "defaultValue": "3306",
+      "description": "Database server port",
+      "type": "number"
+    },
+    {
+      "path": "dbName",
+      "name": "Database Name",
+      "defaultValue": "grafana_agents",
+      "description": "Name of the database to use",
+      "type": "string"
+    },
+    {
+      "path": "dbUser",
+      "name": "Database User",
+      "defaultValue": "grafana",
+      "description": "Database username",
+      "type": "string"
+    },
+    {
+      "path": "opampEndpoint",
+      "name": "OpAMP Server Endpoint",
+      "defaultValue": "0.0.0.0:4321",
+      "description": "Address and port for the OpAMP server to listen on (for embedded mode)",
+      "type": "string"
+    },
+    {
+      "path": "opampServerMode",
+      "name": "OpAMP Server Mode",
+      "defaultValue": "embedded",
+      "description": "OpAMP server deployment mode",
+      "type": "select",
+      "options": [
+        {"label": "Embedded (in plugin)", "value": "embedded"},
+        {"label": "External (standalone)", "value": "external"}
+      ]
+    },
+    {
+      "path": "opampServerURL",
+      "name": "External OpAMP Server URL",
+      "defaultValue": "http://opamp-server:4321",
+      "description": "URL of external OpAMP server (required when using external mode)",
+      "type": "string"
+    }
+  ],
+  "secureJsonData": [
+    {
+      "path": "dbPassword",
+      "name": "Database Password",
+      "description": "Database password (stored encrypted)",
+      "type": "password"
+    },
+    {
+      "path": "cloudSQLInstance",
+      "name": "Cloud SQL Instance Connection Name",
+      "description": "For Cloud SQL: project:region:instance",
+      "type": "string"
+    },
+    {
+      "path": "spannerDatabase",
+      "name": "Spanner Database Path",
+      "description": "For Spanner: projects/PROJECT/instances/INSTANCE/databases/DATABASE",
+      "type": "string"
+    }
+  ],
+  "signature": "unsigned"
+}

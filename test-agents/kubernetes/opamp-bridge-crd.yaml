@@ -1,0 +1,87 @@
+# OpAMPBridge CRD - Official method recommended by OpenTelemetry Operator
+# This is the proper way to deploy OpAMP Bridge
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpAMPBridge
+metadata:
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+spec:
+  # OpAMP Server endpoint - must be accessible from K8s cluster
+  # For Docker Compose: Use host.docker.internal directly (works in Docker Desktop K8s)
+  # For K8s deployment: Use service DNS like ws://opamp-server.default.svc.cluster.local:4321/v1/opamp
+  endpoint: ws://host.docker.internal:4321/v1/opamp
+  
+  # Service account for the bridge
+  serviceAccount: opamp-bridge
+  
+  # Capabilities the bridge supports (per OpAMP spec)
+  capabilities:
+    AcceptsRemoteConfig: true       # Can receive config from server
+    ReportsEffectiveConfig: true    # Reports current collector configs
+    ReportsHealth: true             # Reports bridge health
+    ReportsRemoteConfig: true       # Reports remote config status
+    ReportsRemoteConfigStatus: true # Reports detailed config push status
+  
+  # Components allowed in configurations
+  # NOT SPECIFIED = ALL COMPONENTS ARE ALLOWED
+  # This allows any receiver, processor, or exporter type to be used in configurations
+  # If you need to restrict components, uncomment and specify the allowed list below:
+  # componentsAllowed:
+  #   receivers:
+  #     - otlp
+  #     - hostmetrics
+  #     - prometheus
+  #     - filelog
+  #     - ... (add any receivers you want to allow)
+  #   processors:
+  #     - batch
+  #     - memory_limiter
+  #     - resource
+  #     - attributes
+  #     - ... (add any processors you want to allow)
+  #   exporters:
+  #     - otlp
+  #     - otlphttp
+  #     - debug
+  #     - logging
+  #     - elasticsearch
+  #     - ... (add any exporters you want to allow)
+---
+# ServiceAccount for OpAMP Bridge
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+---
+# ClusterRole for OpAMP Bridge
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opamp-bridge
+rules:
+- apiGroups:
+  - opentelemetry.io
+  resources:
+  - opentelemetrycollectors
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+  - update
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opamp-bridge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opamp-bridge
+subjects:
+- kind: ServiceAccount
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+

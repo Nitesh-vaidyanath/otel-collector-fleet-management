@@ -1,0 +1,55 @@
+# Page snapshot
+
+```yaml
+- main [ref=e6]:
+  - generic [ref=e8]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - img "Grafana" [ref=e12]
+        - heading "Welcome to Grafana" [level=1] [ref=e14]
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e22]: Email or username
+          - textbox "Email or username" [active] [ref=e27]:
+            - /placeholder: email or username
+        - generic [ref=e28]:
+          - generic [ref=e31]: Password
+          - generic [ref=e35]:
+            - textbox "Password" [ref=e36]:
+              - /placeholder: password
+            - switch "Show password" [ref=e38] [cursor=pointer]:
+              - img [ref=e39]
+        - button "Log in" [ref=e41] [cursor=pointer]:
+          - generic [ref=e42]: Log in
+        - link "Forgot your password?" [ref=e44] [cursor=pointer]:
+          - /url: /user/password/send-reset-email
+          - generic [ref=e45]: Forgot your password?
+    - list [ref=e48]:
+      - listitem [ref=e49]:
+        - img [ref=e50]
+        - link "Documentation" [ref=e52] [cursor=pointer]:
+          - /url: https://grafana.com/docs/grafana/latest/?utm_source=grafana_footer
+        - text: "|"
+      - listitem [ref=e53]:
+        - img [ref=e54]
+        - link "Support" [ref=e56] [cursor=pointer]:
+          - /url: https://grafana.com/products/enterprise/?utm_source=grafana_footer
+        - text: "|"
+      - listitem [ref=e57]:
+        - img [ref=e58]
+        - link "Community" [ref=e60] [cursor=pointer]:
+          - /url: https://community.grafana.com/?utm_source=grafana_footer
+        - text: "|"
+      - listitem [ref=e61]:
+        - link "Open Source" [ref=e62] [cursor=pointer]:
+          - /url: https://grafana.com/oss/grafana?utm_source=grafana_footer
+        - text: "|"
+      - listitem [ref=e63]:
+        - link "Grafana v11.2.0 (2a88694fd3)" [ref=e64] [cursor=pointer]:
+          - /url: https://github.com/grafana/grafana/blob/main/CHANGELOG.md
+        - text: "|"
+      - listitem [ref=e65]:
+        - img [ref=e66]
+        - link "New version available!" [ref=e68] [cursor=pointer]:
+          - /url: https://grafana.com/grafana/download?utm_source=grafana_footer
+```

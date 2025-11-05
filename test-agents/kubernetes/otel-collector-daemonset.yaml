@@ -1,0 +1,126 @@
+# ConfigMap for Daemonset Collector Configuration
+# OpAMP Bridge will update this ConfigMap to push config changes
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-daemonset-config
+  namespace: default
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      hostmetrics:
+        collection_interval: 10s
+        scrapers:
+          cpu:
+          disk:
+          load:
+          memory:
+          network:
+    
+    processors:
+      batch: {}
+      resource:
+        attributes:
+          - key: deployment.type
+            value: daemonset
+            action: upsert
+    
+    exporters:
+      debug:
+        verbosity: normal
+    
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp, hostmetrics]
+          processors: [batch, resource]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+---
+# OpenTelemetryCollector CRD - Daemonset Mode
+# References ConfigMap - OpAMP Bridge updates ConfigMap, operator watches ConfigMap
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-collector-daemonset
+  namespace: default
+  labels:
+    app: otel-collector
+    deployment.type: daemonset
+spec:
+  # Required field: Management state
+  managementState: managed
+  
+  # Daemonset mode - one collector per node
+  mode: daemonset
+  image: otel/opentelemetry-collector-contrib:latest
+  
+  # Configuration - REQUIRED field (structured object, not YAML string)
+  # OpAMP Bridge will patch this spec.config object when RemoteConfig is received
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      hostmetrics:
+        collection_interval: 10s
+        scrapers:
+          cpu: {}
+          disk: {}
+          load: {}
+          memory: {}
+          network: {}
+    processors:
+      batch: {}
+      resource:
+        attributes:
+          - key: deployment.type
+            value: daemonset
+            action: upsert
+    exporters:
+      debug:
+        verbosity: normal
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp, hostmetrics]
+          processors: [batch, resource]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+  
+  env:
+    - name: OTEL_SERVICE_NAME
+      value: "otel-collector-daemonset"
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: "service.name=otel-collector-daemonset,deployment.type=daemonset"
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

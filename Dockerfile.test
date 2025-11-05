@@ -1,0 +1,21 @@
+# Test image for E2E tests
+FROM grafana/grafana:11.2.0
+
+# Install dependencies for testing
+USER root
+RUN apk add --no-cache curl jq
+
+# Copy plugin files
+COPY dist/ /var/lib/grafana/plugins/otel-collector-agent-fleet-management/
+COPY provisioning/ /etc/grafana/provisioning/plugins/
+
+# Set permissions
+RUN chown -R grafana:grafana /var/lib/grafana/plugins/otel-collector-agent-fleet-management
+
+USER grafana
+
+# Expose ports
+EXPOSE 3000 4321
+
+CMD ["grafana-server"]
+

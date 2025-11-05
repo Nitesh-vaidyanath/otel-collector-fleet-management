@@ -1,0 +1,17 @@
+# Service to expose OpAMP server to Kubernetes cluster
+# Use this if host.docker.internal doesn't work in your cluster
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: opamp-server
+  namespace: default
+spec:
+  type: NodePort
+  ports:
+  - port: 4321
+    targetPort: 4321
+    nodePort: 30432
+    protocol: TCP
+    name: opamp
+

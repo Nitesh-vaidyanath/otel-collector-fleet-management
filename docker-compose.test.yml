@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  mysql-test:
+    image: mysql:8.0
+    container_name: grafana_mysql_test
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: grafana_agents
+      MYSQL_USER: grafana
+      MYSQL_PASSWORD: grafana123
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  grafana-test:
+    image: otel-collector-agent-fleet-management-test:latest
+    container_name: grafana_test
+    ports:
+      - "3001:3000"
+      - "4322:4321"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: otel-collector-agent-fleet-management
+      GF_LOG_FILTERS: plugin.otel-collector-agent-fleet-management:debug
+      OPAMP_ENDPOINT: "0.0.0.0:4321"
+      AGENTS_MYSQL_DSN: "grafana:grafana123@tcp(mysql-test:3306)/grafana_agents?parseTime=true&loc=Local&charset=utf8mb4,utf8"
+    depends_on:
+      mysql-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_test_data:
+

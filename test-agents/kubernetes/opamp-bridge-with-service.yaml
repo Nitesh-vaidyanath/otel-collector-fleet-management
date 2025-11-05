@@ -1,0 +1,93 @@
+# OpAMP Bridge configured to use NodePort service
+# Use this if host.docker.internal doesn't work
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+  labels:
+    app: opamp-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opamp-bridge
+  template:
+    metadata:
+      labels:
+        app: opamp-bridge
+    spec:
+      serviceAccountName: opamp-bridge
+      containers:
+      - name: opamp-bridge
+        image: ghcr.io/open-telemetry/opentelemetry-operator/operator-opamp-bridge:v0.138.0
+        args:
+        - --config-file=/conf/remoteconfiguration.yaml
+        - --kubeconfig-path=/dev/null
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+          readOnly: true
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+      volumes:
+      - name: config
+        configMap:
+          name: opamp-bridge-config-service
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opamp-bridge-config-service
+  namespace: opentelemetry-operator-system
+data:
+  remoteconfiguration.yaml: |
+    opamp:
+      endpoint: "ws://opamp-server.default.svc.cluster.local:4321/v1/opamp"
+    kubernetes:
+      kubeconfig_path: "/dev/null"
+    bridge:
+      name: "opamp-bridge"
+      heartbeat_interval: "30s"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opamp-bridge
+rules:
+- apiGroups:
+  - opentelemetry.io
+  resources:
+  - opentelemetrycollectors
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opamp-bridge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opamp-bridge
+subjects:
+- kind: ServiceAccount
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+

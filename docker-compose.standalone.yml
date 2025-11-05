@@ -1,0 +1,90 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: grafana_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: grafana_agents
+      MYSQL_USER: grafana
+      MYSQL_PASSWORD: grafana123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "grafana", "-pgrafana123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opamp-server:
+    build:
+      context: ./opamp-server
+      dockerfile: Dockerfile.standalone
+    container_name: opamp-server
+    restart: unless-stopped
+    ports:
+      - "4321:4321"  # OpAMP WebSocket endpoint
+      - "8080:8080"  # Health check endpoint
+    environment:
+      # Database connection (use DSN or individual parameters)
+      AGENTS_MYSQL_DSN: "grafana:grafana123@tcp(mysql:3306)/grafana_agents?parseTime=true&loc=Local&charset=utf8mb4,utf8"
+      # Alternative: Use individual parameters
+      # DB_TYPE: "mysql"
+      # DB_HOST: "mysql"
+      # DB_PORT: "3306"
+      # DB_NAME: "grafana_agents"
+      # DB_USER: "grafana"
+      # DB_PASSWORD: "grafana123"
+    volumes:
+      # Optional: Mount TLS certificates if using TLS
+      - ./opamp-server/tls:/app/tls:ro
+    command:
+      - "-endpoint=0.0.0.0:4321"
+      # Uncomment to enable TLS (requires certificates in ./opamp-server/tls/)
+      # - "-tls"
+      # - "-cert=/app/tls/cert.pem"
+      # - "-key=/app/tls/key.pem"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: otel-collector-agent-fleet-management
+      GF_LOG_FILTERS: plugin.otel-collector-agent-fleet-management:debug
+      # Configure plugin to use external OpAMP server
+      OPAMP_SERVER_URL: "http://opamp-server:4321"
+      OPAMP_SERVER_MODE: "external"  # Use external OpAMP server instead of embedded
+      # Database connection for plugin (if needed for other features)
+      AGENTS_MYSQL_DSN: "grafana:grafana123@tcp(mysql:3306)/grafana_agents?parseTime=true&loc=Local&charset=utf8mb4,utf8"
+    volumes:
+      # REQUIRED: Mount built plugin so Grafana can load it
+      - ./dist:/var/lib/grafana/plugins/otel-collector-agent-fleet-management
+      # OPTIONAL: Auto-enable plugin via provisioning (convenience)
+      - ./provisioning:/etc/grafana/provisioning/plugins:ro
+      # RECOMMENDED: Persist Grafana data (dashboards, users, settings) between restarts
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - mysql
+      - opamp-server
+
+volumes:
+  mysql_data:
+  grafana_data:
+

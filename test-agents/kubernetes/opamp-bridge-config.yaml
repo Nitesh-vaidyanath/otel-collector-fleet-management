@@ -1,0 +1,31 @@
+# OpAMP Bridge Configuration
+# This config file is mounted as a ConfigMap and used by the opamp-bridge
+# Reference: https://github.com/open-telemetry/opentelemetry-operator/tree/main/cmd/opampsupervisor
+
+# OpAMP Server Configuration
+opamp:
+  # WebSocket endpoint of the OpAMP server
+  # For Docker Desktop K8s: use host.docker.internal
+  # For other K8s: use NodePort service or LoadBalancer
+  endpoint: "ws://host.docker.internal:4321/v1/opamp"
+  
+  # Optional: TLS configuration
+  # tls:
+  #   insecure_skip_verify: true
+  #   cert_file: "/path/to/cert.pem"
+  #   key_file: "/path/to/key.pem"
+  #   ca_file: "/path/to/ca.pem"
+
+# Kubernetes Configuration
+kubernetes:
+  # Kubeconfig path (use /dev/null for in-cluster config)
+  kubeconfig_path: "/dev/null"
+
+# Bridge Configuration
+bridge:
+  # Name used for querying managed collectors
+  name: "opamp-bridge"
+  
+  # Heartbeat interval (optional, defaults to 30s)
+  heartbeat_interval: "30s"
+
