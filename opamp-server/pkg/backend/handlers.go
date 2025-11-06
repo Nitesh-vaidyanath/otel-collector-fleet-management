@@ -43,23 +43,23 @@ func settingsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	if opampServerMode == "" {
 		opampServerMode = "embedded" // default
 	}
-	
+
 	opampServerURL := os.Getenv("OPAMP_SERVER_URL")
 	if opampServerURL == "" {
 		opampServerURL = "http://localhost:4321" // default
 	}
-	
+
 	opampEndpoint := os.Getenv("OPAMP_ENDPOINT")
 	if opampEndpoint == "" {
 		opampEndpoint = "0.0.0.0:4321" // default
 	}
-	
+
 	jsonOK(w, map[string]any{
 		"opampServerMode": opampServerMode,
 		"opampServerURL":  opampServerURL,
 		"opampEndpoint":   opampEndpoint,
 		"hasOpampManager": globalOpampManager != nil,
-		"note": "Settings are currently read from environment variables. To change, set OPAMP_SERVER_MODE and OPAMP_SERVER_URL environment variables and restart the plugin backend.",
+		"note":            "Settings are currently read from environment variables. To change, set OPAMP_SERVER_MODE and OPAMP_SERVER_URL environment variables and restart the plugin backend.",
 	})
 }
 
@@ -146,35 +146,22 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		// Use subquery to get latest agent per agent_uid to prevent duplicates
 		// For OpAMP Bridge instances, deduplicate by name since they share the same logical identity
 		// Also filter out agents that haven't been seen in last 24 hours if they're offline
-		// CRITICAL: Exclude discovered collectors (agents with bridge.instance_uid label) - they belong under bridges
+		// CRITICAL: Exclude bridges (they're in bridges table) and discovered collectors (they belong under bridges)
+		// Exclude:
+		// 1. Agents with reports_effective_config capability (bridges)
+		// 2. Agents with bridge.instance_uid label (managed collectors)
 		rows, err := db.Query(`
 			SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json 
 			FROM agents a
-			INNER JOIN (
-				-- For OpAMP Bridge, group by name instead of agent_uid to deduplicate
-				SELECT 
-					CASE 
-						WHEN name LIKE 'io.opentelemetry.operator-opamp-bridge%' 
-						THEN CONCAT('io.opentelemetry.operator-opamp-bridge-', org_id)
-						ELSE agent_uid 
-					END as dedup_key,
-					MAX(last_seen_at) as max_seen
-				FROM agents
-				WHERE org_id=? AND (status='online' OR last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
-				GROUP BY dedup_key
-			) latest ON (
-				(CASE 
-					WHEN a.name LIKE 'io.opentelemetry.operator-opamp-bridge%' 
-					THEN CONCAT('io.opentelemetry.operator-opamp-bridge-', a.org_id)
-					ELSE a.agent_uid 
-				END) = latest.dedup_key 
-				AND a.last_seen_at = latest.max_seen
-			)
 			WHERE a.org_id=?
+			  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+			  -- Exclude bridges (they're in bridges table)
+			  AND (JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') IS NULL OR JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') != true)
+			  -- Exclude discovered collectors (they belong under bridges)
 			  AND (JSON_EXTRACT(a.labels_json, '$."bridge.instance_uid"') IS NULL OR JSON_EXTRACT(a.labels_json, '$."bridge.instance_uid"') = '')
 			ORDER BY a.last_seen_at DESC 
 			LIMIT 200
-		`, orgID, orgID)
+		`, orgID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -275,26 +262,38 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		fmt.Sscanf(orgIDParam, "%d", &orgID)
 	}
 
-	// Get all OpAMP Bridges - deduplicate by name, keeping only the most recent instance
-	bridgeRows, err := db.Query(`
-		SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json
-		FROM agents a
-		INNER JOIN (
-			SELECT name, MAX(last_seen_at) as max_seen
-			FROM agents
-			WHERE org_id=? 
-			  AND (name LIKE '%opamp-bridge%' OR name LIKE '%operator-opamp-bridge%')
-			  AND (status='online' OR last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
-			GROUP BY name
-		) latest ON a.name = latest.name AND a.last_seen_at = latest.max_seen
-		WHERE a.org_id=?
-		  AND (a.name LIKE '%opamp-bridge%' OR a.name LIKE '%operator-opamp-bridge%')
-		  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
-		ORDER BY a.last_seen_at DESC
-	`, orgID, orgID)
+	// Get all OpAMP Bridges from bridges table (NOT agents table)
+	// CRITICAL: Bridges are stored in bridges table, collectors in agents table
+	// Fallback: If bridges table doesn't exist (migration not run), query agents table
+	var bridgeRows *sql.Rows
+	var err error
+
+	// Try to query bridges table first
+	bridgeRows, err = db.Query(`
+		SELECT id, org_id, bridge_uid, name, COALESCE(version,''), status, last_seen_at, labels_json, capabilities_json
+		FROM bridges
+		WHERE org_id=?
+		  AND (status='online' OR status='degraded' OR last_seen_at > DATE_SUB(NOW(), INTERVAL 7 DAY))
+		ORDER BY last_seen_at DESC
+	`, orgID)
+
+	// If bridges table doesn't exist, fall back to agents table (for backward compatibility)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+		log.Printf("WARNING: bridges table not found (migration may not have run). Falling back to agents table. Error: %v", err)
+		log.Printf("Please run migration 0018_create_bridges_table.sql to fix this.")
+		// Fallback: Query agents table for bridges (old behavior)
+		bridgeRows, err = db.Query(`
+			SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json
+			FROM agents a
+			WHERE a.org_id=?
+			  AND JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') = true
+			  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+			ORDER BY a.last_seen_at DESC
+		`, orgID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to query bridges: %v", err), 500)
+			return
+		}
 	}
 	defer bridgeRows.Close()
 
@@ -332,10 +331,17 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		var lastSeen sql.NullTime
 		var labelsJSON sql.NullString
 		var capabilitiesJSON sql.NullString
+		var bridgeUID string // Use bridge_uid column name (or agent_uid in fallback)
 
-		if err := bridgeRows.Scan(&bridge.ID, &bridge.OrgID, &bridge.AgentUID, &bridge.Name, &ver, &bridge.Status, &lastSeen, &labelsJSON, &capabilitiesJSON); err != nil {
+		// Try to scan as bridges table first (bridge_uid column)
+		// If that fails, scan as agents table (agent_uid column) - fallback mode
+		err := bridgeRows.Scan(&bridge.ID, &bridge.OrgID, &bridgeUID, &bridge.Name, &ver, &bridge.Status, &lastSeen, &labelsJSON, &capabilitiesJSON)
+		if err != nil {
+			// If scan failed, might be fallback mode - try with agent_uid
+			log.Printf("WARNING: Failed to scan bridge row: %v", err)
 			continue
 		}
+		bridge.AgentUID = bridgeUID // Map bridge_uid/agent_uid to AgentUID field
 
 		if ver != "" && ver != "unknown" {
 			bridge.Version = &ver
@@ -359,22 +365,29 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			}
 		}
 		if capabilitiesJSON.Valid && capabilitiesJSON.String != "" {
-			json.Unmarshal([]byte(capabilitiesJSON.String), &bridge.Capabilities)
+			if err := json.Unmarshal([]byte(capabilitiesJSON.String), &bridge.Capabilities); err != nil {
+				log.Printf("WARNING: Failed to unmarshal capabilities for bridge %s: %v", bridge.AgentUID[:8], err)
+				bridge.Capabilities = make(map[string]interface{})
+			}
+		} else {
+			// If capabilities_json is NULL or empty, initialize empty map
+			bridge.Capabilities = make(map[string]interface{})
 		}
 
 		// Get collectors managed by this bridge
 		// Use bracket notation for JSON keys with dots: $."key.with.dots"
 		// CRITICAL: Match collectors by bridge.instance_uid label
 		// Bridge UID in database is normalized, collectors also store normalized UID
-		// Try both normalized and original formats to handle any edge cases
+		// JSON_EXTRACT returns quoted strings, so we need to compare properly
 		bridgeNormalizedUID := normalizeAgentUID(bridge.AgentUID)
+		log.Printf("DEBUG: Querying collectors for bridge %s (normalized: %s)", bridge.AgentUID[:8], bridgeNormalizedUID[:8])
 		collectorRows, err := db.Query(`
 			SELECT id, agent_uid, name, COALESCE(version,''), status, last_seen_at, labels_json, capabilities_json
 			FROM agents
 			WHERE org_id=?
 			  AND (
-				JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') = ?
-				OR JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') = ?
+				JSON_UNQUOTE(JSON_EXTRACT(labels_json, '$."bridge.instance_uid"')) = ?
+				OR JSON_UNQUOTE(JSON_EXTRACT(labels_json, '$."bridge.instance_uid"')) = ?
 			  )
 			  AND agent_uid != ?
 			ORDER BY name
@@ -387,7 +400,9 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		}
 
 		collectors := []Collector{}
+		rowCount := 0
 		for collectorRows.Next() {
+			rowCount++
 			var collector Collector
 			var ver string
 			var lastSeen sql.NullTime
@@ -395,6 +410,7 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			var capabilitiesJSON sql.NullString
 
 			if err := collectorRows.Scan(&collector.ID, &collector.AgentUID, &collector.Name, &ver, &collector.Status, &lastSeen, &labelsJSON, &capabilitiesJSON); err != nil {
+				log.Printf("WARNING: Failed to scan collector row %d for bridge %s: %v", rowCount, bridge.AgentUID[:8], err)
 				continue
 			}
 
@@ -413,8 +429,11 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			}
 
 			collectors = append(collectors, collector)
+			log.Printf("DEBUG: Found collector %s (%s) for bridge %s", collector.AgentUID[:8], collector.Name, bridge.AgentUID[:8])
 		}
 		collectorRows.Close()
+
+		log.Printf("DEBUG: Bridge %s (%s) has %d collectors (scanned %d rows)", bridge.AgentUID[:8], bridge.Name, len(collectors), rowCount)
 
 		bridge.Collectors = collectors
 		bridges = append(bridges, bridge)
@@ -432,6 +451,62 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		},
 		"orgID":   orgID,
 		"orgName": orgName.String,
+	})
+}
+
+// bridgeDeleteHandler deletes a bridge and optionally its collectors
+func bridgeDeleteHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	db := mustDB()
+	defer db.Close()
+
+	path := strings.TrimPrefix(r.URL.Path, "/bridges/")
+	path = strings.TrimSuffix(path, "/delete")
+	bridgeUID := strings.Split(path, "/")[0]
+	if bridgeUID == "" {
+		http.Error(w, "missing bridge uid", 400)
+		return
+	}
+
+	// Normalize bridge UID (remove hyphens)
+	bridgeNormalizedUID := normalizeAgentUID(bridgeUID)
+
+	// Check if bridge exists
+	var bridgeID int64
+	var orgID int64
+	err := db.QueryRow(`
+		SELECT id, org_id FROM bridges WHERE bridge_uid=? OR bridge_uid=?
+	`, bridgeUID, bridgeNormalizedUID).Scan(&bridgeID, &orgID)
+	if err != nil {
+		// Try fallback to agents table
+		err = db.QueryRow(`
+			SELECT id, org_id FROM agents WHERE agent_uid=? OR agent_uid=?
+		`, bridgeUID, bridgeNormalizedUID).Scan(&bridgeID, &orgID)
+		if err != nil {
+			http.Error(w, "bridge not found", 404)
+			return
+		}
+		// Delete from agents table (fallback)
+		_, err = db.Exec(`DELETE FROM agents WHERE id=? AND org_id=?`, bridgeID, c.OrgID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete bridge: %v", err), 500)
+			return
+		}
+	} else {
+		// Delete from bridges table
+		_, err = db.Exec(`DELETE FROM bridges WHERE id=? AND org_id=?`, bridgeID, c.OrgID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to delete bridge: %v", err), 500)
+			return
+		}
+	}
+
+	// Optionally delete collectors managed by this bridge
+	// (User can manually delete collectors if needed)
+	// For now, we'll leave collectors - they'll be cleaned up by the 24-hour cleanup job if offline
+
+	jsonOK(w, map[string]any{
+		"ok":      true,
+		"message": "Bridge deleted successfully",
 	})
 }
 
@@ -922,15 +997,15 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		Exporters   []map[string]any `json:"exporters"`
 		Service     map[string]any   `json:"service"`
 		CRDSettings *struct {
-			Name            string         `json:"name,omitempty"`             // Optional: for creating NEW collectors
-			Namespace       string         `json:"namespace,omitempty"`        // Optional: for creating NEW collectors
+			Name            string         `json:"name,omitempty"`      // Optional: for creating NEW collectors
+			Namespace       string         `json:"namespace,omitempty"` // Optional: for creating NEW collectors
 			Mode            string         `json:"mode"`
 			Replicas        *int           `json:"replicas,omitempty"`
 			Image           string         `json:"image"`
 			ManagementState string         `json:"managementState"`
 			UpgradeStrategy string         `json:"upgradeStrategy"`
 			Resources       map[string]any `json:"resources"`
-			AdvancedYaml    string         `json:"advancedYaml,omitempty"`     // Advanced YAML: targetAllocator, volumes, etc.
+			AdvancedYaml    string         `json:"advancedYaml,omitempty"` // Advanced YAML: targetAllocator, volumes, etc.
 		} `json:"crdSettings,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -972,7 +1047,7 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	// For EXISTING collectors: Full CRD without metadata (PushConfig will merge with existing CRD)
 	// For DaemonSet: Deployment settings are ignored by PushConfig, only spec.config is used
 	isNewCollector := req.CRDSettings != nil && req.CRDSettings.Name != "" && req.CRDSettings.Namespace != ""
-	
+
 	if req.CRDSettings != nil {
 		// Build full CRD with deployment settings
 		spec := map[string]any{
@@ -1123,7 +1198,7 @@ func buildComponentMap(components []map[string]any) map[string]any {
 					config = nestedConfig
 				}
 			}
-			
+
 			// Additional safety check: if config has a key matching the component name,
 			// and it's NOT a custom component, this is likely an error - remove it
 			if compType != "custom" && compType != "" {
@@ -1860,7 +1935,7 @@ func agentCurrentConfigHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 				if currentConfigHash.Valid {
 					hashMatch := (hash == currentConfigHash.String)
 					result["opampHashMatch"] = hashMatch
-					result["hashMatch"] = hashMatch  // Also provide as hashMatch for frontend compatibility
+					result["hashMatch"] = hashMatch // Also provide as hashMatch for frontend compatibility
 					if !hashMatch {
 						result["syncStatus"] = "not_synced"
 						result["syncIssue"] = "Agent's reported RemoteConfig hash does not match current config hash"
@@ -1906,7 +1981,7 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	var remoteConfigStatusAt sql.NullTime
 	var effectiveConfigHash sql.NullString
 	var lastStatusReport sql.NullTime
-	
+
 	row := db.QueryRow(`
 		SELECT current_config_yaml, current_config_hash, 
 		       remote_config_status, remote_config_error, 
@@ -1915,8 +1990,8 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 		FROM agents 
 		WHERE org_id=? AND agent_uid=?
 	`, c.OrgID, uid)
-	
-	if err := row.Scan(&agentConfig, &agentConfigHash, &remoteConfigStatus, &remoteConfigError, 
+
+	if err := row.Scan(&agentConfig, &agentConfigHash, &remoteConfigStatus, &remoteConfigError,
 		&remoteConfigStatusAt, &effectiveConfigHash, &lastStatusReport); err != nil {
 		http.Error(w, "agent not found", 404)
 		return
@@ -1925,7 +2000,7 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	result := map[string]any{
 		"agentUid": uid,
 	}
-	
+
 	// Include RemoteConfigStatus in response
 	if remoteConfigStatus.Valid {
 		result["remoteConfigStatus"] = remoteConfigStatus.String
@@ -1987,7 +2062,7 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 			// Use effective hash from RemoteConfigStatus if available (more accurate)
 			hashToCompare = effectiveConfigHash.String
 		}
-		
+
 		if hashToCompare != "" && dbConfigHash.Valid {
 			result["hashMatch"] = (hashToCompare == dbConfigHash.String)
 			if hashToCompare == dbConfigHash.String {
@@ -2141,7 +2216,7 @@ func agentConfigDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	var previousVersion sql.NullInt64
 	var previousConfigID sql.NullInt64
 	var isUsingBaseline bool = false
-	
+
 	if currentVersion.Valid {
 		// Try to get previous version (version < current version, maximum)
 		row2 := db.QueryRow(`
@@ -2196,13 +2271,13 @@ func agentConfigDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	if previousConfig.Valid {
 		previous = previousConfig.String
 	}
-	
+
 	// Set result fields - "previous" = previous version (or baseline), "current" = selected version
 	result["previous"] = previous
 	result["previousConfig"] = previous
 	result["hasPreviousConfig"] = previous != ""
 	result["isUsingBaseline"] = isUsingBaseline // Flag to indicate if we're comparing against baseline
-	
+
 	if previousVersion.Valid {
 		result["previousVersion"] = previousVersion.Int64
 	}
@@ -2378,7 +2453,7 @@ func componentTypesHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		args = append(args, c.UserName)
 		// Add WHERE clause parameters (id and org_id)
 		args = append(args, in.ID, c.OrgID)
-		
+
 		// Build query safely - updates only contains hardcoded column names like "display_label=?", "description=?", etc.
 		// All user input is in args slice and will be properly escaped by database driver
 		query := `UPDATE component_types SET ` + strings.Join(updates, ", ") + ` WHERE id=? AND org_id=? AND is_system=FALSE`

@@ -65,6 +65,18 @@ func newHTTPMux() *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/bridges/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/bridges/")
+		if strings.HasSuffix(path, "/delete") {
+			if r.Method == http.MethodDelete || r.Method == http.MethodPost {
+				wrap(bridgeDeleteHandler)(w, r) // Viewer+
+			} else {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		http.Error(w, "not found", 404)
+	})
 	mux.HandleFunc("/agents", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

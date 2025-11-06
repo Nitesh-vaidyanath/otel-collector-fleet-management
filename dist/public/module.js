@@ -2632,10 +2632,36 @@ var App = () => {
   const [agentActivityLog, setAgentActivityLog] = useState([]);
   const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
   const [isAdmin, setIsAdmin] = useState(false);
+  const handleDeleteBridge = async (bridgeUid, bridgeName) => {
+    if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?
+
+This will remove the bridge from the UI. Collectors managed by this bridge will be cleaned up automatically if they remain offline for 24 hours.`)) {
+      return;
+    }
+    try {
+      const url = `/api/plugins/otel-collector-agent-fleet-management/resources/bridges/${bridgeUid}/delete`;
+      await backendSrv.post(url);
+      await fetchBridges();
+      await fetchAgents();
+    } catch (err) {
+      alert(`Failed to delete bridge: ${err.message || "Unknown error"}`);
+    }
+  };
   const fetchBridges = async () => {
     try {
       const url = selectedOrgId !== null ? `/api/plugins/otel-collector-agent-fleet-management/resources/bridges?org_id=${selectedOrgId}` : "/api/plugins/otel-collector-agent-fleet-management/resources/bridges";
       const response = await backendSrv.get(url);
+      console.log("DEBUG: Fetched bridges response:", { bridges: response.bridges, count: response.bridges?.length || 0 });
+      if (response.bridges && response.bridges.length > 0) {
+        response.bridges.forEach((bridge, idx) => {
+          console.log(`DEBUG: Bridge ${idx}:`, {
+            agentUid: bridge.agentUid?.substring(0, 8),
+            name: bridge.name,
+            collectorsCount: bridge.collectors?.length || 0,
+            collectors: bridge.collectors?.map((c) => ({ uid: c.agentUid?.substring(0, 8), name: c.name }))
+          });
+        });
+      }
       setBridges(response.bridges || []);
     } catch (err) {
       console.error("Failed to fetch bridges:", err);
@@ -3028,7 +3054,7 @@ var App = () => {
     color: "#6B7280",
     alignItems: "center",
     justifyContent: "space-between"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, agents.length), " Total"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#10B981" } }, onlineCount), " Online"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#EF4444" } }, agents.length - onlineCount), " Offline"), agents.length > 0 && selectedOrgId && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)), " Total"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#10B981" } }, onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0)), " Online"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#EF4444" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0))), " Offline"), agents.length > 0 && selectedOrgId && /* @__PURE__ */ React.createElement("div", { style: {
     marginLeft: 16,
     paddingLeft: 16,
     borderLeft: "1px solid #E5E7EB",
@@ -3049,7 +3075,7 @@ var App = () => {
       }
     },
     groupByDeploymentType ? "\u{1F4C1} Grouped by Type" : "\u{1F4CB} Flat List"
-  ))), loading ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 80, color: "#6B7280" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, marginBottom: 8 } }, "Loading collectors..."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14 } }, "Connecting to OpAMP server...")) : filteredAgents.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: {
+  ))), loading ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 80, color: "#6B7280" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, marginBottom: 8 } }, "Loading collectors..."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14 } }, "Connecting to OpAMP server...")) : bridges.length === 0 && filteredAgents.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     border: "1px solid #E5E7EB",
@@ -3081,7 +3107,7 @@ var App = () => {
     color: "#111827"
   } }, "OpAMP Bridges (", bridges.length, ")"), /* @__PURE__ */ React.createElement("div", { style: {
     display: "grid",
-    gridTemplateColumns: "30px 200px 1fr 120px 100px",
+    gridTemplateColumns: "30px 200px 1fr 120px 100px 100px",
     gap: 12,
     padding: "12px 16px",
     background: "#F9FAFB",
@@ -3090,7 +3116,7 @@ var App = () => {
     fontSize: 11,
     color: "#6B7280",
     textTransform: "uppercase"
-  } }, /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null, "Bridge"), /* @__PURE__ */ React.createElement("div", null, "Labels"), /* @__PURE__ */ React.createElement("div", null, "Health"), /* @__PURE__ */ React.createElement("div", null, "Version")), bridges.map((bridge) => {
+  } }, /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null, "Bridge"), /* @__PURE__ */ React.createElement("div", null, "Labels"), /* @__PURE__ */ React.createElement("div", null, "Health"), /* @__PURE__ */ React.createElement("div", null, "Version"), /* @__PURE__ */ React.createElement("div", null, "Actions")), bridges.map((bridge) => {
     const bridgeCollectors = bridge.collectors || [];
     const isExpanded = expandedGroups.has(bridge.agentUid);
     return /* @__PURE__ */ React.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement(
@@ -3107,7 +3133,7 @@ var App = () => {
         },
         style: {
           display: "grid",
-          gridTemplateColumns: "30px 200px 1fr 120px 100px",
+          gridTemplateColumns: "30px 200px 1fr 120px 100px 100px",
           gap: 12,
           padding: "12px 16px",
           background: isExpanded ? "#F3F4F6" : "white",
@@ -3132,7 +3158,33 @@ var App = () => {
       } }, bridge.name),
       /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", bridge.cluster), bridge.labels && Object.keys(bridge.labels).length > 0 && Object.entries(bridge.labels).filter(([key]) => !["k8s.namespace", "k8s.cluster", "cluster", "namespace"].includes(key)).slice(0, 2).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key, style: { fontSize: 10, color: "#374151", padding: "3px 8px", background: "#F3F4F6", borderRadius: 4 } }, key, ": ", value)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 500 } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
       /* @__PURE__ */ React.createElement("div", null, getStatusBadge(bridge.status)),
-      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridge.version || "unknown")
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridge.version || "unknown"),
+      /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation() }, bridge.status === "offline" && /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => handleDeleteBridge(bridge.agentUid, bridge.name),
+          style: {
+            padding: "4px 12px",
+            background: "#FEE2E2",
+            color: "#DC2626",
+            border: "1px solid #FCA5A5",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 500,
+            transition: "all 0.2s"
+          },
+          onMouseEnter: (e) => {
+            e.currentTarget.style.background = "#FECACA";
+            e.currentTarget.style.borderColor = "#F87171";
+          },
+          onMouseLeave: (e) => {
+            e.currentTarget.style.background = "#FEE2E2";
+            e.currentTarget.style.borderColor = "#FCA5A5";
+          }
+        },
+        "Delete"
+      ))
     ), isExpanded && bridgeCollectors.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "#FAFBFC", borderTop: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: {
       display: "grid",
       gridTemplateColumns: "30px 200px 1fr 120px 100px 120px",
@@ -4060,8 +4112,22 @@ function MonitoringSection({ agents, bridges }) {
   const [loading, setLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
   const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
+  useEffect(() => {
+    if (selectedAgentUID) {
+      const isBridge = bridges.some((b) => b.agentUid === selectedAgentUID);
+      if (isBridge) {
+        setSelectedAgentUID("");
+        setMonitoringData(null);
+      }
+    }
+  }, [selectedAgentUID, bridges]);
   const loadMonitoringData = async (agentUID, skipLoading = false) => {
     if (!agentUID) {
+      setMonitoringData(null);
+      return;
+    }
+    const isBridge = bridges.some((b) => b.agentUid === agentUID);
+    if (isBridge) {
       setMonitoringData(null);
       return;
     }
@@ -4126,8 +4192,14 @@ function MonitoringSection({ agents, bridges }) {
       return () => clearInterval(interval);
     }
   }, [selectedAgentUID]);
-  const onlineAgents = agents.filter((a) => a.status === "online");
-  const totalAgents = agents.length;
+  const allCollectors = [
+    ...agents,
+    // Standalone agents
+    ...bridges.flatMap((b) => b.collectors || [])
+    // Collectors from bridges
+  ];
+  const onlineAgents = allCollectors.filter((a) => a.status === "online");
+  const totalAgents = allCollectors.length;
   return /* @__PURE__ */ React.createElement("div", { style: { width: "100%" } }, /* @__PURE__ */ React.createElement("div", { style: {
     width: "100%",
     background: "white",
@@ -4163,7 +4235,15 @@ function MonitoringSection({ agents, bridges }) {
     background: "#FEE2E2",
     borderRadius: 6,
     border: "1px solid #FECACA"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 4, fontWeight: 600 } }, "Offline"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: "#991B1B" } }, totalAgents - onlineAgents.length))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "Select Agent to Monitor"), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 4, fontWeight: 600 } }, "Offline"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: "#991B1B" } }, totalAgents - onlineAgents.length))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "Select Agent to Monitor"), bridges.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+    padding: "12px 16px",
+    background: "#FEF3C7",
+    border: "1px solid #FCD34D",
+    borderRadius: 6,
+    marginBottom: 12,
+    fontSize: 12,
+    color: "#92400E"
+  } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " Bridges are management agents and cannot be monitored. Only collectors (shown under bridges) can be monitored for pipelines and metrics."), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
     const bridgeCollectors = bridge.collectors || [];
     const isExpanded = expandedGroups.has(`monitor-${bridge.agentUid}`);
     return /* @__PURE__ */ React.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement(
@@ -4180,46 +4260,22 @@ function MonitoringSection({ agents, bridges }) {
         },
         style: {
           padding: "12px 16px",
-          background: isExpanded ? "#F3F4F6" : selectedAgentUID === bridge.agentUid ? "#DBEAFE" : "white",
+          background: isExpanded ? "#F3F4F6" : "white",
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
           gap: 12,
-          borderLeft: selectedAgentUID === bridge.agentUid ? "4px solid #3B82F6" : "none"
+          borderLeft: "2px solid #E5E7EB"
         },
         onMouseEnter: (e) => {
-          if (selectedAgentUID !== bridge.agentUid) {
-            e.currentTarget.style.background = "#F9FAFB";
-          }
+          e.currentTarget.style.background = "#F9FAFB";
         },
         onMouseLeave: (e) => {
-          if (selectedAgentUID !== bridge.agentUid) {
-            e.currentTarget.style.background = isExpanded ? "#F3F4F6" : "white";
-          }
+          e.currentTarget.style.background = isExpanded ? "#F3F4F6" : "white";
         }
       },
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", width: 20 } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
-      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, bridge.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Bridge)"), bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
-      /* @__PURE__ */ React.createElement(
-        "button",
-        {
-          onClick: (e) => {
-            e.stopPropagation();
-            setSelectedAgentUID(bridge.agentUid);
-          },
-          style: {
-            padding: "4px 12px",
-            background: selectedAgentUID === bridge.agentUid ? "#3B82F6" : "#E5E7EB",
-            color: selectedAgentUID === bridge.agentUid ? "white" : "#374151",
-            border: "none",
-            borderRadius: 4,
-            cursor: "pointer",
-            fontSize: 11,
-            fontWeight: 500
-          }
-        },
-        selectedAgentUID === bridge.agentUid ? "\u2713 Selected" : "Select"
-      )
+      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#6B7280", fontSize: 12 } }, bridge.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#9CA3AF" } }, "(Bridge - Management Agent)"), bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""))
     ), isExpanded && bridgeCollectors.map((collector) => /* @__PURE__ */ React.createElement(
       "div",
       {

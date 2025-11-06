@@ -85,12 +85,38 @@ export const App = () => {
 
   const [isAdmin, setIsAdmin] = useState(false);
 
+  const handleDeleteBridge = async (bridgeUid: string, bridgeName: string) => {
+    if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?\n\nThis will remove the bridge from the UI. Collectors managed by this bridge will be cleaned up automatically if they remain offline for 24 hours.`)) {
+      return;
+    }
+    try {
+      const url = `/api/plugins/otel-collector-agent-fleet-management/resources/bridges/${bridgeUid}/delete`;
+      await backendSrv.post(url);
+      // Refresh bridges list
+      await fetchBridges();
+      await fetchAgents();
+    } catch (err: any) {
+      alert(`Failed to delete bridge: ${err.message || 'Unknown error'}`);
+    }
+  };
+
   const fetchBridges = async () => {
     try {
       const url = selectedOrgId !== null 
         ? `/api/plugins/otel-collector-agent-fleet-management/resources/bridges?org_id=${selectedOrgId}`
         : '/api/plugins/otel-collector-agent-fleet-management/resources/bridges';
       const response = await backendSrv.get(url);
+      console.log('DEBUG: Fetched bridges response:', { bridges: response.bridges, count: response.bridges?.length || 0 });
+      if (response.bridges && response.bridges.length > 0) {
+        response.bridges.forEach((bridge: Bridge, idx: number) => {
+          console.log(`DEBUG: Bridge ${idx}:`, { 
+            agentUid: bridge.agentUid?.substring(0, 8), 
+            name: bridge.name, 
+            collectorsCount: bridge.collectors?.length || 0,
+            collectors: bridge.collectors?.map((c: any) => ({ uid: c.agentUid?.substring(0, 8), name: c.name }))
+          });
+        });
+      }
       setBridges(response.bridges || []);
     } catch (err: any) {
       console.error('Failed to fetch bridges:', err);
@@ -601,13 +627,13 @@ export const App = () => {
               }}>
                 <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#111827' }}>{agents.length}</span> Total
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)}</span> Total
                   </div>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#10B981' }}>{onlineCount}</span> Online
+                    <span style={{ fontWeight: 600, color: '#10B981' }}>{onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0)}</span> Online
                   </div>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#EF4444' }}>{agents.length - onlineCount}</span> Offline
+                    <span style={{ fontWeight: 600, color: '#EF4444' }}>{(agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0))}</span> Offline
                   </div>
                   {agents.length > 0 && selectedOrgId && (
                     <div style={{ 
@@ -647,7 +673,7 @@ export const App = () => {
                 <div style={{ fontSize: 18, marginBottom: 8 }}>Loading collectors...</div>
                 <div style={{ fontSize: 14 }}>Connecting to OpAMP server...</div>
               </div>
-            ) : filteredAgents.length === 0 ? (
+            ) : bridges.length === 0 && filteredAgents.length === 0 ? (
               <div style={{
                 background: 'white',
                 borderRadius: 8,
@@ -725,7 +751,7 @@ export const App = () => {
                 {/* Bridge Header Row */}
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '30px 200px 1fr 120px 100px',
+                  gridTemplateColumns: '30px 200px 1fr 120px 100px 100px',
                   gap: 12,
                   padding: '12px 16px',
                   background: '#F9FAFB',
@@ -740,6 +766,7 @@ export const App = () => {
                   <div>Labels</div>
                   <div>Health</div>
                   <div>Version</div>
+                  <div>Actions</div>
                 </div>
                     
                     {/* Bridges with nested collectors */}
@@ -761,7 +788,7 @@ export const App = () => {
                             }}
                             style={{
                               display: 'grid',
-                              gridTemplateColumns: '30px 200px 1fr 120px 100px',
+                              gridTemplateColumns: '30px 200px 1fr 120px 100px 100px',
                               gap: 12,
                               padding: '12px 16px',
                               background: isExpanded ? '#F3F4F6' : 'white',
@@ -827,6 +854,36 @@ export const App = () => {
                             {/* Bridge Version */}
                             <div style={{ fontSize: 12, color: '#6B7280' }}>
                               {bridge.version || 'unknown'}
+                            </div>
+                            
+                            {/* Bridge Actions */}
+                            <div onClick={(e) => e.stopPropagation()}>
+                              {bridge.status === 'offline' && (
+                                <button
+                                  onClick={() => handleDeleteBridge(bridge.agentUid, bridge.name)}
+                                  style={{
+                                    padding: '4px 12px',
+                                    background: '#FEE2E2',
+                                    color: '#DC2626',
+                                    border: '1px solid #FCA5A5',
+                                    borderRadius: 4,
+                                    cursor: 'pointer',
+                                    fontSize: 11,
+                                    fontWeight: 500,
+                                    transition: 'all 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = '#FECACA';
+                                    e.currentTarget.style.borderColor = '#F87171';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = '#FEE2E2';
+                                    e.currentTarget.style.borderColor = '#FCA5A5';
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
                             </div>
                           </div>
                           
@@ -2459,8 +2516,27 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const backendSrv = getBackendSrv();
 
+  // Prevent selecting bridges - only collectors can be monitored (bridges don't have pipelines/configs)
+  useEffect(() => {
+    if (selectedAgentUID) {
+      // Check if selected agent is a bridge
+      const isBridge = bridges.some(b => b.agentUid === selectedAgentUID);
+      if (isBridge) {
+        // Clear selection if a bridge is selected - bridges don't have collector configs/pipelines
+        setSelectedAgentUID('');
+        setMonitoringData(null);
+      }
+    }
+  }, [selectedAgentUID, bridges]);
+
   const loadMonitoringData = async (agentUID: string, skipLoading = false) => {
     if (!agentUID) {
+      setMonitoringData(null);
+      return;
+    }
+    // Prevent loading monitoring data for bridges
+    const isBridge = bridges.some(b => b.agentUid === agentUID);
+    if (isBridge) {
       setMonitoringData(null);
       return;
     }
@@ -2535,8 +2611,13 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
     }
   }, [selectedAgentUID]);
 
-  const onlineAgents = agents.filter(a => a.status === 'online');
-  const totalAgents = agents.length;
+  // Calculate total agents including collectors from bridges
+  const allCollectors = [
+    ...agents, // Standalone agents
+    ...bridges.flatMap(b => b.collectors || []) // Collectors from bridges
+  ];
+  const onlineAgents = allCollectors.filter(a => a.status === 'online');
+  const totalAgents = allCollectors.length;
 
   return (
     <div style={{ width: '100%' }}>
@@ -2632,6 +2713,19 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
           <label style={{ display: 'block', fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
             Select Agent to Monitor
           </label>
+          {bridges.length > 0 && (
+            <div style={{
+              padding: '12px 16px',
+              background: '#FEF3C7',
+              border: '1px solid #FCD34D',
+              borderRadius: 6,
+              marginBottom: 12,
+              fontSize: 12,
+              color: '#92400E'
+            }}>
+              ⚠️ <strong>Note:</strong> Bridges are management agents and cannot be monitored. Only collectors (shown under bridges) can be monitored for pipelines and metrics.
+            </div>
+          )}
           {bridges.length > 0 ? (
             <div style={{ border: '1px solid #D1D5DB', borderRadius: 6, background: 'white', maxHeight: '400px', overflowY: 'auto' }}>
               {bridges.map(bridge => {
@@ -2639,7 +2733,7 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                 const isExpanded = expandedGroups.has(`monitor-${bridge.agentUid}`);
                 return (
                   <div key={bridge.agentUid} style={{ borderBottom: '1px solid #E5E7EB' }}>
-                    {/* Bridge Option */}
+                    {/* Bridge Option - NOT selectable, only expandable */}
                     <div
                       onClick={() => {
                         const newExpanded = new Set(expandedGroups);
@@ -2652,30 +2746,26 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                       }}
                       style={{
                         padding: '12px 16px',
-                        background: isExpanded ? '#F3F4F6' : selectedAgentUID === bridge.agentUid ? '#DBEAFE' : 'white',
+                        background: isExpanded ? '#F3F4F6' : 'white',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 12,
-                        borderLeft: selectedAgentUID === bridge.agentUid ? '4px solid #3B82F6' : 'none'
+                        borderLeft: '2px solid #E5E7EB'
                       }}
                       onMouseEnter={(e) => {
-                        if (selectedAgentUID !== bridge.agentUid) {
-                          e.currentTarget.style.background = '#F9FAFB';
-                        }
+                        e.currentTarget.style.background = '#F9FAFB';
                       }}
                       onMouseLeave={(e) => {
-                        if (selectedAgentUID !== bridge.agentUid) {
-                          e.currentTarget.style.background = isExpanded ? '#F3F4F6' : 'white';
-                        }
+                        e.currentTarget.style.background = isExpanded ? '#F3F4F6' : 'white';
                       }}
                     >
                       <div style={{ fontSize: 12, color: '#6B7280', width: 20 }}>
                         {bridgeCollectors.length > 0 ? (isExpanded ? '▼' : '▶') : ''}
                       </div>
                       <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 600, color: '#111827' }}>{bridge.name}</span>
-                        <span style={{ fontSize: 11, color: '#6B7280' }}>(Bridge)</span>
+                        <span style={{ fontWeight: 600, color: '#6B7280', fontSize: 12 }}>{bridge.name}</span>
+                        <span style={{ fontSize: 11, color: '#9CA3AF' }}>(Bridge - Management Agent)</span>
                         {bridge.namespace && (
                           <span style={{ fontSize: 10, padding: '2px 6px', background: '#EFF6FF', color: '#1E40AF', borderRadius: 3 }}>
                             ns: {bridge.namespace}
@@ -2691,24 +2781,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                           {bridgeCollectors.length} collector{bridgeCollectors.length !== 1 ? 's' : ''}
                         </span>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedAgentUID(bridge.agentUid);
-                        }}
-                        style={{
-                          padding: '4px 12px',
-                          background: selectedAgentUID === bridge.agentUid ? '#3B82F6' : '#E5E7EB',
-                          color: selectedAgentUID === bridge.agentUid ? 'white' : '#374151',
-                          border: 'none',
-                          borderRadius: 4,
-                          cursor: 'pointer',
-                          fontSize: 11,
-                          fontWeight: 500
-                        }}
-                      >
-                        {selectedAgentUID === bridge.agentUid ? '✓ Selected' : 'Select'}
-                      </button>
                     </div>
                     
                     {/* Collectors (nested) */}
