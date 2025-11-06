@@ -58,6 +58,13 @@ func newHTTPMux() *http.ServeMux {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/bridges", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			wrap(bridgesCollectionHandler)(w, r) // Viewer+
+		} else {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.HandleFunc("/agents", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

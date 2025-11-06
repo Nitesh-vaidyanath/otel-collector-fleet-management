@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -45,6 +47,7 @@ func normalizeAgentUID(uid string) string {
 
 // extractCollectorConfigFromCRD extracts the collector configuration from a full OpenTelemetryCollector CRD YAML
 // The bridge sends the full CRD (with metadata, spec, etc.) but we only need spec.config (the actual collector config)
+// For pushing config to existing collectors, we MUST send ONLY spec.config, not the full CRD
 func extractCollectorConfigFromCRD(crdBody []byte, agentUID string) string {
 	if len(crdBody) == 0 {
 		return ""
@@ -54,6 +57,26 @@ func extractCollectorConfigFromCRD(crdBody []byte, agentUID string) string {
 	var crdYAML map[string]interface{}
 	if err := yaml.Unmarshal(crdBody, &crdYAML); err != nil {
 		// Not a CRD - probably direct collector config, return as-is
+		log.Printf("DEBUG: Config for agent %s is not a CRD format, using as-is (direct collector config)", agentUID)
+		return string(crdBody)
+	}
+
+	// Check if this is a CRD structure (has apiVersion, kind, spec)
+	isCRD := false
+	if apiVersion, ok := crdYAML["apiVersion"].(string); ok {
+		if strings.Contains(apiVersion, "opentelemetry.io") {
+			isCRD = true
+		}
+	}
+	if kind, ok := crdYAML["kind"].(string); ok {
+		if kind == "OpenTelemetryCollector" {
+			isCRD = true
+		}
+	}
+
+	if !isCRD {
+		// Not a CRD structure - return as-is
+		log.Printf("DEBUG: Config for agent %s doesn't appear to be a CRD (no apiVersion/kind), using as-is", agentUID)
 		return string(crdBody)
 	}
 
@@ -62,18 +85,20 @@ func extractCollectorConfigFromCRD(crdBody []byte, agentUID string) string {
 		if config, ok := spec["config"].(map[string]interface{}); ok {
 			// Marshal just the config part back to YAML
 			if configYAML, err := yaml.Marshal(config); err == nil {
+				log.Printf("DEBUG: Extracted spec.config from CRD for agent %s (removed metadata, deployment settings, etc.)", agentUID)
 				return string(configYAML)
 			} else {
 				log.Printf("WARNING: Failed to marshal extracted config for agent %s: %v", agentUID, err)
 			}
 		} else {
-			log.Printf("WARNING: CRD for agent %s has no spec.config section", agentUID)
+			log.Printf("WARNING: CRD for agent %s has no spec.config section, returning full body", agentUID)
 		}
 	} else {
 		log.Printf("WARNING: CRD for agent %s has no spec section, returning full body", agentUID)
 	}
 
 	// Fallback: return full body if extraction failed
+	log.Printf("WARNING: Failed to extract spec.config from CRD for agent %s, returning full CRD (bridge may reject)", agentUID)
 	return string(crdBody)
 }
 
@@ -230,7 +255,7 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 			ON DUPLICATE KEY UPDATE 
 				name = IF(VALUES(name) != '' AND VALUES(name) != VALUES(agent_uid), VALUES(name), name),
 				version = IF(VALUES(version) != '' AND VALUES(version) != 'unknown', VALUES(version), version),
-				status = 'online',
+			status = IF(status = 'degraded', 'degraded', 'online'),
 				last_seen_at = NOW(),
 				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
 				capabilities_json = IF(CHAR_LENGTH(VALUES(capabilities_json)) > 2 AND VALUES(capabilities_json) != '{}', VALUES(capabilities_json), capabilities_json),
@@ -255,7 +280,7 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 			ON DUPLICATE KEY UPDATE 
 				name = IF(VALUES(name) != '' AND VALUES(name) != VALUES(agent_uid), VALUES(name), name),
 				version = IF(VALUES(version) != '' AND VALUES(version) != 'unknown', VALUES(version), version),
-				status = 'online',
+			status = IF(status = 'degraded', 'degraded', 'online'),
 				last_seen_at = NOW(),
 				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
 				capabilities_json = IF(CHAR_LENGTH(VALUES(capabilities_json)) > 2 AND VALUES(capabilities_json) != '{}', VALUES(capabilities_json), capabilities_json),
@@ -285,13 +310,52 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 	db := mustDB()
 	defer db.Close()
 
+	// Fix 1: Check bridge's own health status
+	// If bridge sends Health message, update bridge status based on it
+	if message.Health != nil {
+		healthy := message.Health.Healthy
+		var currentStatus string
+		row := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, bridgeInstanceUID)
+		if err := row.Scan(&currentStatus); err == nil {
+			if !healthy {
+				// Bridge is unhealthy - mark as degraded
+				if currentStatus == "online" {
+					log.Printf("WARNING: Bridge %s reported unhealthy status - marking as degraded", bridgeInstanceUID[:8])
+					if message.Health.LastError != "" {
+						log.Printf("  Bridge health error: %s", message.Health.LastError)
+					}
+					db.Exec(`UPDATE agents SET status='degraded', last_seen_at=NOW() WHERE agent_uid=?`, bridgeInstanceUID)
+				} else if currentStatus == "degraded" {
+					// Already degraded, just update heartbeat
+					db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, bridgeInstanceUID)
+				}
+			} else {
+				// Bridge is healthy - ensure it's marked as online
+				if currentStatus == "degraded" || currentStatus == "offline" {
+					log.Printf("✓ Bridge %s recovered to healthy status", bridgeInstanceUID[:8])
+					db.Exec(`UPDATE agents SET status='online', last_seen_at=NOW() WHERE agent_uid=?`, bridgeInstanceUID)
+				} else if currentStatus == "online" {
+					// Already online, just update heartbeat
+					db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, bridgeInstanceUID)
+				}
+			}
+		}
+	} else {
+		// No Health message from bridge - update heartbeat but don't change status
+		// Health status will be determined by connection status (online/offline)
+		db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=? AND status IN ('online', 'degraded')`, bridgeInstanceUID)
+	}
+
 	// Get all discovered collectors for this bridge
+	// Use bracket notation for JSON keys with dots: $."key.with.dots"
+	// CRITICAL: Normalize bridge UID for comparison - collectors store normalized UID in bridge.instance_uid
+	bridgeNormalizedUID := normalizeAgentUID(bridgeInstanceUID)
 	rows, err := db.Query(`
-		SELECT agent_uid, name, labels 
+		SELECT agent_uid, name, labels_json 
 		FROM agents 
-		WHERE JSON_EXTRACT(labels, '$.\"bridge.instance_uid\"') = ?
+		WHERE JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') = ?
 		  AND agent_uid != ?
-	`, bridgeInstanceUID, bridgeInstanceUID)
+	`, bridgeNormalizedUID, bridgeInstanceUID)
 
 	if err != nil {
 		log.Printf("ERROR: Failed to query discovered collectors for bridge %s: %v", bridgeInstanceUID, err)
@@ -300,22 +364,39 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 	defer rows.Close()
 
 	// Build set of collectors currently in EffectiveConfig (what bridge is reporting)
+	// CRITICAL: Keys are in format "namespace/name" per OpAMP bridge spec
+	// Reference: https://github.com/open-telemetry/opentelemetry-operator/blob/main/cmd/operator-opamp-bridge/internal/agent/agent.go
+	// The bridge sends EffectiveConfig with keys like "default/test-collector" or "opentelemetry-operator-system/otel-collector-daemonset"
 	collectorsInEffectiveConfig := make(map[string]bool)
 	hasEffectiveConfig := false
 	if message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
-		if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; cfgMap != nil && len(cfgMap) > 0 {
+		if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; len(cfgMap) > 0 {
 			hasEffectiveConfig = true
 			for configKey := range cfgMap {
-				collectorsInEffectiveConfig[configKey] = true
+				// Only consider keys that are namespace/name format (e.g., "default/test-collector")
+				// Skip empty string, "collector.yaml", or other non-namespace/name keys
+				if configKey != "" && configKey != "collector.yaml" && strings.Contains(configKey, "/") {
+					collectorsInEffectiveConfig[configKey] = true
+				}
 			}
-			log.Printf("DEBUG: Bridge %s EffectiveConfig contains %d collectors", bridgeInstanceUID[:8], len(collectorsInEffectiveConfig))
+			keys := make([]string, 0, len(collectorsInEffectiveConfig))
+			for k := range collectorsInEffectiveConfig {
+				keys = append(keys, k)
+			}
+			log.Printf("DEBUG: Bridge %s EffectiveConfig contains %d collectors (keys: %v)", bridgeInstanceUID[:8], len(collectorsInEffectiveConfig), keys)
 		}
 	}
 
 	// If bridge didn't send EffectiveConfig, skip status updates (don't mark anything offline)
 	// This can happen during config push or bridge restart
+	// BUT: Still update last_seen_at for all collectors managed by this bridge to prevent cleanup worker from marking them offline
 	if !hasEffectiveConfig {
-		log.Printf("DEBUG: Bridge %s did not send EffectiveConfig (or it's empty) - skipping collector status updates", bridgeInstanceUID[:8])
+		log.Printf("DEBUG: Bridge %s did not send EffectiveConfig (or it's empty) - updating last_seen_at for all collectors but skipping status updates", bridgeInstanceUID[:8])
+		// Still update last_seen_at for all collectors to prevent them being marked offline
+		// This ensures collectors stay "online" if bridge is connected (even if EffectiveConfig is temporarily empty)
+		db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid IN (
+			SELECT agent_uid FROM agents WHERE JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') = ?
+		)`, bridgeNormalizedUID)
 		return
 	}
 
@@ -343,23 +424,146 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 		// Build config key (format: namespace/name)
 		configKey := fmt.Sprintf("%s/%s", namespace, crdName)
 
-		// REAL-TIME STATUS: If collector is in EffectiveConfig → mark online and update heartbeat
-		// If NOT in EffectiveConfig → don't mark offline immediately (let cleanup worker handle it after 2 minutes)
-		// This prevents false negatives from temporary glitches or slow heartbeats
+		// REAL-TIME STATUS: If collector is in EffectiveConfig → check for errors before marking online
+		// If NOT in EffectiveConfig → check if CRD exists (deleted vs degraded)
+		// NOTE: Health status from Health message takes priority - storeAgentTelemetry will update status
 		if collectorsInEffectiveConfig[configKey] {
-			// Collector is being reported by bridge → ONLINE (update heartbeat)
-			db.Exec(`UPDATE agents SET status='online', last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
-			onlineCount++
+			// Collector is in EffectiveConfig - ALWAYS update last_seen_at first (bridge heartbeat)
+			// CRITICAL: Check bridge's ComponentHealthMap for per-collector health status
+			// The bridge reports health for each collector pool in ComponentHealthMap with key format: namespace/name
+			var currentStatus string
+			collectorRow := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, agentUID)
+			collectorRow.Scan(&currentStatus)
+
+			// CRITICAL: Update last_seen_at immediately - this is the bridge heartbeat for this collector
+			db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+
+			// Check bridge's ComponentHealthMap for this collector's health
+			// Key format is: namespace/name (e.g., "opentelemetry-operator-system/test-collector")
+			collectorHealthFromBridge := false
+			collectorHealthy := false
+			if message.Health != nil && message.Health.ComponentHealthMap != nil {
+				if health, ok := message.Health.ComponentHealthMap[configKey]; ok && health != nil {
+					collectorHealthFromBridge = true
+					collectorHealthy = health.Healthy
+					log.Printf("DEBUG: Collector %s/%s health from bridge ComponentHealthMap: healthy=%v, error=%s",
+						namespace, crdName, health.Healthy, health.LastError)
+				}
+			}
+
+			// Determine collector status based on bridge's health report
+			if collectorHealthFromBridge {
+				// Bridge explicitly reports health for this collector
+				if collectorHealthy {
+					// Collector is healthy according to bridge - mark as online
+					if currentStatus != "online" {
+						log.Printf("INFO: Collector %s/%s (%s) is healthy according to bridge ComponentHealthMap - marking as online",
+							namespace, crdName, agentUID[:8])
+						db.Exec(`UPDATE agents SET status='online' WHERE agent_uid=?`, agentUID)
+						onlineCount++
+					}
+				} else {
+					// Collector is unhealthy according to bridge - mark as degraded
+					if currentStatus != "degraded" {
+						log.Printf("WARNING: Collector %s/%s (%s) is unhealthy according to bridge ComponentHealthMap - marking as degraded",
+							namespace, crdName, agentUID[:8])
+						db.Exec(`UPDATE agents SET status='degraded' WHERE agent_uid=?`, agentUID)
+					}
+				}
+			} else {
+				// No ComponentHealthMap entry for this collector - if in EffectiveConfig, assume healthy
+				// CRITICAL: If collector is in EffectiveConfig, bridge is managing it successfully - mark as online
+				if currentStatus != "online" {
+					log.Printf("INFO: Collector %s/%s (%s) is in EffectiveConfig (no ComponentHealthMap entry) - marking as online",
+						namespace, crdName, agentUID[:8])
+					db.Exec(`UPDATE agents SET status='online' WHERE agent_uid=?`, agentUID)
+					onlineCount++
+				}
+			}
 		} else {
-			// Collector not in EffectiveConfig - log but don't mark offline
-			// The cleanup worker will mark it offline after 2 minutes if no heartbeat is received
-			log.Printf("DEBUG: Collector %s/%s (%s) not found in bridge EffectiveConfig - will check again next heartbeat", namespace, crdName, agentUID[:8])
+			// Collector NOT in EffectiveConfig - this means:
+			// 1. Collector pod crashed/errored and bridge removed it from EffectiveConfig
+			// 2. Collector was deleted (CRD no longer exists)
+			// 3. Collector is temporarily unavailable
+			// CRITICAL: Only mark as degraded if it was previously online
+			// If it's already degraded or offline, don't change status (might be deleted)
+			var currentStatus string
+			row := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, agentUID)
+			if err := row.Scan(&currentStatus); err == nil {
+				if currentStatus == "online" {
+					// Collector was online but now missing from EffectiveConfig - mark as degraded
+					log.Printf("WARNING: Collector %s/%s (%s) missing from bridge EffectiveConfig - marking as degraded (may be deleted or crashed)",
+						namespace, crdName, agentUID[:8])
+					db.Exec(`UPDATE agents SET status='degraded', last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+				} else if currentStatus == "degraded" {
+					// Already degraded, just update timestamp
+					db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+				} else if currentStatus == "offline" {
+					// Already offline - don't change, might be deleted
+					// Just update timestamp to prevent cleanup
+					db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+				}
+			}
 		}
 	}
 
 	if onlineCount > 0 {
 		log.Printf("✓ Updated heartbeat for %d collector(s) via bridge %s (all marked online)", onlineCount, bridgeInstanceUID[:8])
 	}
+}
+
+// getCollectorModeFromCRD extracts the mode (deployment, daemonset, statefulset) from CRD YAML
+// Returns the mode string, or empty string if not found or error
+func getCollectorModeFromCRD(crdYAML string) string {
+	if crdYAML == "" {
+		return ""
+	}
+
+	var crd map[string]interface{}
+	if err := yaml.Unmarshal([]byte(crdYAML), &crd); err != nil {
+		return ""
+	}
+
+	if spec, ok := crd["spec"].(map[string]interface{}); ok {
+		if mode, ok := spec["mode"].(string); ok && mode != "" {
+			return strings.ToLower(mode)
+		}
+	}
+
+	// Mode not specified - default is deployment
+	return "deployment"
+}
+
+// getCollectorMode retrieves the mode (deployment, daemonset, statefulset) of an OpenTelemetryCollector CRD
+// Returns the mode string, or empty string if not found or error
+// DEPRECATED: Use getCollectorModeFromCRD instead - this function is kept for backward compatibility
+func getCollectorMode(namespace, crdName string) string {
+	// Without kubectl, we can't query Kubernetes directly
+	// Try to get mode from stored CRD YAML in database
+	db := mustDB()
+	defer db.Close()
+
+	var currentCRDYAML sql.NullString
+	// Try to find collector by namespace/name pattern in labels
+	rows, err := db.Query(`
+		SELECT current_config_yaml FROM agents 
+		WHERE JSON_EXTRACT(labels_json, '$."k8s.namespace"') = ? 
+		  AND JSON_EXTRACT(labels_json, '$."k8s.crd_name"') = ?
+		LIMIT 1
+	`, namespace, crdName)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		if rows.Scan(&currentCRDYAML) == nil && currentCRDYAML.Valid {
+			return getCollectorModeFromCRD(currentCRDYAML.String)
+		}
+	}
+
+	// Mode not found - default to deployment (supports remote config)
+	return "deployment"
 }
 
 // storeAgentMetrics processes OwnMetrics from OpAMP message
@@ -374,6 +578,10 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 	instanceUID = normalizeAgentUID(instanceUID)
 	db := mustDB()
 	defer db.Close()
+
+	// Update last_seen_at immediately on every message to prevent false offline status
+	// This ensures agents stay online as long as they're sending messages
+	db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, instanceUID)
 
 	// Determine org_id from agent (default to 1)
 	var orgID int64 = 1
@@ -445,6 +653,42 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 			VALUES (?, ?, ?, ?, ?, NOW())
 		`, orgID, instanceUID, healthy, lastError, fmt.Sprintf("Agent health: %v", healthy))
 
+		// Update agent status based on health
+		// Only mark as degraded if Health.Healthy is explicitly false
+		// If Health.Healthy is true, mark as online
+		// Default behavior: if agent is sending messages, it's online (connection-based)
+		if !healthy {
+			// Agent is connected but unhealthy - mark as degraded
+			// Only do this if health is explicitly false (not just missing)
+			var currentStatus string
+			row := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, instanceUID)
+			if err := row.Scan(&currentStatus); err == nil {
+				// Only mark as degraded if currently online (don't override offline)
+				// This prevents marking agents offline that are already offline
+				if currentStatus == "online" {
+					status := "degraded"
+					if lastError != "" {
+						log.Printf("WARNING: Agent %s is unhealthy: %s", instanceUID[:8], lastError)
+					} else {
+						log.Printf("WARNING: Agent %s is unhealthy (no error message)", instanceUID[:8])
+					}
+					m.updateAgentStatus(instanceUID, status)
+				}
+			}
+		} else {
+			// Agent is healthy - ensure it's marked as online
+			// Check current status first to avoid unnecessary updates
+			var currentStatus string
+			row := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, instanceUID)
+			if err := row.Scan(&currentStatus); err == nil {
+				if currentStatus == "degraded" || currentStatus == "offline" {
+					// Recover from degraded/offline to online
+					log.Printf("✓ Agent %s recovered to healthy status", instanceUID[:8])
+					m.updateAgentStatus(instanceUID, "online")
+				}
+			}
+		}
+
 		// Store as telemetry
 		healthData, _ := json.Marshal(map[string]interface{}{
 			"healthy":       healthy,
@@ -478,7 +722,73 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 			log.Printf("   Then restart the bridge: kubectl -n opentelemetry-operator-system rollout restart deployment/opamp-bridge-opamp-bridge")
 		}
 
+		// Enhanced error detection for DaemonSet webhook errors
+		isDaemonSetError := errorMsg != "" && strings.Contains(strings.ToLower(errorMsg), "daemonset") && strings.Contains(errorMsg, "does not support modification")
+		if isDaemonSetError {
+			log.Printf("❌ DAEMONSET WEBHOOK ERROR DETECTED for agent %s: %s", instanceUID, errorMsg)
+			log.Printf("   This error occurs when trying to update a DaemonSet collector via OpAMP Bridge.")
+			log.Printf("   Known Issue: https://github.com/open-telemetry/opentelemetry-operator/issues/4481")
+			log.Printf("   WORKAROUND: Use kubectl patch to update DaemonSet collectors:")
+			log.Printf("   kubectl patch opentelemetrycollector <name> -n <namespace> --type=merge -p='{\"spec\":{\"config\":<config>}}'")
+			log.Printf("   NOTE: This is a limitation of the OpAMP Bridge, not this server.")
+
+			// CRITICAL: Check if this error is for a DIFFERENT collector than the one we pushed to
+			// The bridge reports RemoteConfigStatus at bridge level, so if we pushed to collector A (non-DaemonSet)
+			// but the bridge also manages collector B (DaemonSet), the bridge might report FAILED even though
+			// collector A succeeded. We need to check if we pushed to a non-DaemonSet collector.
+			// Check all collectors that have this desired_config_hash (the ones we recently pushed to)
+			if effectiveHashStr != "" {
+				checkDB := mustDB()
+				// Find collectors that have this desired_config_hash (ones we pushed to)
+				rows, err := checkDB.Query(`
+					SELECT agent_uid, labels_json FROM agents 
+					WHERE desired_config_hash = ? AND agent_uid != ?
+					ORDER BY remote_config_status_at DESC
+				`, effectiveHashStr, instanceUID)
+				checkDB.Close()
+
+				if err == nil {
+					defer rows.Close()
+					for rows.Next() {
+						var collectorUID string
+						var labelsJSON sql.NullString
+						if rows.Scan(&collectorUID, &labelsJSON) == nil && labelsJSON.Valid {
+							var labels map[string]string
+							if json.Unmarshal([]byte(labelsJSON.String), &labels) == nil {
+								collectorNamespace := labels["k8s.namespace"]
+								collectorName := labels["k8s.crd_name"]
+								// Check if this collector is DaemonSet
+								if collectorNamespace != "" && collectorName != "" {
+									mode := getCollectorMode(collectorNamespace, collectorName)
+									isDaemonSet := (mode == "daemonset")
+
+									// If we pushed to a non-DaemonSet collector but got a DaemonSet error,
+									// this means the bridge tried to sync to all collectors (including DaemonSet)
+									// The error is expected and shouldn't fail the push for the non-DaemonSet collector
+									if !isDaemonSet {
+										log.Printf("INFO: DaemonSet error detected, but config was pushed to non-DaemonSet collector %s/%s (%s)",
+											collectorNamespace, collectorName, collectorUID[:8])
+										log.Printf("  The bridge manages multiple collectors. The DaemonSet error is expected and doesn't affect the non-DaemonSet collector.")
+										log.Printf("  Config push to %s/%s should be considered successful despite the DaemonSet error.",
+											collectorNamespace, collectorName)
+										// Don't mark this collector as degraded - the push succeeded
+										// The DaemonSet error is a separate issue with a different collector
+										// Reset the flag so we don't skip status update for this collector
+										isDaemonSetError = false
+										break // Found a non-DaemonSet collector we pushed to
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// Continue processing but skip marking as degraded below if it's a DaemonSet error
+		}
+
 		// Update agents table with RemoteConfigStatus for drift detection
+		// CRITICAL: If status is APPLIED and errorMsg is empty, clear the error field
+		// This ensures successful configs don't leave stale error messages
 		if effectiveHashStr != "" {
 			_, _ = db.Exec(`
 				UPDATE agents 
@@ -496,6 +806,34 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 				    remote_config_status_at=NOW()
 				WHERE agent_uid=?
 			`, statusStr, errorMsg, instanceUID)
+		}
+
+		// Update agent status based on RemoteConfigStatus
+		// If status is APPLIED with no error → mark as online (config successfully applied)
+		// If status is not APPLIED or has errors → mark as degraded
+		var currentStatusRC string
+		statusRCRow := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, instanceUID)
+		if err := statusRCRow.Scan(&currentStatusRC); err == nil {
+			if statusStr == "APPLIED" && errorMsg == "" {
+				// Config successfully applied - mark as online if currently degraded or offline
+				if currentStatusRC == "degraded" || currentStatusRC == "offline" {
+					log.Printf("✓ Agent %s config successfully applied (status=APPLIED) - marking as online", instanceUID[:8])
+					m.updateAgentStatus(instanceUID, "online")
+				}
+			} else if errorMsg != "" || statusStr != "APPLIED" {
+				// Config has errors or is not APPLIED - mark as degraded
+				// EXCEPTION: Don't mark as degraded for DaemonSet webhook errors (expected behavior)
+				isDaemonSetError := strings.Contains(strings.ToLower(errorMsg), "daemonset") && strings.Contains(errorMsg, "does not support modification")
+				if !isDaemonSetError {
+					if currentStatusRC == "online" {
+						log.Printf("WARNING: Agent %s RemoteConfigStatus error: status=%s, error=%s - marking as degraded", instanceUID[:8], statusStr, errorMsg)
+						m.updateAgentStatus(instanceUID, "degraded")
+					}
+				} else {
+					log.Printf("INFO: Agent %s RemoteConfigStatus error is DaemonSet-related (expected): status=%s, error=%s - NOT marking as degraded", instanceUID[:8], statusStr, errorMsg)
+					log.Printf("  This is a known limitation. See: https://github.com/open-telemetry/opentelemetry-operator/issues/4481")
+				}
+			}
 		}
 
 		// Store in telemetry for historical tracking
@@ -577,9 +915,34 @@ func (m *OpampManager) startCleanupWorker() {
 	log.Printf("✓ Started agent cleanup worker (runs every 30 seconds, marks agents offline after 2 minutes of no heartbeat)")
 }
 
-func (m *OpampManager) Start(endpoint string) error {
+func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 	// Start cleanup worker
 	m.startCleanupWorker()
+
+	// Load TLS configuration if certificate and key files are provided
+	var tlsConfig *tls.Config
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+
+		// Verify files exist
+		if _, err := os.Stat(certFile); os.IsNotExist(err) {
+			return fmt.Errorf("certificate file not found: %s", certFile)
+		}
+		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+			return fmt.Errorf("key file not found: %s", keyFile)
+		}
+
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12, // Require TLS 1.2 or higher
+		}
+		log.Printf("✓ TLS enabled - certificate: %s, key: %s", certFile, keyFile)
+	} else {
+		log.Printf("⚠️  TLS not enabled - WebSocket connections will use ws:// (insecure)")
+	}
 
 	settings := server.StartSettings{
 		Settings: server.Settings{
@@ -794,69 +1157,203 @@ func (m *OpampManager) Start(endpoint string) error {
 								// In opamp-go, Capabilities is a direct uint64 field
 								capFlags := []string{}
 								flags := message.Capabilities
-								if flags != 0 {
 
+								// Always set ReportsStatus - it's REQUIRED by spec (Bit 0x00000001)
+								// All agents MUST report status
+								capFlags = append(capFlags, "ReportsStatus")
+								capabilities["reports_status"] = true
+
+								if flags != 0 {
 									// Decode capability flags according to OpAMP spec (Section 5.2):
-									// Bit 0 (0x1): AcceptsRemoteConfig
-									if flags&0x1 != 0 {
+									// Bit 0 (0x00000001): ReportsStatus - REQUIRED, always set above
+
+									// Bit 1 (0x00000002): AcceptsRemoteConfig
+									if flags&0x2 != 0 {
 										capFlags = append(capFlags, "AcceptsRemoteConfig")
 										capabilities["accepts_remote_config"] = true
 									}
-									// Bit 1 (0x2): ReportsEffectiveConfig
-									if flags&0x2 != 0 {
+									// Bit 2 (0x00000004): ReportsEffectiveConfig
+									if flags&0x4 != 0 {
 										capFlags = append(capFlags, "ReportsEffectiveConfig")
 										capabilities["reports_effective_config"] = true
 									}
-									// Bit 2 (0x4): ReportsOwnMetrics
-									if flags&0x4 != 0 {
-										capFlags = append(capFlags, "ReportsOwnMetrics")
-										capabilities["reports_own_metrics"] = true
-									}
-									// Bit 3 (0x8): ReportsOwnTraces
+									// Bit 3 (0x00000008): AcceptsPackages
 									if flags&0x8 != 0 {
+										capFlags = append(capFlags, "AcceptsPackages")
+										capabilities["accepts_packages"] = true
+									}
+									// Bit 4 (0x00000010): ReportsPackageStatuses
+									if flags&0x10 != 0 {
+										capFlags = append(capFlags, "ReportsPackageStatuses")
+										capabilities["reports_package_statuses"] = true
+									}
+									// Bit 5 (0x00000020): ReportsOwnTraces
+									if flags&0x20 != 0 {
 										capFlags = append(capFlags, "ReportsOwnTraces")
 										capabilities["reports_own_traces"] = true
 									}
-									// Bit 4 (0x10): ReportsOwnLogs
-									if flags&0x10 != 0 {
+									// Bit 6 (0x00000040): ReportsOwnMetrics
+									if flags&0x40 != 0 {
+										capFlags = append(capFlags, "ReportsOwnMetrics")
+										capabilities["reports_own_metrics"] = true
+									}
+									// Bit 7 (0x00000080): ReportsOwnLogs
+									if flags&0x80 != 0 {
 										capFlags = append(capFlags, "ReportsOwnLogs")
 										capabilities["reports_own_logs"] = true
 									}
-									// Bit 5 (0x20): AcceptsRestartCommand
-									if flags&0x20 != 0 {
-										capFlags = append(capFlags, "AcceptsRestartCommand")
-										capabilities["accepts_restart_command"] = true
-									}
-									// Bit 6 (0x40): ReportsHealth
-									if flags&0x40 != 0 {
-										capFlags = append(capFlags, "ReportsHealth")
-										capabilities["reports_health"] = true
-									}
-									// Bit 7 (0x80): ReportsRemoteConfigStatus
-									if flags&0x80 != 0 {
-										capFlags = append(capFlags, "ReportsRemoteConfigStatus")
-										capabilities["reports_remote_config_status"] = true
-									}
-									// Bit 8 (0x100): AcceptsOpampConnectionSettings
+									// Bit 8 (0x00000100): AcceptsOpampConnectionSettings
 									if flags&0x100 != 0 {
 										capFlags = append(capFlags, "AcceptsOpampConnectionSettings")
 										capabilities["accepts_opamp_connection_settings"] = true
 									}
-									// Bit 9 (0x200): AcceptsOtherConnectionSettings
+									// Bit 9 (0x00000200): AcceptsOtherConnectionSettings
 									if flags&0x200 != 0 {
 										capFlags = append(capFlags, "AcceptsOtherConnectionSettings")
 										capabilities["accepts_other_connection_settings"] = true
 									}
-									// Bit 10 (0x400): AcceptsAddons
+									// Bit 10 (0x00000400): AcceptsRestartCommand
 									if flags&0x400 != 0 {
-										capFlags = append(capFlags, "AcceptsAddons")
-										capabilities["accepts_addons"] = true
+										capFlags = append(capFlags, "AcceptsRestartCommand")
+										capabilities["accepts_restart_command"] = true
+									}
+									// Bit 11 (0x00000800): ReportsHealth
+									if flags&0x800 != 0 {
+										capFlags = append(capFlags, "ReportsHealth")
+										capabilities["reports_health"] = true
+									}
+									// Bit 12 (0x00001000): ReportsRemoteConfigStatus
+									if flags&0x1000 != 0 {
+										capFlags = append(capFlags, "ReportsRemoteConfigStatus")
+										capabilities["reports_remote_config"] = true
+									}
+									// Bit 13 (0x00002000): ReportsHeartbeat
+									if flags&0x2000 != 0 {
+										capFlags = append(capFlags, "ReportsHeartbeat")
+										capabilities["reports_heartbeat"] = true
+									}
+									// Bit 14 (0x00004000): ReportsAvailableComponents
+									if flags&0x4000 != 0 {
+										capFlags = append(capFlags, "ReportsAvailableComponents")
+										capabilities["reports_available_components"] = true
+									}
+									// Bit 15 (0x00008000): ReportsConnectionSettingsStatus
+									if flags&0x8000 != 0 {
+										capFlags = append(capFlags, "ReportsConnectionSettingsStatus")
+										capabilities["reports_connection_settings_status"] = true
 									}
 
 									if len(capFlags) > 0 {
 										capabilities["capabilities_flags"] = strings.Join(capFlags, ", ")
 									}
 									capabilities["capabilities_bits"] = flags
+								}
+
+								// Infer capabilities from message presence (even if capability bits aren't set)
+								// If agent sends a message, it's effectively sending heartbeats
+								if _, exists := capabilities["reports_heartbeat"]; !exists {
+									capabilities["reports_heartbeat"] = true
+									capFlags = append(capFlags, "ReportsHeartbeat")
+								}
+
+								// Also check if Health message is present - if so, agent has ReportsHealth capability
+								if message.Health != nil {
+									if _, exists := capabilities["reports_health"]; !exists {
+										capabilities["reports_health"] = true
+										capFlags = append(capFlags, "ReportsHealth")
+									}
+								}
+
+								// Check if RemoteConfigStatus is present - if so, agent has ReportsRemoteConfigStatus capability
+								if message.RemoteConfigStatus != nil {
+									if _, exists := capabilities["reports_remote_config"]; !exists {
+										capabilities["reports_remote_config"] = true
+										capFlags = append(capFlags, "ReportsRemoteConfigStatus")
+									}
+								}
+
+								// Check if AgentDescription with available components is present
+								if message.AgentDescription != nil && message.AgentDescription.NonIdentifyingAttributes != nil {
+									// Check if any component-related attributes are present
+									for _, attr := range message.AgentDescription.NonIdentifyingAttributes {
+										if strings.Contains(strings.ToLower(attr.Key), "component") ||
+											strings.Contains(strings.ToLower(attr.Key), "receiver") ||
+											strings.Contains(strings.ToLower(attr.Key), "processor") ||
+											strings.Contains(strings.ToLower(attr.Key), "exporter") {
+											if _, exists := capabilities["reports_available_components"]; !exists {
+												capabilities["reports_available_components"] = true
+												capFlags = append(capFlags, "ReportsAvailableComponents")
+											}
+											break
+										}
+									}
+								}
+
+								// For OpAMP Bridge: If it accepts remote config, it likely accepts other connection settings too
+								// This is a reasonable inference for bridge implementations
+								nameLower := strings.ToLower(name)
+								isBridge := strings.Contains(nameLower, "opamp-bridge") ||
+									strings.Contains(nameLower, "operator-opamp-bridge")
+								if isBridge {
+									log.Printf("DEBUG: Detected OpAMP Bridge %s - inferring additional capabilities", instanceUID[:8])
+									// Bridge implementations typically support these if they support remote config
+									if capabilities["accepts_remote_config"] == true {
+										// OpAMP Bridge typically supports connection settings management
+										if _, exists := capabilities["accepts_opamp_connection_settings"]; !exists {
+											capabilities["accepts_opamp_connection_settings"] = true
+											capFlags = append(capFlags, "AcceptsOpampConnectionSettings")
+											log.Printf("DEBUG: Inferred AcceptsOpampConnectionSettings for bridge")
+										}
+										if _, exists := capabilities["accepts_other_connection_settings"]; !exists {
+											capabilities["accepts_other_connection_settings"] = true
+											capFlags = append(capFlags, "AcceptsOtherConnectionSettings")
+											log.Printf("DEBUG: Inferred AcceptsOtherConnectionSettings for bridge")
+										}
+										if _, exists := capabilities["reports_connection_settings_status"]; !exists {
+											capabilities["reports_connection_settings_status"] = true
+											capFlags = append(capFlags, "ReportsConnectionSettingsStatus")
+											log.Printf("DEBUG: Inferred ReportsConnectionSettingsStatus for bridge")
+										}
+										// Bridges typically support restart commands for managed collectors
+										if _, exists := capabilities["accepts_restart_command"]; !exists {
+											capabilities["accepts_restart_command"] = true
+											capFlags = append(capFlags, "AcceptsRestartCommand")
+											log.Printf("DEBUG: Inferred AcceptsRestartCommand for bridge")
+										}
+									}
+
+									// Explicitly mark unsupported capabilities as false for OpAMP Bridge
+									// These are disabled in the CRD or not implemented in opamp-go v0.22.0
+									if _, exists := capabilities["accepts_packages"]; !exists {
+										capabilities["accepts_packages"] = false // Not supported - requires PackagesStateProvider
+									}
+									if _, exists := capabilities["reports_package_statuses"]; !exists {
+										capabilities["reports_package_statuses"] = false // Not supported - requires PackagesStateProvider
+									}
+									if _, exists := capabilities["reports_own_traces"]; !exists {
+										capabilities["reports_own_traces"] = false // Not implemented in opamp-go v0.22.0
+									}
+									if _, exists := capabilities["reports_own_metrics"]; !exists {
+										capabilities["reports_own_metrics"] = false // Not implemented in opamp-go v0.22.0
+									}
+									if _, exists := capabilities["reports_own_logs"]; !exists {
+										capabilities["reports_own_logs"] = false // Not implemented in opamp-go v0.22.0
+									}
+
+									// ReportsAvailableComponents - check if we already inferred it
+									if _, exists := capabilities["reports_available_components"]; !exists {
+										// If AgentDescription exists but no component attributes found, mark as false
+										// Otherwise, it might be supported but not reported yet
+										if message.AgentDescription != nil {
+											// We already checked above, so if we get here, it's not supported
+											capabilities["reports_available_components"] = false
+										}
+									}
+								}
+
+								// Update capabilities_flags if we added inferred capabilities
+								if len(capFlags) > 0 {
+									capabilities["capabilities_flags"] = strings.Join(capFlags, ", ")
 								}
 
 								// Also extract component availability from NonIdentifyingAttributes
@@ -1006,6 +1503,7 @@ func (m *OpampManager) Start(endpoint string) error {
 											// The bridge sends the full CRD YAML, but we only need spec.config
 											collectorConfig := ""
 											collectorConfigHash := ""
+											collectorVersion := version // Default to bridge version
 											if len(cfgFile.Body) > 0 {
 												stableUIDInput := fmt.Sprintf("%s/%s", collectorNamespace, collectorName)
 												stableUIDHash := sha256.Sum256([]byte(stableUIDInput))
@@ -1017,11 +1515,42 @@ func (m *OpampManager) Start(endpoint string) error {
 													hash := sha256.Sum256([]byte(collectorConfig))
 													collectorConfigHash = hex.EncodeToString(hash[:])
 												}
+
+												// CRITICAL: Extract collector version from CRD spec.image tag
+												// The CRD contains the full collector image, e.g., "otel/opentelemetry-collector-contrib:0.138.0"
+												var crdYAML map[string]interface{}
+												if err := yaml.Unmarshal(cfgFile.Body, &crdYAML); err == nil {
+													if spec, ok := crdYAML["spec"].(map[string]interface{}); ok {
+														if image, ok := spec["image"].(string); ok && image != "" {
+															// Extract version from image tag (e.g., "otel/opentelemetry-collector-contrib:0.138.0" -> "0.138.0")
+															if parts := strings.Split(image, ":"); len(parts) == 2 {
+																tag := parts[1]
+																// Only use if it looks like a version (contains numbers and dots)
+																if strings.Contains(tag, ".") && strings.ContainsAny(tag, "0123456789") {
+																	collectorVersion = tag
+																	log.Printf("DEBUG: Extracted collector version %s from CRD image tag for %s/%s", collectorVersion, collectorNamespace, collectorName)
+																}
+															}
+														}
+													}
+												}
+											}
+											// Fallback: if still unknown, try to get from labels
+											if collectorVersion == "" || collectorVersion == "unknown" {
+												if v, ok := collectorLabels["collector.version"]; ok && v != "" {
+													collectorVersion = v
+												} else if v, ok := collectorLabels["service.version"]; ok && v != "" {
+													collectorVersion = v
+												} else if v, ok := collectorLabels["version"]; ok && v != "" {
+													collectorVersion = v
+												} else {
+													collectorVersion = "unknown"
+												}
 											}
 											// Register this collector as a separate agent
-											log.Printf("DISCOVERED COLLECTOR: namespace=%s, name=%s, stable_uid=%s (managed by bridge %s)",
-												collectorNamespace, collectorName, collectorUID, instanceUID)
-											if err := m.registerAgent(collectorUID, collectorName, version, collectorLabels, capabilities, collectorConfig, collectorConfigHash); err != nil {
+											log.Printf("DISCOVERED COLLECTOR: namespace=%s, name=%s, stable_uid=%s, version=%s (managed by bridge %s)",
+												collectorNamespace, collectorName, collectorUID, collectorVersion, instanceUID)
+											if err := m.registerAgent(collectorUID, collectorName, collectorVersion, collectorLabels, capabilities, collectorConfig, collectorConfigHash); err != nil {
 												log.Printf("Failed to register discovered collector %s: %v", collectorUID, err)
 											} else {
 												// Map collector UID to bridge connection
@@ -1045,7 +1574,26 @@ func (m *OpampManager) Start(endpoint string) error {
 										log.Printf("DEBUG: Agent %s EffectiveConfig is nil or empty - cannot discover collectors", instanceUID)
 									}
 								} else {
-									log.Printf("DEBUG: Agent %s did not send EffectiveConfig - cannot discover collectors yet", instanceUID)
+									// Check if this is a bridge that claims ReportsEffectiveConfig capability
+									isBridge := strings.Contains(strings.ToLower(name), "opamp-bridge") || strings.Contains(strings.ToLower(name), "operator-opamp-bridge")
+									if isBridge {
+										// Check capabilities from database
+										capDB := mustDB()
+										var capabilitiesJSON sql.NullString
+										capRow := capDB.QueryRow(`SELECT capabilities_json FROM agents WHERE agent_uid=? LIMIT 1`, instanceUID)
+										if capRow.Scan(&capabilitiesJSON) == nil && capabilitiesJSON.Valid {
+											var caps map[string]interface{}
+											if json.Unmarshal([]byte(capabilitiesJSON.String), &caps) == nil {
+												if reportsEffectiveConfig, ok := caps["reports_effective_config"].(bool); ok && reportsEffectiveConfig {
+													log.Printf("WARNING: Bridge %s (%s) claims ReportsEffectiveConfig capability but is NOT sending EffectiveConfig messages. Collectors cannot be discovered until bridge sends EffectiveConfig.", instanceUID[:8], name)
+													log.Printf("  To fix: Configure the OpAMP bridge to actually send EffectiveConfig in its AgentToServer messages.")
+												}
+											}
+										}
+										capDB.Close()
+									} else {
+										log.Printf("DEBUG: Agent %s did not send EffectiveConfig - cannot discover collectors yet", instanceUID)
+									}
 								}
 
 								// Extract and store agent telemetry according to OpAMP spec
@@ -1053,15 +1601,22 @@ func (m *OpampManager) Start(endpoint string) error {
 								m.storeAgentTelemetry(instanceUID, message)
 
 								// Auto-register agent in database with current config
+								// This also updates last_seen_at, ensuring agent stays online
 								if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash); err != nil {
 									log.Printf("Failed to register agent: %v", err)
 								} else {
+									// Ensure agent is marked online and last_seen_at is updated
+									// registerAgent already updates last_seen_at, but we also update status to be safe
 									m.updateAgentStatus(instanceUID, "online")
 								}
 
 								// REAL-TIME: If this is a bridge, update status for ALL discovered collectors on EVERY heartbeat
 								// Uses EffectiveConfig as source of truth - no database health storage
-								if labels["deployment.type"] == "k8s" && labels["otel.kind"] == "OpAMPBridge" {
+								// Detect OpAMP Bridge by name pattern
+								isOpAMPBridge := strings.Contains(strings.ToLower(name), "opamp-bridge") ||
+									strings.Contains(strings.ToLower(name), "operator-opamp-bridge")
+
+								if isOpAMPBridge {
 									m.updateDiscoveredCollectorsHealth(instanceUID, message)
 								}
 
@@ -1071,8 +1626,12 @@ func (m *OpampManager) Start(endpoint string) error {
 								log.Printf("Received OPAMP message from agent: %s (name: %s, version: %s)", instanceUID, name, version)
 								if len(capabilities) > 0 {
 									capJSON, _ := json.Marshal(capabilities)
-									log.Printf("Agent %s capabilities: %s", instanceUID, string(capJSON))
+									log.Printf("Agent %s capabilities (after inference): %s", instanceUID, string(capJSON))
 								}
+								// Debug: Log raw capability bits and message presence
+								log.Printf("DEBUG: Agent %s raw capabilities bits: 0x%x (decimal: %d)", instanceUID, flags, flags)
+								log.Printf("DEBUG: Agent %s message fields - Health: %v, RemoteConfigStatus: %v, EffectiveConfig: %v",
+									instanceUID, message.Health != nil, message.RemoteConfigStatus != nil, message.EffectiveConfig != nil)
 
 								// Return ServerToAgent with server capabilities enabled
 								// According to OpAMP spec (https://opentelemetry.io/docs/specs/opamp/):
@@ -1235,9 +1794,14 @@ func (m *OpampManager) Start(endpoint string) error {
 		},
 		ListenEndpoint: endpoint,
 		ListenPath:     "/v1/opamp", // Use /v1/opamp like Python server for compatibility
+		TLSConfig:      tlsConfig,   // Enable WSS if TLS config is provided
 	}
 
-	log.Printf("Starting OPAMP server on %s/v1/opamp", endpoint)
+	protocol := "ws://"
+	if tlsConfig != nil {
+		protocol = "wss://"
+	}
+	log.Printf("Starting OPAMP server on %s%s/v1/opamp", protocol, endpoint)
 	err := m.server.Start(settings)
 	if err != nil {
 		log.Printf("ERROR: OPAMP server Start() failed: %v", err)
@@ -1256,13 +1820,224 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	// Normalize agent UID for consistent lookup
 	agentUID = normalizeAgentUID(agentUID)
 
+	// Get collector info from database
+	var collectorNamespace, collectorName string
+	var currentCRDYAML sql.NullString
+	db := mustDB()
+	var labelsJSON sql.NullString
+	db.QueryRow(`SELECT labels_json, current_config_yaml FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelsJSON, &currentCRDYAML)
+	db.Close()
+
+	if labelsJSON.Valid && labelsJSON.String != "" {
+		var labels map[string]string
+		if json.Unmarshal([]byte(labelsJSON.String), &labels) == nil {
+			collectorNamespace = labels["k8s.namespace"]
+			collectorName = labels["k8s.crd_name"]
+		}
+	}
+
+	// Check if collector is DaemonSet mode
+	isDaemonSet := false
+	if collectorNamespace != "" && collectorName != "" {
+		// Extract mode from stored CRD YAML if available
+		if currentCRDYAML.Valid && currentCRDYAML.String != "" {
+			mode := getCollectorModeFromCRD(currentCRDYAML.String)
+			if mode == "daemonset" {
+				isDaemonSet = true
+			}
+		} else {
+			// Fallback: try to get from database by labels
+			mode := getCollectorMode(collectorNamespace, collectorName)
+			if mode == "daemonset" {
+				isDaemonSet = true
+			}
+		}
+	}
+
+	// CRITICAL: Block config pushes to DaemonSet collectors via OpAMP Bridge
+	// DaemonSet collectors cannot be updated via OpAMP Bridge due to operator webhook restrictions
+	// See: https://github.com/open-telemetry/opentelemetry-operator/issues/4481
+	if isDaemonSet {
+		log.Printf("ERROR: Cannot push config to DaemonSet collector %s/%s via OpAMP Bridge", collectorNamespace, collectorName)
+		log.Printf("  Reason: Operator webhook blocks DaemonSet updates (issue #4481)")
+		log.Printf("  Workaround: Use 'kubectl patch opentelemetrycollector %s -n %s --type=merge -p='{\"spec\":{\"config\":<config>}}'", collectorName, collectorNamespace)
+		return fmt.Errorf("cannot push config to DaemonSet collector %s/%s via OpAMP Bridge: operator webhook blocks DaemonSet updates. Use kubectl patch instead. See https://github.com/open-telemetry/opentelemetry-operator/issues/4481", collectorNamespace, collectorName)
+	}
+
+	// For non-DaemonSet collectors: Get existing CRD from bridge, preserve all fields, update only spec.config
+	if collectorNamespace != "" && collectorName != "" {
+		// CRITICAL: Ensure metadata.name, metadata.namespace, and opamp-managed label are correctly set
+		if currentCRDYAML.Valid && currentCRDYAML.String != "" {
+			var existingCRD map[string]interface{}
+			if err := yaml.Unmarshal([]byte(currentCRDYAML.String), &existingCRD); err == nil {
+				// Extract new pipeline config
+				extractedConfig := extractCollectorConfigFromCRD([]byte(configYAML), agentUID)
+				if extractedConfig == "" || extractedConfig == configYAML {
+					extractedConfig = configYAML
+				}
+
+				var newConfigMap map[string]interface{}
+				if err := yaml.Unmarshal([]byte(extractedConfig), &newConfigMap); err != nil {
+					return fmt.Errorf("failed to parse config YAML for collector %s/%s: %v", collectorNamespace, collectorName, err)
+				}
+
+				if len(newConfigMap) == 0 {
+					return fmt.Errorf("parsed config is empty for collector %s/%s", collectorNamespace, collectorName)
+				}
+
+				// Ensure metadata exists
+				if metadata, ok := existingCRD["metadata"].(map[string]interface{}); ok {
+					metadata["name"] = collectorName
+					metadata["namespace"] = collectorNamespace
+					if labelsMap, ok := metadata["labels"].(map[string]interface{}); ok {
+						if val, ok := labelsMap["opentelemetry.io/opamp-managed"].(string); !ok || val == "" {
+							bridgeName := "true"
+							if labelsJSON.Valid && labelsJSON.String != "" {
+								var labelsMap2 map[string]string
+								if json.Unmarshal([]byte(labelsJSON.String), &labelsMap2) == nil {
+									if bridgeUID, ok := labelsMap2["bridge.instance_uid"]; ok && bridgeUID != "" {
+										bridgeDB := mustDB()
+										var bridgeNameFromDB sql.NullString
+										bridgeDB.QueryRow(`SELECT name FROM agents WHERE agent_uid=? LIMIT 1`, normalizeAgentUID(bridgeUID)).Scan(&bridgeNameFromDB)
+										bridgeDB.Close()
+										if bridgeNameFromDB.Valid && bridgeNameFromDB.String != "" {
+											bridgeName = bridgeNameFromDB.String
+										}
+									}
+								}
+							}
+							labelsMap["opentelemetry.io/opamp-managed"] = bridgeName
+						}
+					} else {
+						metadata["labels"] = map[string]interface{}{"opentelemetry.io/opamp-managed": "true"}
+					}
+				} else {
+					existingCRD["metadata"] = map[string]interface{}{
+						"name":      collectorName,
+						"namespace": collectorNamespace,
+						"labels":    map[string]interface{}{"opentelemetry.io/opamp-managed": "true"},
+					}
+				}
+
+				// Update spec.config
+				if spec, ok := existingCRD["spec"].(map[string]interface{}); ok {
+					spec["config"] = newConfigMap
+				} else {
+					existingCRD["spec"] = map[string]interface{}{"config": newConfigMap}
+				}
+
+				// Marshal back to YAML
+				if crdYAML, err := yaml.Marshal(existingCRD); err != nil {
+					return fmt.Errorf("failed to marshal CRD YAML for collector %s/%s: %v", collectorNamespace, collectorName, err)
+				} else {
+					configYAML = string(crdYAML)
+				}
+			} else {
+				// Existing CRD parse failed - create new CRD from config
+				var newConfigMap map[string]interface{}
+				if err := yaml.Unmarshal([]byte(configYAML), &newConfigMap); err != nil {
+					return fmt.Errorf("failed to parse config YAML for collector %s/%s: %v", collectorNamespace, collectorName, err)
+				}
+
+				// Create full CRD structure
+				bridgeName := "true"
+				if labelsJSON.Valid && labelsJSON.String != "" {
+					var labelsMap map[string]string
+					if json.Unmarshal([]byte(labelsJSON.String), &labelsMap) == nil {
+						if bridgeUID, ok := labelsMap["bridge.instance_uid"]; ok && bridgeUID != "" {
+							bridgeDB := mustDB()
+							var bridgeNameFromDB sql.NullString
+							bridgeDB.QueryRow(`SELECT name FROM agents WHERE agent_uid=? LIMIT 1`, normalizeAgentUID(bridgeUID)).Scan(&bridgeNameFromDB)
+							bridgeDB.Close()
+							if bridgeNameFromDB.Valid && bridgeNameFromDB.String != "" {
+								bridgeName = bridgeNameFromDB.String
+							}
+						}
+					}
+				}
+
+				newCRD := map[string]interface{}{
+					"apiVersion": "opentelemetry.io/v1alpha1",
+					"kind":       "OpenTelemetryCollector",
+					"metadata": map[string]interface{}{
+						"name":      collectorName,
+						"namespace": collectorNamespace,
+						"labels":    map[string]interface{}{"opentelemetry.io/opamp-managed": bridgeName},
+					},
+					"spec": map[string]interface{}{
+						"config": newConfigMap,
+					},
+				}
+
+				if crdYAML, err := yaml.Marshal(newCRD); err != nil {
+					return fmt.Errorf("failed to marshal new CRD YAML for collector %s/%s: %v", collectorNamespace, collectorName, err)
+				} else {
+					configYAML = string(crdYAML)
+				}
+			}
+		} else {
+			// No existing CRD - create new CRD from config
+			var newConfigMap map[string]interface{}
+			if err := yaml.Unmarshal([]byte(configYAML), &newConfigMap); err != nil {
+				return fmt.Errorf("failed to parse config YAML for collector %s/%s: %v", collectorNamespace, collectorName, err)
+			}
+
+			bridgeName := "true"
+			if labelsJSON.Valid && labelsJSON.String != "" {
+				var labelsMap map[string]string
+				if json.Unmarshal([]byte(labelsJSON.String), &labelsMap) == nil {
+					if bridgeUID, ok := labelsMap["bridge.instance_uid"]; ok && bridgeUID != "" {
+						bridgeDB := mustDB()
+						var bridgeNameFromDB sql.NullString
+						bridgeDB.QueryRow(`SELECT name FROM agents WHERE agent_uid=? LIMIT 1`, normalizeAgentUID(bridgeUID)).Scan(&bridgeNameFromDB)
+						bridgeDB.Close()
+						if bridgeNameFromDB.Valid && bridgeNameFromDB.String != "" {
+							bridgeName = bridgeNameFromDB.String
+						}
+					}
+				}
+			}
+
+			newCRD := map[string]interface{}{
+				"apiVersion": "opentelemetry.io/v1alpha1",
+				"kind":       "OpenTelemetryCollector",
+				"metadata": map[string]interface{}{
+					"name":      collectorName,
+					"namespace": collectorNamespace,
+					"labels":    map[string]interface{}{"opentelemetry.io/opamp-managed": bridgeName},
+				},
+				"spec": map[string]interface{}{
+					"config": newConfigMap,
+				},
+			}
+
+			if crdYAML, err := yaml.Marshal(newCRD); err != nil {
+				return fmt.Errorf("failed to marshal new CRD YAML for collector %s/%s: %v", collectorNamespace, collectorName, err)
+			} else {
+				configYAML = string(crdYAML)
+			}
+		}
+	}
+
+	// Validate config is not empty
+	if configYAML == "" || strings.TrimSpace(configYAML) == "" {
+		log.Printf("ERROR: Config is empty for agent %s", agentUID)
+		return fmt.Errorf("config YAML is empty")
+	}
+
 	// Calculate config hash
 	hash := sha256.Sum256([]byte(configYAML))
 	configHash := hex.EncodeToString(hash[:])
 
 	// Check if agent is connected (use normalized UID)
+	log.Printf("DEBUG: ===== CONNECTION LOOKUP =====")
+	log.Printf("DEBUG: Looking up connection for agent UID: %s", agentUID)
+	log.Printf("DEBUG: Total active connections: %d", len(m.conns))
 	ac, exists := m.conns[agentUID]
-	if !exists {
+	if exists {
+		log.Printf("DEBUG: ✓ Direct connection found for agent %s", agentUID)
+	} else {
+		log.Printf("DEBUG: ✗ Direct connection NOT found for agent %s - trying bridge lookup", agentUID)
 		// Try to find the connection by looking up agent labels (for discovered collectors)
 		// Discovered collectors have bridge.instance_uid label pointing to the bridge connection
 		db := mustDB()
@@ -1271,19 +2046,35 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		err := db.QueryRow(`SELECT labels_json, name FROM agents WHERE agent_uid = ? LIMIT 1`, agentUID).Scan(&labelsJSON, &agentName)
 		db.Close()
 
-		if err == nil && labelsJSON.Valid {
+		if err != nil {
+			log.Printf("DEBUG: ERROR: Failed to query agent %s from database: %v", agentUID, err)
+		} else if !labelsJSON.Valid {
+			log.Printf("DEBUG: WARNING: Agent %s found in database but labels_json is NULL", agentUID)
+		} else {
+			log.Printf("DEBUG: Agent %s labels_json length: %d bytes", agentUID, len(labelsJSON.String))
 			var labels map[string]string
-			if err := json.Unmarshal([]byte(labelsJSON.String), &labels); err == nil {
+			if err := json.Unmarshal([]byte(labelsJSON.String), &labels); err != nil {
+				log.Printf("DEBUG: ERROR: Failed to parse labels_json for agent %s: %v", agentUID, err)
+			} else {
+				log.Printf("DEBUG: Parsed labels: %d entries", len(labels))
 				// Check if this is a discovered collector (has bridge.instance_uid)
 				if bridgeUID, ok := labels["bridge.instance_uid"]; ok && bridgeUID != "" {
+					log.Printf("DEBUG: Found bridge.instance_uid=%s for collector %s", bridgeUID, agentUID)
 					// Try to find the bridge connection
 					bridgeConnUID := normalizeAgentUID(bridgeUID)
+					log.Printf("DEBUG: Normalized bridge UID: %s", bridgeConnUID)
 					if bridgeConn, bridgeExists := m.conns[bridgeConnUID]; bridgeExists {
 						ac = bridgeConn
 						// Don't update agentUID - we want to keep using the collector's stable UID
 						exists = true
-						log.Printf("Found bridge connection for discovered collector %s via bridge.instance_uid=%s (bridge UID: %s)", agentUID, bridgeUID, bridgeConnUID)
+						log.Printf("DEBUG: ✓ Found bridge connection for discovered collector %s via bridge.instance_uid=%s (bridge UID: %s)", agentUID, bridgeUID, bridgeConnUID)
 					} else {
+						log.Printf("DEBUG: ✗ Bridge UID %s NOT found in active connections - trying name pattern search", bridgeConnUID)
+						// List all active connection UIDs for debugging
+						log.Printf("DEBUG: Active connection UIDs:")
+						for connUID := range m.conns {
+							log.Printf("DEBUG:   - %s", connUID)
+						}
 						// Bridge UID not found - try to find bridge by name pattern
 						for connUID, conn := range m.conns {
 							var connName sql.NullString
@@ -1292,27 +2083,34 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 							dbCheck.Close()
 							if err == nil && connName.Valid {
 								nameLower := strings.ToLower(connName.String)
+								log.Printf("DEBUG: Checking connection %s with name: %s", connUID, connName.String)
 								if strings.Contains(nameLower, "opamp-bridge") || strings.Contains(nameLower, "operator-opamp-bridge") {
 									ac = conn
 									exists = true
-									log.Printf("Found bridge connection for discovered collector %s by bridge name pattern (bridge UID: %s)", agentUID, connUID)
+									log.Printf("DEBUG: ✓ Found bridge connection for discovered collector %s by bridge name pattern (bridge UID: %s, name: %s)", agentUID, connUID, connName.String)
 									break
 								}
 							}
 						}
+						if !exists {
+							log.Printf("DEBUG: ✗ No bridge connection found by name pattern either")
+						}
 					}
-				} else if strings.Contains(strings.ToLower(agentName.String), "opamp-bridge") || strings.Contains(strings.ToLower(agentName.String), "operator-opamp-bridge") {
-					// For OpAMP Bridge itself, try to find by name if UID changed (bridge reconnected)
-					for uid, conn := range m.conns {
-						var connName sql.NullString
-						dbCheck := mustDB()
-						err := dbCheck.QueryRow(`SELECT name FROM agents WHERE agent_uid = ? LIMIT 1`, uid).Scan(&connName)
-						dbCheck.Close()
-						if err == nil && connName.Valid && connName.String == agentName.String {
-							ac = conn
-							exists = true
-							log.Printf("OpAMP Bridge reconnected: Found bridge by name %s, using new UID %s (old UID was %s)", agentName.String, uid, agentUID)
-							break
+				} else {
+					log.Printf("DEBUG: Agent %s does not have bridge.instance_uid label", agentUID)
+					if strings.Contains(strings.ToLower(agentName.String), "opamp-bridge") || strings.Contains(strings.ToLower(agentName.String), "operator-opamp-bridge") {
+						// For OpAMP Bridge itself, try to find by name if UID changed (bridge reconnected)
+						for uid, conn := range m.conns {
+							var connName sql.NullString
+							dbCheck := mustDB()
+							err := dbCheck.QueryRow(`SELECT name FROM agents WHERE agent_uid = ? LIMIT 1`, uid).Scan(&connName)
+							dbCheck.Close()
+							if err == nil && connName.Valid && connName.String == agentName.String {
+								ac = conn
+								exists = true
+								log.Printf("OpAMP Bridge reconnected: Found bridge by name %s, using new UID %s (old UID was %s)", agentName.String, uid, agentUID)
+								break
+							}
 						}
 					}
 				}
@@ -1351,13 +2149,13 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 
 	// Get agent labels and name to determine deployment type
 	labelDB := mustDB()
-	var labelsJSON sql.NullString
+	var agentLabelsJSON sql.NullString
 	var agentName sql.NullString
-	labelDB.QueryRow(`SELECT labels_json, name FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelsJSON, &agentName)
+	labelDB.QueryRow(`SELECT labels_json, name FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&agentLabelsJSON, &agentName)
 	labelDB.Close()
 
 	var isKubernetes bool
-	var labels map[string]string
+	var agentLabels map[string]string
 
 	// Check agent name - OpAMP Bridge typically has "io.opentelemetry.operator-opamp-bridge" or "opamp-bridge" in name
 	if agentName.Valid && agentName.String != "" {
@@ -1371,23 +2169,23 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		}
 	}
 
-	if labelsJSON.Valid && labelsJSON.String != "" {
-		json.Unmarshal([]byte(labelsJSON.String), &labels)
+	if agentLabelsJSON.Valid && agentLabelsJSON.String != "" {
+		json.Unmarshal([]byte(agentLabelsJSON.String), &agentLabels)
 		// Check for Kubernetes deployment indicators
-		if deploymentType, ok := labels["deployment.type"]; ok {
+		if deploymentType, ok := agentLabels["deployment.type"]; ok {
 			isKubernetes = isKubernetes || deploymentType == "kubernetes" || deploymentType == "k8s"
 		}
-		if deploymentLocation, ok := labels["deployment.location"]; ok {
+		if deploymentLocation, ok := agentLabels["deployment.location"]; ok {
 			isKubernetes = isKubernetes || deploymentLocation == "kubernetes" || deploymentLocation == "k8s"
 		}
-		if env, ok := labels["environment"]; ok {
+		if env, ok := agentLabels["environment"]; ok {
 			isKubernetes = isKubernetes || strings.Contains(strings.ToLower(env), "kubernetes") || strings.Contains(strings.ToLower(env), "k8s")
 		}
 		// Check if connected via OpAMP Bridge (has k8s-specific labels)
-		if _, hasK8sLabel := labels["kubernetes.namespace"]; hasK8sLabel {
+		if _, hasK8sLabel := agentLabels["kubernetes.namespace"]; hasK8sLabel {
 			isKubernetes = true
 		}
-		if _, hasK8sLabel := labels["k8s.namespace"]; hasK8sLabel {
+		if _, hasK8sLabel := agentLabels["k8s.namespace"]; hasK8sLabel {
 			isKubernetes = true
 		}
 	}
@@ -1406,7 +2204,8 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 
 	if !exists {
 		// Agent is offline - queue the config for async delivery
-		log.Printf("Agent %s is offline. Queuing config for async delivery when agent reconnects (by: %s)", agentUID, performedBy)
+		log.Printf("ERROR: Agent %s is offline or connection not found. Queuing config for async delivery when agent reconnects (by: %s)", agentUID, performedBy)
+		log.Printf("DEBUG: This means the config will NOT be sent immediately. The agent must be online and connected for config to be pushed.")
 
 		queueDB := mustDB()
 		defer queueDB.Close()
@@ -1509,21 +2308,22 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		}
 	}
 
-	collectorNamespace := ""
-	collectorName := ""
-	if len(labels) > 0 {
-		if val, ok := labels["k8s.namespace"]; ok && val != "" {
+	// Extract collector namespace and name from labels if not already set
+	if collectorNamespace == "" && len(agentLabels) > 0 {
+		if val, ok := agentLabels["k8s.namespace"]; ok && val != "" {
 			collectorNamespace = val
-		} else if val, ok := labels["kubernetes.namespace"]; ok && val != "" {
+		} else if val, ok := agentLabels["kubernetes.namespace"]; ok && val != "" {
 			collectorNamespace = val
-		} else if val, ok := labels["namespace"]; ok && val != "" {
+		} else if val, ok := agentLabels["namespace"]; ok && val != "" {
 			collectorNamespace = val
 		}
-		if val, ok := labels["k8s.crd_name"]; ok && val != "" {
+	}
+	if collectorName == "" && len(agentLabels) > 0 {
+		if val, ok := agentLabels["k8s.crd_name"]; ok && val != "" {
 			collectorName = val
-		} else if val, ok := labels["k8s.crd.name"]; ok && val != "" {
+		} else if val, ok := agentLabels["k8s.crd.name"]; ok && val != "" {
 			collectorName = val
-		} else if val, ok := labels["collector.name"]; ok && val != "" {
+		} else if val, ok := agentLabels["collector.name"]; ok && val != "" {
 			collectorName = val
 		}
 	}
@@ -1555,6 +2355,10 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		return fmt.Errorf("missing required metadata for Kubernetes agent %s: namespace=%q, name=%q. Cannot determine target collector CRD", agentUID, collectorNamespace, collectorName)
 	}
 
+	// Note: DaemonSet collectors are supported - we send a partial CRD with metadata (namespace/name) + spec.config only
+	// Deployment/StatefulSet collectors receive full CRD with deployment settings
+	// The mode check and CRD construction is handled earlier in the function (lines 1728-1799)
+
 	// NOTE: We cannot reliably check the opamp-managed label from backend because:
 	// 1. The label is a CRD metadata label, not included in OpAMP EffectiveConfig labels
 	// 2. The OpAMP Bridge itself validates this label and will reject configs if missing
@@ -1565,11 +2369,11 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	if isKubernetes && collectorNamespace != "" && collectorName != "" {
 		// Check if label might be present in labels (though it's unlikely to be there)
 		hasOpAMPLabelInLabels := false
-		if len(labels) > 0 {
-			if val, ok := labels["opentelemetry.io/opamp-managed"]; ok && val != "" {
+		if len(agentLabels) > 0 {
+			if val, ok := agentLabels["opentelemetry.io/opamp-managed"]; ok && val != "" {
 				hasOpAMPLabelInLabels = true
 				log.Printf("DEBUG: Collector %s/%s has opamp-managed label in OpAMP labels: %s", collectorNamespace, collectorName, val)
-			} else if val, ok := labels["opamp-managed"]; ok && val != "" {
+			} else if val, ok := agentLabels["opamp-managed"]; ok && val != "" {
 				hasOpAMPLabelInLabels = true
 				log.Printf("DEBUG: Collector %s/%s has opamp-managed label (short form) in OpAMP labels: %s", collectorNamespace, collectorName, val)
 			}
@@ -1600,6 +2404,38 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		ContentType: "text/yaml",
 	}
 
+	// DEBUG: Log detailed config information being sent to bridge
+	log.Printf("DEBUG: ===== CONFIG PUSH TO BRIDGE =====")
+	log.Printf("DEBUG: Agent UID: %s", agentUID)
+	log.Printf("DEBUG: Agent Name: %s", agentName.String)
+	log.Printf("DEBUG: Is Kubernetes: %v", isKubernetes)
+	log.Printf("DEBUG: Collector Namespace: %s", collectorNamespace)
+	log.Printf("DEBUG: Collector Name: %s", collectorName)
+	log.Printf("DEBUG: Config Key: %s", configKey)
+	log.Printf("DEBUG: Config Hash: %s", configHash)
+	log.Printf("DEBUG: Config Size: %d bytes", len(configYAML))
+
+	// Show ConfigMap keys
+	configKeys := make([]string, 0, len(configMap))
+	for k := range configMap {
+		configKeys = append(configKeys, k)
+	}
+	log.Printf("DEBUG: ConfigMap Keys: %v", configKeys)
+
+	if isKubernetes {
+		log.Printf("DEBUG: For Kubernetes collector: Config key format is 'namespace/name' = '%s'", configKey)
+		log.Printf("DEBUG: Bridge will apply this config to OpenTelemetryCollector CRD: %s/%s", collectorNamespace, collectorName)
+		log.Printf("DEBUG: ===== FULL CONFIG YAML (CRD spec.config) =====")
+		log.Printf("DEBUG: %s", configYAML)
+		log.Printf("DEBUG: ===== END FULL CONFIG YAML =====")
+	} else {
+		log.Printf("DEBUG: For Docker/VM agent: Config key is '%s' (typically 'collector.yaml')", configKey)
+		log.Printf("DEBUG: ===== FULL CONFIG YAML =====")
+		log.Printf("DEBUG: %s", configYAML)
+		log.Printf("DEBUG: ===== END FULL CONFIG YAML =====")
+	}
+	log.Printf("DEBUG: ===== END CONFIG PUSH DEBUG =====")
+
 	// Validate ConfigMap structure per OpAMP spec
 	if len(configMap) == 0 {
 		log.Printf("ERROR: ConfigMap is empty for agent %s", agentUID)
@@ -1619,12 +2455,13 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		log.Printf("✓ Using key '%s' for Docker/VM agent %s (name: %s)", configKey, agentUID, agentName.String)
 	}
 
-	// Log the actual keys being sent
-	configKeys := make([]string, 0, len(configMap))
-	for k := range configMap {
-		configKeys = append(configKeys, k)
+	log.Printf("DEBUG: ===== BEFORE CREATING OPAMP MESSAGE =====")
+	log.Printf("DEBUG: ConfigMap has %d entries", len(configMap))
+	for k, v := range configMap {
+		log.Printf("DEBUG:   ConfigMap key: %q, Body size: %d bytes, ContentType: %s", k, len(v.Body), v.ContentType)
 	}
-	log.Printf("DEBUG: ConfigMap keys being sent to agent %s: %v", agentUID, configKeys)
+	log.Printf("DEBUG: ConfigHash (hex): %s", configHash)
+	log.Printf("DEBUG: ConfigHash bytes: %s", hex.EncodeToString(configHashBytes))
 
 	// Per OpAMP spec Section 6.3: AgentRemoteConfig structure
 	// - Config: AgentConfigMap (required)
@@ -1656,17 +2493,48 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	// CRITICAL: For Kubernetes collectors managed via OpAMP Bridge:
 	// The bridge is the OpAMP client, so ServerToAgent.InstanceUid MUST be the bridge's InstanceUID
 	// The ConfigMap key tells the bridge which CRD to update
+	// Get labels from database if not already set
 	if isKubernetes && collectorNamespace != "" && collectorName != "" {
+		// Get labels from database to check for bridge.instance_uid
+		labelCheckDB := mustDB()
+		var labelCheckJSON sql.NullString
+		labelCheckDB.QueryRow(`SELECT labels_json FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelCheckJSON)
+		labelCheckDB.Close()
+
+		var bridgeLabels map[string]string
+		if labelCheckJSON.Valid && labelCheckJSON.String != "" {
+			json.Unmarshal([]byte(labelCheckJSON.String), &bridgeLabels)
+		}
+
 		// Check if this is a discovered collector (has bridge.instance_uid label)
-		if bridgeUID, ok := labels["bridge.instance_uid"]; ok && bridgeUID != "" {
+		if bridgeUID, ok := bridgeLabels["bridge.instance_uid"]; ok && bridgeUID != "" {
+			log.Printf("DEBUG: Found bridge.instance_uid=%s for collector %s/%s", bridgeUID, collectorNamespace, collectorName)
 			// Find the bridge connection to get its InstanceUID
 			bridgeConnUID := normalizeAgentUID(bridgeUID)
+			log.Printf("DEBUG: Looking up bridge connection with normalized UID: %s", bridgeConnUID)
 			if bridgeConn, bridgeExists := m.conns[bridgeConnUID]; bridgeExists {
-				if len(bridgeConn.originalUID) > 0 {
+				if bridgeConn != nil && bridgeConn.conn != nil && len(bridgeConn.originalUID) > 0 {
+					// CRITICAL: Use bridge's InstanceUID, not collector's
 					agentInstanceUID = bridgeConn.originalUID
-					log.Printf("DEBUG: Using bridge InstanceUID for discovered collector %s/%s (bridge: %s)", collectorNamespace, collectorName, bridgeUID)
+					// Also update ac to use bridge connection (we want to send to bridge, not collector)
+					ac = bridgeConn
+					log.Printf("DEBUG: Switched to bridge connection for discovered collector %s/%s (bridge UID: %s, InstanceUID hex: %s)",
+						collectorNamespace, collectorName, bridgeUID, hex.EncodeToString(agentInstanceUID))
+					log.Printf("DEBUG: CRITICAL: Using bridge's InstanceUID=%s and bridge connection for ServerToAgent message", hex.EncodeToString(agentInstanceUID))
+				} else {
+					log.Printf("WARNING: Bridge connection found but invalid (conn=%v, originalUID length=%d)",
+						bridgeConn != nil && bridgeConn.conn != nil, len(bridgeConn.originalUID))
+				}
+			} else {
+				log.Printf("WARNING: Bridge UID %s (normalized: %s) not found in active connections. Available connections: %d",
+					bridgeUID, bridgeConnUID, len(m.conns))
+				// List available connections for debugging
+				for uid := range m.conns {
+					log.Printf("DEBUG:   Available connection UID: %s", uid)
 				}
 			}
+		} else {
+			log.Printf("DEBUG: Collector %s/%s does not have bridge.instance_uid label - using collector's own connection", collectorNamespace, collectorName)
 		}
 	}
 
@@ -1681,6 +2549,49 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		RemoteConfig: configMsg,
 		Capabilities: 0x3F, // Re-send server capabilities to ensure agent knows we support remote config
 	}
+
+	// DEBUG: Log full OpAMP ServerToAgent message structure
+	log.Printf("DEBUG: ===== OPAMP SERVERTOAGENT MESSAGE (COMPLETE STRUCTURE) =====")
+	log.Printf("DEBUG: Message Type: ServerToAgent (protobuf)")
+	log.Printf("DEBUG: InstanceUid: %s (hex), length: %d bytes, raw: %q", hex.EncodeToString(agentInstanceUID), len(agentInstanceUID), string(agentInstanceUID))
+	log.Printf("DEBUG: Capabilities: 0x%x (hex), binary: %b, decimal: %d", msg.Capabilities, msg.Capabilities, msg.Capabilities)
+	log.Printf("DEBUG: RemoteConfig field present: %v", msg.RemoteConfig != nil)
+	if msg.RemoteConfig != nil {
+		log.Printf("DEBUG: RemoteConfig.Config field present: %v", msg.RemoteConfig.Config != nil)
+		if msg.RemoteConfig.Config != nil {
+			log.Printf("DEBUG: RemoteConfig.Config.ConfigMap entries count: %d", len(msg.RemoteConfig.Config.ConfigMap))
+			for configKey, configFile := range msg.RemoteConfig.Config.ConfigMap {
+				log.Printf("DEBUG:   ConfigMap Entry Key: %q", configKey)
+				log.Printf("DEBUG:     AgentConfigFile.ContentType: %q", configFile.ContentType)
+				log.Printf("DEBUG:     AgentConfigFile.Body length: %d bytes", len(configFile.Body))
+				// Show full body for small configs, or first 1000 chars for large ones
+				bodyPreviewLen := 1000
+				if len(configFile.Body) < bodyPreviewLen {
+					bodyPreviewLen = len(configFile.Body)
+					log.Printf("DEBUG:     AgentConfigFile.Body (FULL, %d bytes):", len(configFile.Body))
+				} else {
+					log.Printf("DEBUG:     AgentConfigFile.Body (first %d of %d bytes):", bodyPreviewLen, len(configFile.Body))
+				}
+				log.Printf("DEBUG: %s", string(configFile.Body[:bodyPreviewLen]))
+				if len(configFile.Body) > bodyPreviewLen {
+					log.Printf("DEBUG:     ... (remaining %d bytes truncated)", len(configFile.Body)-bodyPreviewLen)
+				}
+			}
+		} else {
+			log.Printf("DEBUG: ERROR: RemoteConfig.Config is nil!")
+		}
+		log.Printf("DEBUG: RemoteConfig.ConfigHash: %s (hex), length: %d bytes", hex.EncodeToString(msg.RemoteConfig.ConfigHash), len(msg.RemoteConfig.ConfigHash))
+	} else {
+		log.Printf("DEBUG: ERROR: RemoteConfig is nil!")
+	}
+	log.Printf("DEBUG: ===== END OPAMP SERVERTOAGENT MESSAGE =====")
+
+	// DEBUG: Log full config YAML being sent (complete, not truncated) - this is the same as what's in ConfigMap
+	log.Printf("DEBUG: ===== FULL CONFIG YAML BEING SENT TO BRIDGE (COMPLETE, UNTRUNCATED) =====")
+	log.Printf("DEBUG: This is the exact YAML content that will be sent in the OpAMP RemoteConfig message")
+	log.Printf("DEBUG: Config size: %d bytes", len(configYAML))
+	log.Printf("DEBUG: %s", configYAML)
+	log.Printf("DEBUG: ===== END FULL CONFIG YAML =====")
 
 	// Send config to agent via OpAMP connection
 	ctx := context.Background()

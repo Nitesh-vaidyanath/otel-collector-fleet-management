@@ -83,8 +83,9 @@ func main() {
 		if _, err := os.Stat(*keyFile); os.IsNotExist(err) {
 			log.Fatalf("Private key file not found: %s", *keyFile)
 		}
-		log.Printf("WARNING: TLS support for standalone OpAMP server requires a reverse proxy")
-		log.Printf("The opamp-go library doesn't support TLS directly. Use nginx/traefik for TLS termination.")
+		log.Printf("✓ TLS enabled - OpAMP server will use WSS (WebSocket Secure)")
+	} else {
+		log.Printf("⚠️  TLS not enabled - OpAMP server will use WS (insecure WebSocket)")
 	}
 
 	// Initialize OpAMP manager
@@ -102,8 +103,12 @@ func main() {
 	})
 
 	// Start OpAMP server (this starts the internal HTTP server)
+	// Pass TLS certificate and key if provided
+	certFilePath := *certFile
+	keyFilePath := *keyFile
+	
 	go func() {
-		if err := globalOpampManager.Start(*endpoint); err != nil {
+		if err := globalOpampManager.Start(*endpoint, certFilePath, keyFilePath); err != nil {
 			appLogger.Error("Failed to start OpAMP server", err)
 			log.Fatalf("Failed to start OpAMP server: %v", err)
 		}

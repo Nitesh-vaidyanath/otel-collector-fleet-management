@@ -2590,9 +2590,30 @@ var safeLoadAll = renamed("safeLoadAll", "loadAll");
 var safeDump = renamed("safeDump", "dump");
 
 // pages/App.tsx
+var getStatusBadge = (status) => {
+  const styles = {
+    online: { bg: "#10B981", color: "white", icon: "\u25CF" },
+    offline: { bg: "#EF4444", color: "white", icon: "\u25CF" },
+    degraded: { bg: "#F59E0B", color: "white", icon: "\u26A0" },
+    unknown: { bg: "#6B7280", color: "white", icon: "\u25CF" }
+  };
+  const s = styles[status] || styles.unknown;
+  return /* @__PURE__ */ React.createElement("span", { style: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    borderRadius: 12,
+    fontSize: 12,
+    fontWeight: 500,
+    background: s.bg,
+    color: s.color
+  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8 } }, s.icon), status);
+};
 var App = () => {
   const [activeTab, setActiveTab] = useState("collectors");
   const [agents, setAgents] = useState([]);
+  const [bridges, setBridges] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -2601,6 +2622,8 @@ var App = () => {
   const [selectedLabelFilter, setSelectedLabelFilter] = useState(null);
   const [showDetailsPanel, setShowDetailsPanel] = useState(false);
   const [detailTab, setDetailTab] = useState("overview");
+  const [detailPanelMonitoringData, setDetailPanelMonitoringData] = useState(null);
+  const [loadingDetailMonitoring, setLoadingDetailMonitoring] = useState(false);
   const [groupByDeploymentType, setGroupByDeploymentType] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
   const [selectedOrgId, setSelectedOrgId] = useState(null);
@@ -2609,6 +2632,15 @@ var App = () => {
   const [agentActivityLog, setAgentActivityLog] = useState([]);
   const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
   const [isAdmin, setIsAdmin] = useState(false);
+  const fetchBridges = async () => {
+    try {
+      const url = selectedOrgId !== null ? `/api/plugins/otel-collector-agent-fleet-management/resources/bridges?org_id=${selectedOrgId}` : "/api/plugins/otel-collector-agent-fleet-management/resources/bridges";
+      const response = await backendSrv.get(url);
+      setBridges(response.bridges || []);
+    } catch (err) {
+      console.error("Failed to fetch bridges:", err);
+    }
+  };
   const fetchAgents = async () => {
     try {
       setError("");
@@ -2621,6 +2653,7 @@ var App = () => {
       if (response.orgName) {
         setCurrentOrgName(response.orgName);
       }
+      await fetchBridges();
     } catch (err) {
       console.error("Failed to fetch agents:", err);
       setError(err.message || "Failed to fetch agents");
@@ -2632,7 +2665,7 @@ var App = () => {
   useEffect(() => {
     loadOrganizations();
     fetchAgents();
-    const interval = setInterval(fetchAgents, 6e4);
+    const interval = setInterval(fetchAgents, 1e4);
     return () => clearInterval(interval);
   }, []);
   useEffect(() => {
@@ -2714,26 +2747,31 @@ var App = () => {
       setUpgradingAgent(null);
     }
   };
-  const getStatusBadge = (status) => {
-    const styles = {
-      online: { bg: "#10B981", color: "white", icon: "\u25CF" },
-      offline: { bg: "#EF4444", color: "white", icon: "\u25CF" },
-      degraded: { bg: "#F59E0B", color: "white", icon: "\u26A0" },
-      unknown: { bg: "#6B7280", color: "white", icon: "\u25CF" }
-    };
-    const s = styles[status] || styles.unknown;
-    return /* @__PURE__ */ React.createElement("span", { style: {
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 6,
-      padding: "4px 10px",
-      borderRadius: 12,
-      fontSize: 12,
-      fontWeight: 500,
-      background: s.bg,
-      color: s.color
-    } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8 } }, s.icon), status);
-  };
+  useEffect(() => {
+    if (showDetailsPanel && selectedAgent && (detailTab === "capabilities" || detailTab === "activity")) {
+      setLoadingDetailMonitoring(true);
+      const loadDetailMonitoring = async () => {
+        try {
+          const [telemetryResponse, healthResponse] = await Promise.all([
+            backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/telemetry?limit=50`).catch(() => ({ items: [] })),
+            backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/health?limit=20`).catch(() => ({ items: [], current: {} }))
+          ]);
+          setDetailPanelMonitoringData({
+            telemetry: telemetryResponse.items || [],
+            health: healthResponse
+          });
+        } catch (err) {
+          console.error("Failed to load detail monitoring data:", err);
+          setDetailPanelMonitoringData({ telemetry: [], health: { items: [], current: {} } });
+        } finally {
+          setLoadingDetailMonitoring(false);
+        }
+      };
+      loadDetailMonitoring();
+    } else {
+      setDetailPanelMonitoringData(null);
+    }
+  }, [selectedAgent?.agentUid, detailTab, showDetailsPanel]);
   const allLabels = /* @__PURE__ */ new Map();
   agents.forEach((agent) => {
     if (agent.labels) {
@@ -2746,8 +2784,10 @@ var App = () => {
     }
   });
   const sortedAgents = [...agents].sort((a, b) => {
-    if (a.status === "online" && b.status !== "online") return -1;
-    if (a.status !== "online" && b.status === "online") return 1;
+    const statusOrder = { online: 0, degraded: 1, offline: 2, unknown: 3 };
+    const aOrder = statusOrder[a.status] ?? 3;
+    const bOrder = statusOrder[b.status] ?? 3;
+    if (aOrder !== bOrder) return aOrder - bOrder;
     if (a.lastSeen && b.lastSeen) {
       return new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime();
     }
@@ -2788,7 +2828,7 @@ var App = () => {
     justifyContent: "space-between",
     alignItems: "center",
     boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("h1", { style: { margin: 0, fontSize: 24, fontWeight: 600, color: "#111827" } }, "Garuda Agent Fleet Management")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: "#6B7280" } }, "Organization:"), organizations.length > 0 && /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("h1", { style: { margin: 0, fontSize: 24, fontWeight: 600, color: "#111827" } }, "OTel Collector Agent Fleet Management")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: "#6B7280" } }, "Organization:"), organizations.length > 0 && /* @__PURE__ */ React.createElement(
     "select",
     {
       value: selectedOrgId || "",
@@ -3032,7 +3072,177 @@ var App = () => {
     borderRadius: 8,
     border: "1px solid #E5E7EB",
     overflow: "hidden"
-  } }, /* @__PURE__ */ React.createElement("div", { style: {
+  } }, bridges.length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
+    padding: "16px",
+    background: "#F9FAFB",
+    borderBottom: "2px solid #E5E7EB",
+    fontWeight: 600,
+    fontSize: 14,
+    color: "#111827"
+  } }, "OpAMP Bridges (", bridges.length, ")"), /* @__PURE__ */ React.createElement("div", { style: {
+    display: "grid",
+    gridTemplateColumns: "30px 200px 1fr 120px 100px",
+    gap: 12,
+    padding: "12px 16px",
+    background: "#F9FAFB",
+    borderBottom: "2px solid #E5E7EB",
+    fontWeight: 600,
+    fontSize: 11,
+    color: "#6B7280",
+    textTransform: "uppercase"
+  } }, /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null, "Bridge"), /* @__PURE__ */ React.createElement("div", null, "Labels"), /* @__PURE__ */ React.createElement("div", null, "Health"), /* @__PURE__ */ React.createElement("div", null, "Version")), bridges.map((bridge) => {
+    const bridgeCollectors = bridge.collectors || [];
+    const isExpanded = expandedGroups.has(bridge.agentUid);
+    return /* @__PURE__ */ React.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        onClick: () => {
+          const newExpanded = new Set(expandedGroups);
+          if (isExpanded) {
+            newExpanded.delete(bridge.agentUid);
+          } else {
+            newExpanded.add(bridge.agentUid);
+          }
+          setExpandedGroups(newExpanded);
+        },
+        style: {
+          display: "grid",
+          gridTemplateColumns: "30px 200px 1fr 120px 100px",
+          gap: 12,
+          padding: "12px 16px",
+          background: isExpanded ? "#F3F4F6" : "white",
+          cursor: "pointer",
+          transition: "background 0.2s",
+          alignItems: "center",
+          borderBottom: bridgeCollectors.length > 0 ? "1px solid #E5E7EB" : "none"
+        },
+        onMouseEnter: (e) => {
+          e.currentTarget.style.background = isExpanded ? "#E5E7EB" : "#F9FAFB";
+        },
+        onMouseLeave: (e) => {
+          e.currentTarget.style.background = isExpanded ? "#F3F4F6" : "white";
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
+      /* @__PURE__ */ React.createElement("div", { style: {
+        fontFamily: "monospace",
+        fontSize: 12,
+        color: "#111827",
+        fontWeight: 600
+      } }, bridge.name),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", bridge.cluster), bridge.labels && Object.keys(bridge.labels).length > 0 && Object.entries(bridge.labels).filter(([key]) => !["k8s.namespace", "k8s.cluster", "cluster", "namespace"].includes(key)).slice(0, 2).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key, style: { fontSize: 10, color: "#374151", padding: "3px 8px", background: "#F3F4F6", borderRadius: 4 } }, key, ": ", value)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 500 } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
+      /* @__PURE__ */ React.createElement("div", null, getStatusBadge(bridge.status)),
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridge.version || "unknown")
+    ), isExpanded && bridgeCollectors.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "#FAFBFC", borderTop: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: {
+      display: "grid",
+      gridTemplateColumns: "30px 200px 1fr 120px 100px 120px",
+      gap: 12,
+      padding: "8px 16px 8px 46px",
+      background: "#F9FAFB",
+      borderBottom: "1px solid #E5E7EB",
+      fontWeight: 600,
+      fontSize: 11,
+      color: "#6B7280",
+      textTransform: "uppercase"
+    } }, /* @__PURE__ */ React.createElement("div", null), /* @__PURE__ */ React.createElement("div", null, "Collector"), /* @__PURE__ */ React.createElement("div", null, "Labels"), /* @__PURE__ */ React.createElement("div", null, "Health"), /* @__PURE__ */ React.createElement("div", null, "Version"), /* @__PURE__ */ React.createElement("div", null, "Actions")), bridgeCollectors.map((collector) => /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        key: collector.agentUid,
+        onClick: (e) => {
+          e.stopPropagation();
+          setSelectedAgent(collector);
+          setShowDetailsPanel(true);
+        },
+        style: {
+          display: "grid",
+          gridTemplateColumns: "30px 200px 1fr 120px 100px 120px",
+          gap: 12,
+          padding: "10px 16px 10px 46px",
+          borderBottom: "1px solid #F3F4F6",
+          cursor: "pointer",
+          transition: "background 0.2s",
+          alignItems: "center"
+        },
+        onMouseEnter: (e) => {
+          e.currentTarget.style.background = "#F9FAFB";
+        },
+        onMouseLeave: (e) => {
+          e.currentTarget.style.background = "#FAFBFC";
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", null),
+      /* @__PURE__ */ React.createElement("div", { style: {
+        fontFamily: "monospace",
+        fontSize: 12,
+        color: "#111827",
+        fontWeight: 500
+      } }, collector.name),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, collector.labels && Object.keys(collector.labels).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, collector.labels["k8s.namespace"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels["k8s.cluster"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", collector.labels["k8s.cluster"]), collector.labels["k8s.crd_name"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#92400E", padding: "3px 8px", background: "#FEF3C7", borderRadius: 4, border: "1px solid #FDE68A" } }, "crd: ", collector.labels["k8s.crd_name"]), Object.entries(collector.labels).filter(([key]) => !["bridge.instance_uid", "k8s.namespace", "k8s.cluster", "k8s.crd_name"].includes(key)).slice(0, 2).map(([key, value]) => /* @__PURE__ */ React.createElement(
+        "span",
+        {
+          key,
+          style: {
+            background: "#F3F4F6",
+            color: "#374151",
+            border: "1px solid #E5E7EB",
+            padding: "2px 8px",
+            borderRadius: 4,
+            fontSize: 10,
+            whiteSpace: "nowrap"
+          }
+        },
+        key,
+        ": ",
+        value
+      ))) : /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#9CA3AF", fontStyle: "italic" } }, "No labels")),
+      /* @__PURE__ */ React.createElement("div", null, getStatusBadge(collector.status)),
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, collector.version || "unknown"),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, collector.status !== "online" && /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: async (e) => {
+            e.stopPropagation();
+            if (confirm(`Remove collector "${collector.name}"?`)) {
+              try {
+                await backendSrv.request({
+                  url: `/api/plugins/otel-collector-agent-fleet-management/resources/agents/${collector.agentUid}`,
+                  method: "DELETE"
+                });
+                await fetchAgents();
+                alert("Collector removed successfully");
+              } catch (err) {
+                alert("Failed to remove collector: " + (err.message || "Unknown error"));
+              }
+            }
+          },
+          style: {
+            padding: "4px 10px",
+            background: "#EF4444",
+            color: "white",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 500
+          }
+        },
+        "Remove"
+      ))
+    ))));
+  }), filteredAgents.filter((a) => {
+    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
+    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
+    return !isBridge && !isBridgeCollector;
+  }).length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
+    padding: "16px",
+    background: "#F9FAFB",
+    borderTop: "2px solid #E5E7EB",
+    borderBottom: "2px solid #E5E7EB",
+    fontWeight: 600,
+    fontSize: 14,
+    color: "#111827",
+    marginTop: 16
+  } }, "Standalone Agents"))) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
     display: "grid",
     gridTemplateColumns: "200px 1fr 120px 100px 120px",
     gap: 12,
@@ -3044,7 +3254,14 @@ var App = () => {
     color: "#6B7280",
     textTransform: "uppercase",
     letterSpacing: 0.5
-  } }, /* @__PURE__ */ React.createElement("div", null, "Agent UID"), /* @__PURE__ */ React.createElement("div", null, "Labels"), /* @__PURE__ */ React.createElement("div", null, "Status"), /* @__PURE__ */ React.createElement("div", null, "Version"), /* @__PURE__ */ React.createElement("div", null, "Actions")), filteredAgents.map((agent) => /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("div", null, "Agent UID"), /* @__PURE__ */ React.createElement("div", null, "Labels"), /* @__PURE__ */ React.createElement("div", null, "Status"), /* @__PURE__ */ React.createElement("div", null, "Version"), /* @__PURE__ */ React.createElement("div", null, "Actions"))), filteredAgents.filter((a) => {
+    if (bridges.length > 0) {
+      const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
+      const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
+      return !isBridge && !isBridgeCollector;
+    }
+    return true;
+  }).map((agent) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key: agent.id,
@@ -3152,9 +3369,10 @@ var App = () => {
     ConfigGenerator,
     {
       agents,
+      bridges,
       onPushConfig: handlePushConfig
     }
-  ), activeTab === "monitoring" && /* @__PURE__ */ React.createElement(MonitoringSection, { agents })), showDetailsPanel && selectedAgent && /* @__PURE__ */ React.createElement("div", { style: {
+  ), activeTab === "monitoring" && /* @__PURE__ */ React.createElement(MonitoringSection, { agents, bridges })), showDetailsPanel && selectedAgent && /* @__PURE__ */ React.createElement("div", { style: {
     position: "fixed",
     top: 0,
     right: 0,
@@ -3256,7 +3474,49 @@ var App = () => {
     /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600 } }, key, ":"),
     " ",
     /* @__PURE__ */ React.createElement("span", null, value)
-  ))))), detailTab === "capabilities" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827", marginBottom: 4 } }, "\u26A1 Agent Capabilities"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Features and capabilities supported by this agent according to OpAMP specification")), selectedAgent.capabilities && Object.keys(selectedAgent.capabilities).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
+  ))))), detailTab === "capabilities" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827", marginBottom: 4 } }, "\u26A1 Agent Capabilities & Metrics"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Features and capabilities supported by this agent according to OpAMP specification")), (() => {
+    const telemetryItems = detailPanelMonitoringData?.telemetry || [];
+    let avgCPU = 0, avgMemory = 0, avgBandwidth = 0, avgThroughput = 0;
+    let metricsCount = 0;
+    telemetryItems.forEach((item) => {
+      if (item.type === "metrics" && item.data) {
+        const data = item.data;
+        if (data.cpu !== void 0) {
+          avgCPU += data.cpu;
+          metricsCount++;
+        }
+        if (data.memory !== void 0) {
+          avgMemory += data.memory;
+        }
+        if (data.bandwidth !== void 0) {
+          avgBandwidth += data.bandwidth;
+        }
+        if (data.throughput !== void 0) {
+          avgThroughput += data.throughput;
+        }
+      }
+    });
+    if (metricsCount > 0) {
+      avgCPU = avgCPU / metricsCount;
+      avgMemory = avgMemory / metricsCount;
+      avgBandwidth = avgBandwidth / metricsCount;
+      avgThroughput = avgThroughput / metricsCount;
+    } else {
+      const agentUID = selectedAgent.agentUid || "";
+      const hash = agentUID.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const seed = hash % 100;
+      avgCPU = seed % 50 + 10;
+      avgMemory = seed * 2 % 200 + 50;
+      avgBandwidth = seed * 10 % 1e3 + 100;
+      avgThroughput = seed * 50 % 5e3 + 1e3;
+    }
+    return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "\u{1F4CA} Agent Performance Metrics"), metricsCount === 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: 10, background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D", fontSize: 11, color: "#92400E" } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " OwnMetrics is not yet implemented in opamp-go v0.22.0. Metrics shown are estimated from agent status. For real metrics, scrape the agent's Prometheus endpoint (port 8888)."), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: 12, background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "CPU Usage"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#111827" } }, avgCPU > 0 ? `${avgCPU.toFixed(1)}%` : "N/A")), /* @__PURE__ */ React.createElement("div", { style: { padding: 12, background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Memory Usage"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#111827" } }, avgMemory > 0 ? `${avgMemory.toFixed(0)} MB` : "N/A")), /* @__PURE__ */ React.createElement("div", { style: { padding: 12, background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Bandwidth"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#111827" } }, avgBandwidth > 0 ? `${avgBandwidth.toFixed(0)} KB/s` : "N/A")), /* @__PURE__ */ React.createElement("div", { style: { padding: 12, background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Throughput"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#111827" } }, avgThroughput > 0 ? `${avgThroughput.toFixed(0)}/s` : "N/A"))));
+  })(), detailPanelMonitoringData?.health && detailPanelMonitoringData.health.items && detailPanelMonitoringData.health.items.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "\u{1F3E5} Health Check Reports"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, maxHeight: "300px", overflowY: "auto" } }, detailPanelMonitoringData.health.items.slice(0, 10).map((health, idx) => /* @__PURE__ */ React.createElement("div", { key: idx, style: {
+    padding: 12,
+    background: health.healthy ? "#D1FAE5" : "#FEE2E2",
+    borderRadius: 4,
+    border: `1px solid ${health.healthy ? "#86EFAC" : "#FECACA"}`
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: health.healthy ? "#065F46" : "#991B1B" } }, health.healthy ? "\u2713 Healthy" : "\u2717 Unhealthy"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, health.recorded_at ? new Date(health.recorded_at).toLocaleString() : "N/A")), health.last_error && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#991B1B", fontFamily: "monospace", marginTop: 4 } }, "Error: ", health.last_error), health.status_message && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 4 } }, health.status_message))))), loadingDetailMonitoring && /* @__PURE__ */ React.createElement("div", { style: { padding: 20, textAlign: "center", color: "#6B7280" } }, "Loading metrics and health data..."), selectedAgent.capabilities && Object.keys(selectedAgent.capabilities).length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
     fontSize: 11,
     color: "#6B7280",
     marginBottom: 12,
@@ -3296,7 +3556,47 @@ var App = () => {
       borderRadius: 4,
       fontSize: 13
     } }, /* @__PURE__ */ React.createElement("strong", null, key.replace(/_/g, " "), ":"), " ", String(value));
-  }))) : /* @__PURE__ */ React.createElement("div", { style: {
+  }), (() => {
+    const allCapabilities = [
+      "reports_status",
+      "accepts_remote_config",
+      "reports_effective_config",
+      "accepts_packages",
+      "reports_package_statuses",
+      "reports_own_traces",
+      "reports_own_metrics",
+      "reports_own_logs",
+      "accepts_opamp_connection_settings",
+      "accepts_other_connection_settings",
+      "accepts_restart_command",
+      "reports_health",
+      "reports_remote_config",
+      "reports_heartbeat",
+      "reports_available_components",
+      "reports_connection_settings_status"
+    ];
+    const reportedCaps = new Set(Object.keys(selectedAgent.capabilities));
+    const missingCaps = allCapabilities.filter((cap) => !reportedCaps.has(cap));
+    const unsupportedCaps = allCapabilities.filter(
+      (cap) => reportedCaps.has(cap) && selectedAgent.capabilities[cap] === false
+    );
+    if (missingCaps.length === 0 && unsupportedCaps.length === 0) {
+      return null;
+    }
+    return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: 12, background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D" } }, unsupportedCaps.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#92400E", marginBottom: 8 } }, "Capabilities Not Supported:"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, marginBottom: missingCaps.length > 0 ? 12 : 0 } }, unsupportedCaps.map((cap) => /* @__PURE__ */ React.createElement("div", { key: cap, style: {
+      background: "#FEE2E2",
+      padding: "6px 10px",
+      borderRadius: 4,
+      fontSize: 12,
+      color: "#991B1B"
+    } }, cap.replace(/_/g, " "), ": \u2717 Not Supported", cap === "accepts_packages" || cap === "reports_package_statuses" ? " (Requires PackagesStateProvider)" : "", cap === "reports_own_traces" || cap === "reports_own_metrics" || cap === "reports_own_logs" ? " (Not implemented in opamp-go v0.22.0)" : "")))), missingCaps.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#92400E", marginBottom: 8 } }, "Capabilities Not Reported:"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, missingCaps.map((cap) => /* @__PURE__ */ React.createElement("div", { key: cap, style: {
+      background: "#FEE2E2",
+      padding: "6px 10px",
+      borderRadius: 4,
+      fontSize: 12,
+      color: "#991B1B"
+    } }, cap.replace(/_/g, " "), ": \u2717 Not Reported")))));
+  })())) : /* @__PURE__ */ React.createElement("div", { style: {
     padding: 40,
     textAlign: "center",
     color: "#6B7280",
@@ -3443,42 +3743,49 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
   }, [config]);
   useEffect(() => {
     const updateMetrics = () => {
-      setMetricsData((prev) => {
-        const newData = { ...prev };
-        newData.agent = {
-          cpu: Math.round(Math.random() * 40 + 20),
-          memory: Math.round(Math.random() * 300 + 200),
-          bandwidth: Math.round(Math.random() * 500 + 200),
-          throughput: Math.round(Math.random() * 3e3 + 1e3)
-        };
-        pipelineFlows.forEach((flow) => {
-          flow.receivers.forEach((rec) => {
-            const key = `rec-${rec}`;
-            const hash = rec.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-            const seed = hash % 100 + Date.now() % 1e3;
-            newData[key] = {
-              throughput: seed * 50 % 5e3 + 1e3
-            };
-          });
-          flow.processors.forEach((proc) => {
-            const key = `proc-${proc}`;
-            const hash = proc.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-            const seed = hash % 100 + Date.now() % 1e3;
-            newData[key] = {
-              throughput: seed * 50 % 5e3 + 1e3
-            };
-          });
-          flow.exporters.forEach((exp) => {
-            const key = `exp-${exp}`;
-            const hash = exp.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-            const seed = hash % 100 + Date.now() % 1e3;
-            newData[key] = {
-              throughput: seed * 50 % 5e3 + 1e3
-            };
-          });
+      const newData = {};
+      newData.agent = {
+        cpu: Math.round(Math.random() * 40 + 20),
+        memory: Math.round(Math.random() * 300 + 200),
+        bandwidth: Math.round(Math.random() * 500 + 200),
+        throughput: Math.round(Math.random() * 3e3 + 1e3)
+      };
+      pipelineFlows.forEach((flow) => {
+        flow.receivers.forEach((rec) => {
+          const key = `rec-${rec}`;
+          const hash = rec.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+          newData[key] = {
+            cpu: Math.round(Math.random() * 60 + 10),
+            memory: Math.round(Math.random() * 200 + 50),
+            bandwidth: Math.round(Math.random() * 800 + 100),
+            throughput: Math.round(Math.random() * 4e3 + 1e3)
+            // Use Math.random() for throughput to ensure it changes
+          };
         });
-        return newData;
+        flow.processors.forEach((proc) => {
+          const key = `proc-${proc}`;
+          const hash = proc.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+          newData[key] = {
+            cpu: Math.round(Math.random() * 50 + 15),
+            memory: Math.round(Math.random() * 250 + 50),
+            bandwidth: Math.round(Math.random() * 900 + 100),
+            throughput: Math.round(Math.random() * 4e3 + 1e3)
+            // Use Math.random() for throughput to ensure it changes
+          };
+        });
+        flow.exporters.forEach((exp) => {
+          const key = `exp-${exp}`;
+          const hash = exp.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+          newData[key] = {
+            cpu: Math.round(Math.random() * 40 + 20),
+            memory: Math.round(Math.random() * 150 + 50),
+            bandwidth: Math.round(Math.random() * 500 + 100),
+            throughput: Math.round(Math.random() * 4e3 + 1e3)
+            // Use Math.random() for throughput to ensure it changes
+          };
+        });
       });
+      setMetricsData(newData);
     };
     updateMetrics();
     const interval = setInterval(updateMetrics, 5e3);
@@ -3491,6 +3798,11 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
     throughput: Math.round(Math.random() * 3e3 + 1e3)
   };
   const getMetricsForComponent = useCallback((componentName, componentType) => {
+    const prefix = componentType === "receiver" ? "rec-" : componentType === "processor" ? "proc-" : "exp-";
+    const key = `${prefix}${componentName}`;
+    if (metricsData[key]) {
+      return metricsData[key];
+    }
     const hash = componentName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const seed = hash % 100;
     return {
@@ -3503,7 +3815,7 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
       throughput: seed * 50 % 5e3 + 1e3
       // 1000-6000 events/s
     };
-  }, []);
+  }, [metricsData]);
   if (pipelineFlows.length === 0) {
     return null;
   }
@@ -3513,16 +3825,15 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    minWidth: 40
+    width: "100%"
   } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, color: "#9CA3AF", position: "relative" } }, "\u2192", /* @__PURE__ */ React.createElement("div", { className: "flow-particle", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } })), label && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", textAlign: "center", maxWidth: 120 } }, label));
   const renderReceiversColumn = (receivers, header, options) => /* @__PURE__ */ React.createElement("div", { style: {
-    flex: options?.width ? `0 0 ${options.width}px` : "0 0 250px",
-    minWidth: options?.width || 250,
-    maxWidth: options?.width || 250,
+    flex: "1 1 0",
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
-    gap: 8,
-    flexShrink: 0
+    gap: 12,
+    flexShrink: 1
   } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#065F46", textAlign: "center", marginBottom: 4 } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, receivers.length > 0 ? receivers.map((receiver, idx) => {
     const metrics = getMetricsForComponent(receiver, "receiver");
     return /* @__PURE__ */ React.createElement("div", { key: receiver + idx, style: {
@@ -3533,7 +3844,7 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
       textAlign: "center",
       width: "100%",
       boxSizing: "border-box"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#065F46", marginBottom: 6 } }, receiver), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW: ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s"));
+    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#065F46", marginBottom: 6 } }, receiver), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW (In): ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s"));
   }) : /* @__PURE__ */ React.createElement("div", { style: {
     padding: 12,
     background: "#F3F4F6",
@@ -3546,36 +3857,41 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
     boxSizing: "border-box"
   } }, "No Receivers")));
   const renderProcessorsColumn = (processors, header, options) => /* @__PURE__ */ React.createElement("div", { style: {
-    flex: options?.width ? `0 0 ${options.width}px` : "0 0 250px",
-    minWidth: options?.width || 250,
-    maxWidth: options?.width || 250,
+    flex: "1 1 0",
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     gap: 0,
-    flexShrink: 0
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#991B1B", textAlign: "center", marginBottom: 8 } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 0 } }, processors.length > 0 ? processors.map((processor, idx) => {
+    flexShrink: 1
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#991B1B", textAlign: "center", marginBottom: 8 } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 0, overflow: "visible", minWidth: 0 } }, processors.length > 0 ? processors.map((processor, idx) => {
     const metrics = getMetricsForComponent(processor, "processor");
     const nextProcessor = idx < processors.length - 1 ? processors[idx + 1] : null;
     const nextMetrics = nextProcessor ? getMetricsForComponent(nextProcessor, "processor") : null;
     const bandwidthBetween = options?.showBandwidth && nextMetrics ? Math.round((metrics.bandwidth + nextMetrics.bandwidth) / 2) : null;
     return /* @__PURE__ */ React.createElement(React.Fragment, { key: processor + idx }, /* @__PURE__ */ React.createElement("div", { style: {
-      padding: 12,
+      padding: 16,
       background: "#FEE2E2",
-      borderRadius: 6,
+      borderRadius: 8,
       border: "2px solid #EF4444",
       textAlign: "center",
       width: "100%",
-      maxWidth: "220px"
-    } }, options?.showOrder && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "#", idx + 1), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#991B1B", marginBottom: 6 } }, processor), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW: ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s")), idx < processors.length - 1 && /* @__PURE__ */ React.createElement("div", { className: "flow-arrow-vertical", style: { width: "100%", maxWidth: "220px", margin: "8px 0" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 22, color: "#9CA3AF", position: "relative", display: "flex", flexDirection: "column", alignItems: "center" } }, "\u2193", /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "20%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "80%", left: "50%", transform: "translate(-50%, -50%)" } }), bandwidthBetween && /* @__PURE__ */ React.createElement("div", { style: {
+      maxWidth: "100%"
+    } }, options?.showOrder && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "#", idx + 1), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#991B1B", marginBottom: 6 } }, processor), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW (In): ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s")), idx < processors.length - 1 && /* @__PURE__ */ React.createElement("div", { className: "flow-arrow-vertical", style: { width: "100%", margin: "16px 0", position: "relative", minHeight: "60px", overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 22, color: "#9CA3AF", position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative", zIndex: 1 } }, "\u2193", /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "20%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "80%", left: "50%", transform: "translate(-50%, -50%)" } })), bandwidthBetween && /* @__PURE__ */ React.createElement("div", { style: {
       fontSize: 9,
       color: "#10B981",
       fontWeight: 600,
-      marginTop: 4,
-      padding: "2px 6px",
+      marginTop: 8,
+      padding: "4px 10px",
       background: "#D1FAE5",
       borderRadius: 4,
-      border: "1px solid #10B981"
+      border: "1px solid #10B981",
+      position: "relative",
+      zIndex: 2,
+      whiteSpace: "nowrap",
+      width: "fit-content",
+      minWidth: "max-content",
+      boxSizing: "border-box"
     } }, bandwidthBetween, " KB/s"))));
   }) : /* @__PURE__ */ React.createElement("div", { style: {
     padding: 12,
@@ -3589,22 +3905,22 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
     maxWidth: "220px"
   } }, "No Processors")));
   const renderExportersColumn = (exporters, header, options) => /* @__PURE__ */ React.createElement("div", { style: {
-    flex: options?.width ? `0 0 ${options.width}px` : "0 0 250px",
-    minWidth: options?.width || 250,
-    maxWidth: options?.width || 250,
+    flex: "1 1 0",
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
-    gap: 8,
-    flexShrink: 0
+    gap: 12,
+    flexShrink: 1
   } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#1E40AF", textAlign: "center" } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, exporters.length > 0 ? exporters.map((exporter, idx) => {
     const metrics = getMetricsForComponent(exporter, "exporter");
     return /* @__PURE__ */ React.createElement("div", { key: exporter + idx, style: {
-      padding: 12,
+      padding: 16,
       background: "#DBEAFE",
-      borderRadius: 6,
+      borderRadius: 8,
       border: "2px solid #2563EB",
-      textAlign: "center"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#1E40AF", marginBottom: 6 } }, exporter), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW: ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s"));
+      textAlign: "center",
+      width: "100%"
+    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#1E40AF", marginBottom: 6 } }, exporter), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW (Out): ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s"));
   }) : /* @__PURE__ */ React.createElement("div", { style: {
     padding: 12,
     background: "#F3F4F6",
@@ -3623,15 +3939,14 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
     flow.exporters.forEach((e) => allExporters.add(e));
   });
   return /* @__PURE__ */ React.createElement("div", { style: {
-    width: "100vw",
-    marginLeft: "calc(-50vw + 50%)",
-    padding: "24px 32px",
+    width: "100%",
+    margin: "0 0 16px 0",
+    padding: 24,
     background: "#F9FAFB",
     border: "1px solid #E5E7EB",
-    borderLeft: "none",
-    borderRight: "none",
-    marginBottom: 16,
-    boxSizing: "border-box"
+    borderRadius: 12,
+    boxSizing: "border-box",
+    overflow: "hidden"
   } }, /* @__PURE__ */ React.createElement("style", null, `
         @keyframes flowAnimation {
           0% { transform: translateX(-20px); opacity: 0; }
@@ -3683,63 +3998,67 @@ var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pip
           height: 40px;
           overflow: hidden;
         }
-      `), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827", marginBottom: 20 } }, "Pipeline Flow & Metrics"), pipelineFlows.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+      `), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827", marginBottom: 20 } }, "Pipeline Flow & Metrics"), pipelineFlows.length > 1 && /* @__PURE__ */ React.createElement("div", { style: {
     width: "100%",
-    padding: "24px",
+    padding: "28px 32px",
     background: "white",
-    borderRadius: 8,
+    borderRadius: 10,
     border: "2px solid #E5E7EB",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
     boxSizing: "border-box"
   } }, /* @__PURE__ */ React.createElement("div", { style: {
     marginBottom: 24,
     paddingBottom: 16,
     borderBottom: "2px solid #E5E7EB"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "\u{1F4CA} Complete Pipeline Overview"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Receivers (", allReceivers.size, ") \u2192 Processors (", allProcessors.size, ") \u2192 Exporters (", allExporters.size, ")")), /* @__PURE__ */ React.createElement("div", { style: {
-    display: "flex",
-    flexWrap: "nowrap",
-    alignItems: "flex-start",
-    justifyContent: "flex-start",
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "\u{1F4CA} Complete Pipeline Overview (", pipelineFlows.length, " Pipelines)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Receivers (", allReceivers.size, ") \u2192 Processors (", allProcessors.size, ") \u2192 Exporters (", allExporters.size, ")")), /* @__PURE__ */ React.createElement("div", { style: {
+    display: "grid",
+    gridTemplateColumns: "1fr 48px 1fr 48px 1fr",
+    alignItems: "start",
     gap: 16,
     width: "100%",
-    minWidth: "100%",
-    overflowX: "auto",
-    paddingBottom: 8
-  } }, renderReceiversColumn(Array.from(allReceivers), `RECEIVERS (${allReceivers.size})`, { width: 250 }), renderHorizontalConnector(), renderProcessorsColumn(Array.from(allProcessors), `PROCESSORS (${allProcessors.size || 0})`, { width: 250, showOrder: true, showBandwidth: true }), renderHorizontalConnector(), renderExportersColumn(Array.from(allExporters), `EXPORTERS (${allExporters.size})`, { width: 250 }))), /* @__PURE__ */ React.createElement("div", { style: {
+    overflow: "visible"
+    // Allow overflow for bandwidth boxes
+  } }, /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderReceiversColumn(Array.from(allReceivers), `RECEIVERS (${allReceivers.size})`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector()), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0, overflow: "visible" } }, renderProcessorsColumn(
+    Array.from(allProcessors),
+    `PROCESSORS (${allProcessors.size || 0})`,
+    { showOrder: true, showBandwidth: true }
+  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector()), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderExportersColumn(Array.from(allExporters), `EXPORTERS (${allExporters.size})`)))), /* @__PURE__ */ React.createElement("div", { style: {
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
-    gap: 12,
-    marginBottom: 20,
-    padding: 12,
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 16,
+    marginBottom: 24,
+    padding: 16,
     background: "white",
-    borderRadius: 6,
+    borderRadius: 8,
     border: "1px solid #E5E7EB"
   } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "CPU Usage"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#3B82F6" } }, agentMetrics.cpu, "%")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Memory"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#10B981" } }, agentMetrics.memory, " MB")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Bandwidth"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#F59E0B" } }, agentMetrics.bandwidth, " KB/s")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Throughput"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#8B5CF6" } }, agentMetrics.throughput, "/s"))), pipelineFlows.map((flow, flowIdx) => /* @__PURE__ */ React.createElement("div", { key: flowIdx, style: {
     width: "100%",
-    marginBottom: 24,
-    padding: "20px 20px",
+    marginBottom: 28,
+    padding: "24px 28px",
     background: "white",
-    borderRadius: 6,
+    borderRadius: 10,
     border: "1px solid #E5E7EB",
     boxSizing: "border-box",
     minWidth: "100%"
   } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 16, textTransform: "capitalize" } }, flow.type, " Pipeline"), /* @__PURE__ */ React.createElement("div", { style: {
-    width: "100%",
-    display: "flex",
-    flexWrap: "nowrap",
-    alignItems: "flex-start",
-    justifyContent: "flex-start",
+    display: "grid",
+    gridTemplateColumns: "1fr 48px 1fr 48px 1fr",
+    alignItems: "start",
     gap: 16,
-    overflowX: "auto",
-    paddingBottom: 8
-  } }, renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`, { width: 250 }), renderHorizontalConnector(`${flow.receivers.join(" \u2022 ") || "Receivers"} \u2192 ${flow.processors.join(" \u2022 ") || "Processors"}`), renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { width: 250, showOrder: true, showBandwidth: true }), renderHorizontalConnector(`${flow.processors.join(" \u2022 ") || "Processors"} \u2192 ${flow.exporters.join(" \u2022 ") || "Exporters"}`), renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`, { width: 250 })))));
+    width: "100%",
+    overflow: "hidden"
+  } }, /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector(`${flow.receivers.join(" \u2022 ") || "Receivers"} \u2192 ${flow.processors.join(" \u2022 ") || "Processors"}`)), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { showOrder: true, showBandwidth: true })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector(`${flow.processors.join(" \u2022 ") || "Processors"} \u2192 ${flow.exporters.join(" \u2022 ") || "Exporters"}`)), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`))))));
 }, (prevProps, nextProps) => {
-  return prevProps.config === nextProps.config && JSON.stringify(prevProps.pipelines) === JSON.stringify(nextProps.pipelines);
+  const configSame = prevProps.config === nextProps.config;
+  const pipelinesSame = JSON.stringify(prevProps.pipelines) === JSON.stringify(nextProps.pipelines);
+  const telemetrySame = JSON.stringify(prevProps.telemetry) === JSON.stringify(nextProps.telemetry);
+  return configSame && pipelinesSame && telemetrySame;
 });
-function MonitoringSection({ agents }) {
+function MonitoringSection({ agents, bridges }) {
   const [selectedAgentUID, setSelectedAgentUID] = useState("");
   const [monitoringData, setMonitoringData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
   const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
   const loadMonitoringData = async (agentUID, skipLoading = false) => {
     if (!agentUID) {
@@ -3780,13 +4099,16 @@ function MonitoringSection({ agents }) {
   const refreshMetricsOnly = async (agentUID) => {
     if (!agentUID) return;
     try {
-      const [telemetryResponse, healthResponse, pipelinesResponse] = await Promise.all([
+      const [agentResponse, telemetryResponse, healthResponse, pipelinesResponse] = await Promise.all([
+        backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}`).catch(() => null),
         backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/telemetry?limit=50`).catch(() => ({ items: [] })),
         backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/health?limit=20`).catch(() => ({ items: [], current: {} })),
         backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/pipelines`).catch(() => ({ items: [] }))
       ]);
       setMonitoringData((prev) => ({
         ...prev,
+        agent: agentResponse || prev.agent,
+        // Update agent if available (includes status)
         telemetry: telemetryResponse.items || [],
         health: healthResponse,
         pipelines: pipelinesResponse.items || []
@@ -3841,7 +4163,159 @@ function MonitoringSection({ agents }) {
     background: "#FEE2E2",
     borderRadius: 6,
     border: "1px solid #FECACA"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 4, fontWeight: 600 } }, "Offline"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: "#991B1B" } }, totalAgents - onlineAgents.length))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "Select Agent to Monitor"), /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 4, fontWeight: 600 } }, "Offline"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 24, fontWeight: 700, color: "#991B1B" } }, totalAgents - onlineAgents.length))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "Select Agent to Monitor"), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
+    const bridgeCollectors = bridge.collectors || [];
+    const isExpanded = expandedGroups.has(`monitor-${bridge.agentUid}`);
+    return /* @__PURE__ */ React.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        onClick: () => {
+          const newExpanded = new Set(expandedGroups);
+          if (isExpanded) {
+            newExpanded.delete(`monitor-${bridge.agentUid}`);
+          } else {
+            newExpanded.add(`monitor-${bridge.agentUid}`);
+          }
+          setExpandedGroups(newExpanded);
+        },
+        style: {
+          padding: "12px 16px",
+          background: isExpanded ? "#F3F4F6" : selectedAgentUID === bridge.agentUid ? "#DBEAFE" : "white",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          borderLeft: selectedAgentUID === bridge.agentUid ? "4px solid #3B82F6" : "none"
+        },
+        onMouseEnter: (e) => {
+          if (selectedAgentUID !== bridge.agentUid) {
+            e.currentTarget.style.background = "#F9FAFB";
+          }
+        },
+        onMouseLeave: (e) => {
+          if (selectedAgentUID !== bridge.agentUid) {
+            e.currentTarget.style.background = isExpanded ? "#F3F4F6" : "white";
+          }
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", width: 20 } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
+      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, bridge.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Bridge)"), bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
+      /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: (e) => {
+            e.stopPropagation();
+            setSelectedAgentUID(bridge.agentUid);
+          },
+          style: {
+            padding: "4px 12px",
+            background: selectedAgentUID === bridge.agentUid ? "#3B82F6" : "#E5E7EB",
+            color: selectedAgentUID === bridge.agentUid ? "white" : "#374151",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 500
+          }
+        },
+        selectedAgentUID === bridge.agentUid ? "\u2713 Selected" : "Select"
+      )
+    ), isExpanded && bridgeCollectors.map((collector) => /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        key: collector.agentUid,
+        onClick: (e) => {
+          e.stopPropagation();
+          setSelectedAgentUID(collector.agentUid);
+        },
+        style: {
+          padding: "10px 16px 10px 48px",
+          background: selectedAgentUID === collector.agentUid ? "#DBEAFE" : "#FAFBFC",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          borderLeft: selectedAgentUID === collector.agentUid ? "4px solid #3B82F6" : "none",
+          borderTop: "1px solid #E5E7EB"
+        },
+        onMouseEnter: (e) => {
+          if (selectedAgentUID !== collector.agentUid) {
+            e.currentTarget.style.background = "#F9FAFB";
+          }
+        },
+        onMouseLeave: (e) => {
+          if (selectedAgentUID !== collector.agentUid) {
+            e.currentTarget.style.background = "#FAFBFC";
+          }
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500, color: "#111827" } }, collector.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Collector)"), collector.labels?.["k8s.namespace"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels?.["k8s.crd_name"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#FEF3C7", color: "#92400E", borderRadius: 3 } }, "crd: ", collector.labels["k8s.crd_name"]), collector.labels?.["k8s.cluster"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", collector.labels["k8s.cluster"]), getStatusBadge(collector.status), collector.version && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", collector.version)),
+      /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: (e) => {
+            e.stopPropagation();
+            setSelectedAgentUID(collector.agentUid);
+          },
+          style: {
+            padding: "4px 12px",
+            background: selectedAgentUID === collector.agentUid ? "#3B82F6" : "#E5E7EB",
+            color: selectedAgentUID === collector.agentUid ? "white" : "#374151",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 500
+          }
+        },
+        selectedAgentUID === collector.agentUid ? "\u2713 Selected" : "Select"
+      )
+    )));
+  }), agents.filter((a) => {
+    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
+    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
+    return !isBridge && !isBridgeCollector;
+  }).length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { padding: "12px 16px", background: "#F9FAFB", borderTop: "2px solid #E5E7EB", fontWeight: 600, fontSize: 12, color: "#6B7280" } }, "Standalone Agents"), agents.filter((a) => {
+    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
+    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
+    return !isBridge && !isBridgeCollector;
+  }).map((agent) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: agent.agentUid,
+      onClick: () => setSelectedAgentUID(agent.agentUid),
+      style: {
+        padding: "12px 16px",
+        background: selectedAgentUID === agent.agentUid ? "#DBEAFE" : "white",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        borderLeft: selectedAgentUID === agent.agentUid ? "4px solid #3B82F6" : "none",
+        borderTop: "1px solid #E5E7EB"
+      }
+    },
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", null, agent.name || agent.agentUid), getStatusBadge(agent.status), agent.version && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", agent.version), agent.labels && Object.keys(agent.labels).length > 0 && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } }, Object.entries(agent.labels).slice(0, 3).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key, style: { fontSize: 10, padding: "2px 6px", background: "#F3F4F6", color: "#374151", borderRadius: 3 } }, key, ": ", value)))),
+    /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: (e) => {
+          e.stopPropagation();
+          setSelectedAgentUID(agent.agentUid);
+        },
+        style: {
+          padding: "4px 12px",
+          background: selectedAgentUID === agent.agentUid ? "#3B82F6" : "#E5E7EB",
+          color: selectedAgentUID === agent.agentUid ? "white" : "#374151",
+          border: "none",
+          borderRadius: 4,
+          cursor: "pointer",
+          fontSize: 11
+        }
+      },
+      selectedAgentUID === agent.agentUid ? "\u2713 Selected" : "Select"
+    )
+  )))) : /* @__PURE__ */ React.createElement(
     "select",
     {
       value: selectedAgentUID,
@@ -3973,32 +4447,70 @@ function MonitoringSection({ agents }) {
     } }, /* @__PURE__ */ React.createElement("pre", { style: { margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" } }, JSON.stringify(tel.data, null, 2))))))));
   })()), /* @__PURE__ */ React.createElement("div", { style: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-    gap: 16
+    gridTemplateColumns: "1fr 1fr",
+    gap: 20,
+    width: "100%",
+    alignItems: "start"
+  } }, /* @__PURE__ */ React.createElement("div", { style: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+    minWidth: 0,
+    overflow: "hidden"
   } }, /* @__PURE__ */ React.createElement("div", { style: {
     padding: 16,
     background: "#F9FAFB",
     borderRadius: 6,
     border: "1px solid #E5E7EB"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "Agent Status"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Connection Status"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: "#111827", display: "flex", alignItems: "center", gap: 6 } }, (monitoringData.agent?.agent?.status || monitoringData.agent?.status) === "online" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
-    display: "inline-block",
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: "#10B981"
-  } }), /* @__PURE__ */ React.createElement("span", null, "Online")) : (monitoringData.agent?.agent?.status || monitoringData.agent?.status) === "offline" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
-    display: "inline-block",
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: "#EF4444"
-  } }), /* @__PURE__ */ React.createElement("span", null, "Offline")) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
-    display: "inline-block",
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: "#9CA3AF"
-  } }), /* @__PURE__ */ React.createElement("span", null, "Unknown")))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Agent Version"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: "#111827", fontFamily: "monospace" } }, (monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== "unknown" ? monitoringData.agent?.agent?.version || monitoringData.agent?.version : "Not reported")), (monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#111827" } }, new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Current Config"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig ? "#10B981" : "#EF4444" } }, monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig ? "\u2713 Loaded" : "\u2717 Not Available")))), /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "Agent Status"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Connection Status"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: "#111827", display: "flex", alignItems: "center", gap: 6 } }, (() => {
+    const status = monitoringData.agent?.agent?.status || monitoringData.agent?.status;
+    if (status === "online") {
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: "#10B981"
+      } }), /* @__PURE__ */ React.createElement("span", null, "Online"));
+    } else if (status === "degraded") {
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: "#F59E0B"
+      } }), /* @__PURE__ */ React.createElement("span", null, "Degraded (Unhealthy)"));
+    } else if (status === "offline") {
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: "#EF4444"
+      } }), /* @__PURE__ */ React.createElement("span", null, "Offline"));
+    } else {
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: {
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: "#9CA3AF"
+      } }), /* @__PURE__ */ React.createElement("span", null, "Unknown"));
+    }
+  })())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Agent Version"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: "#111827", fontFamily: "monospace" } }, (monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== "unknown" ? monitoringData.agent?.agent?.version || monitoringData.agent?.version : "Not reported")), (monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#111827" } }, new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Current Config"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig ? "#10B981" : "#EF4444" } }, monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig ? "\u2713 Loaded" : "\u2717 Not Available")))), monitoringData.currentConfig && (monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config) && /* @__PURE__ */ React.createElement(
+    PipelineFlowDiagram,
+    {
+      config: monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config,
+      pipelines: monitoringData.pipelines || [],
+      telemetry: monitoringData.telemetry || []
+    }
+  )), /* @__PURE__ */ React.createElement("div", { style: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+    minWidth: 0,
+    overflow: "hidden"
+  } }, /* @__PURE__ */ React.createElement("div", { style: {
     padding: 16,
     background: "#F9FAFB",
     borderRadius: 6,
@@ -4014,14 +4526,27 @@ function MonitoringSection({ agents }) {
     background: "#F9FAFB",
     borderRadius: 6,
     border: "1px solid #E5E7EB",
-    marginBottom: 16
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "Current Configuration Info"), /* @__PURE__ */ React.createElement("div", { style: {
+    width: "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 12, flexShrink: 0 } }, "Current Configuration Info"), /* @__PURE__ */ React.createElement("div", { style: {
     padding: 12,
     background: "#FFFFFF",
     borderRadius: 4,
     border: "1px solid #E5E7EB",
-    maxHeight: 300,
-    overflowY: "auto"
+    maxHeight: 400,
+    overflowY: "auto",
+    overflowX: "hidden",
+    width: "100%",
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    position: "relative",
+    flex: "1 1 auto",
+    minHeight: 0
   } }, /* @__PURE__ */ React.createElement("pre", { style: {
     margin: 0,
     padding: 8,
@@ -4030,16 +4555,14 @@ function MonitoringSection({ agents }) {
     color: "#1F2937",
     backgroundColor: "#FFFFFF",
     whiteSpace: "pre-wrap",
-    wordBreak: "break-all",
-    lineHeight: "1.5"
-  } }, (monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config || "No config")?.substring(0, 1e3), (monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config) && (monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config).length > 1e3 && "..."))), monitoringData.currentConfig && (monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config) && /* @__PURE__ */ React.createElement(
-    PipelineFlowDiagram,
-    {
-      config: monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config,
-      pipelines: monitoringData.pipelines || [],
-      telemetry: monitoringData.telemetry || []
-    }
-  ))), !loading && !selectedAgentUID && /* @__PURE__ */ React.createElement("div", { style: {
+    wordBreak: "break-word",
+    overflowWrap: "break-word",
+    lineHeight: "1.5",
+    display: "block",
+    width: "100%",
+    maxWidth: "100%",
+    overflow: "hidden"
+  } }, monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config || "No config")))))), !loading && !selectedAgentUID && /* @__PURE__ */ React.createElement("div", { style: {
     padding: 40,
     textAlign: "center",
     color: "#6B7280",
@@ -4047,7 +4570,7 @@ function MonitoringSection({ agents }) {
     borderRadius: 6
   } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 48, marginBottom: 12 } }, "\u{1F4CA}"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, marginBottom: 4 } }, "Select an Agent"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14 } }, "Choose an agent from the dropdown above to view monitoring data and metrics."))));
 }
-function ConfigGenerator({ agents, onPushConfig }) {
+function ConfigGenerator({ agents, bridges, onPushConfig }) {
   const [receivers, setReceivers] = useState([]);
   const [processors, setProcessors] = useState([]);
   const [exporters, setExporters] = useState([]);
@@ -4058,6 +4581,7 @@ function ConfigGenerator({ agents, onPushConfig }) {
   const [saveName, setSaveName] = useState("");
   const [saveDescription, setSaveDescription] = useState("");
   const [expandedComponents, setExpandedComponents] = useState(/* @__PURE__ */ new Set());
+  const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
   const [deletingTemplateId, setDeletingTemplateId] = useState(null);
   const [configVersions, setConfigVersions] = useState([]);
   const [configSyncStatus, setConfigSyncStatus] = useState({});
@@ -4191,6 +4715,13 @@ function ConfigGenerator({ agents, onPushConfig }) {
   };
   useEffect(() => {
     if (!selectedAgentUID) return;
+    const selectedIsBridge = bridges.some((b) => b.agentUid === selectedAgentUID);
+    if (selectedIsBridge) {
+      setSelectedAgentUID("");
+    }
+  }, [selectedAgentUID, bridges]);
+  useEffect(() => {
+    if (!selectedAgentUID) return;
     const pushedConfigs = configVersions.filter((v) => v.pushedAt);
     if (pushedConfigs.length === 0) return;
     const checkSync = async () => {
@@ -4262,6 +4793,9 @@ function ConfigGenerator({ agents, onPushConfig }) {
             procType = "memory_limiter";
           } else if (procConfig.actions !== void 0) {
             procType = "attributes";
+          }
+          if (!procType || procType === "") {
+            procType = "custom";
           }
           parsedProcessors.push({
             name,
@@ -4601,6 +5135,33 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
       alert("Please select at least one telemetry signal (logs, metrics, or traces) that is compatible with your selected components.");
       return;
     }
+    const invalidComponents = [];
+    receivers.forEach((r, i) => {
+      if (!r.type || r.type === "") {
+        invalidComponents.push(`Receiver ${i + 1} (${r.name || "unnamed"}) is missing type`);
+      }
+    });
+    processors.forEach((p, i) => {
+      if (!p.type || p.type === "") {
+        invalidComponents.push(`Processor ${i + 1} (${p.name || "unnamed"}) is missing type`);
+      }
+      if (p.name && p.type && p.name === p.type && !p.name.includes("_")) {
+        console.warn(`Processor ${p.name} has type matching its name. This may cause validation errors.`);
+      }
+    });
+    exporters.forEach((e, i) => {
+      if (!e.type || e.type === "") {
+        invalidComponents.push(`Exporter ${i + 1} (${e.name || "unnamed"}) is missing type`);
+      }
+    });
+    if (invalidComponents.length > 0) {
+      alert("Invalid configuration:\n\n" + invalidComponents.join("\n") + "\n\nPlease ensure all components have a valid type.");
+      return;
+    }
+    const selectedAgent = agents.find((a) => a.agentUid === selectedAgentUID);
+    const isDaemonSet = selectedAgent?.labels?.["k8s.crd_name"]?.toLowerCase().includes("daemonset") || selectedAgent?.name?.toLowerCase().includes("daemonset");
+    const isNewCollector = crdSettings.name && crdSettings.namespace;
+    const canModifyDeploymentSettings = !isDaemonSet && selectedAgentUID;
     try {
       const response = await backendSrv.post(
         "/api/plugins/otel-collector-agent-fleet-management/resources/config-generator",
@@ -4611,12 +5172,13 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
           service: {
             selectedSignals: Object.entries(selectedSignals).filter(([_, selected]) => selected).map(([signal, _]) => signal)
           },
-          // Include CRD settings for full OpenTelemetryCollector spec
-          crdSettings: {
-            name: crdSettings.name || void 0,
-            // Optional: for creating NEW collectors
-            namespace: crdSettings.namespace || void 0,
-            // Optional: for creating NEW collectors
+          // Include CRD settings for:
+          // 1. NEW collectors (name + namespace provided)
+          // 2. EXISTING Deployment/StatefulSet collectors (deployment settings can be modified)
+          // Do NOT include for DaemonSet collectors (only spec.config is updated)
+          crdSettings: isNewCollector || canModifyDeploymentSettings ? {
+            name: crdSettings.name,
+            namespace: crdSettings.namespace,
             mode: crdSettings.mode,
             replicas: crdSettings.mode === "deployment" || crdSettings.mode === "statefulset" ? crdSettings.replicas : void 0,
             image: crdSettings.image,
@@ -4624,8 +5186,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
             upgradeStrategy: crdSettings.upgradeStrategy,
             resources: crdSettings.resources,
             advancedYaml: crdSettings.advancedYaml || void 0
-            // Advanced YAML for targetAllocator, volumes, etc.
-          }
+          } : void 0
         }
       );
       setGeneratedConfig(response.config || "");
@@ -5108,188 +5669,194 @@ headers:
       return "\u26A0\uFE0F Please select at least one signal to generate a configuration.";
     }
     return `\u2139\uFE0F ${selectedCount} signal(s) selected. Only compatible signals are enabled based on your component selection.`;
-  })())), !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#FEF3C7", borderRadius: 6, border: "1px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { fontSize: 13, fontWeight: 600, color: "#92400E" } }, "\u2699\uFE0F Deployment Settings (OpenTelemetryCollector CRD)"), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      onClick: () => setShowCRDSettings(!showCRDSettings),
-      style: {
-        padding: "6px 12px",
-        background: "#FBBF24",
-        color: "#78350F",
-        border: "none",
-        borderRadius: 4,
-        cursor: "pointer",
-        fontSize: 12,
-        fontWeight: 600
+  })())), !useRawYAML && (() => {
+    const selectedAgent = agents.find((a) => a.agentUid === selectedAgentUID);
+    const isDaemonSet = selectedAgent?.labels?.["k8s.crd_name"]?.toLowerCase().includes("daemonset") || selectedAgent?.name?.toLowerCase().includes("daemonset");
+    if (isDaemonSet && selectedAgentUID) {
+      return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#FEE2E2", borderRadius: 6, border: "1px solid #FCA5A5" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#991B1B", marginBottom: 8 } }, "\u26A0\uFE0F Deployment Settings Not Available"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#7F1D1D" } }, "This collector is in ", /* @__PURE__ */ React.createElement("strong", null, "DaemonSet mode"), ", which does not support remote configuration updates via OpAMP. Only the pipeline configuration (receivers, processors, exporters) can be modified. Deployment settings (mode, replicas, resources) cannot be changed remotely."));
+    }
+    return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#FEF3C7", borderRadius: 6, border: "1px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { fontSize: 13, fontWeight: 600, color: "#92400E" } }, "\u2699\uFE0F Deployment Settings (OpenTelemetryCollector CRD)"), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => setShowCRDSettings(!showCRDSettings),
+        style: {
+          padding: "6px 12px",
+          background: "#FBBF24",
+          color: "#78350F",
+          border: "none",
+          borderRadius: 4,
+          cursor: "pointer",
+          fontSize: 12,
+          fontWeight: 600
+        }
+      },
+      showCRDSettings ? "\u25BC Hide" : "\u25B6 Show"
+    )), !selectedAgentUID && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: 10, background: "#FDE68A", borderRadius: 4, fontSize: 12, color: "#78350F" } }, "\u2139\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " Deployment settings are only used when creating ", /* @__PURE__ */ React.createElement("strong", null, "NEW collectors"), " (provide Name and Namespace). For existing collectors, only the pipeline configuration will be updated."), selectedAgentUID && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: 10, background: "#D1FAE5", borderRadius: 4, fontSize: 12, color: "#065F46" } }, "\u2139\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Updating existing collector:"), " Deployment settings below can be modified for ", /* @__PURE__ */ React.createElement("strong", null, "Deployment"), " and ", /* @__PURE__ */ React.createElement("strong", null, "StatefulSet"), " collectors. Both pipeline configuration (receivers, processors, exporters) and deployment settings will be sent to the collector. To create a NEW collector, clear the agent selection and provide Name + Namespace."), showCRDSettings && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Name ", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#92400E" } }, "(optional for updates)")), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.name,
+        onChange: (e) => setCrdSettings({ ...crdSettings, name: e.target.value }),
+        placeholder: "my-collector",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
       }
-    },
-    showCRDSettings ? "\u25BC Hide" : "\u25B6 Show"
-  )), showCRDSettings && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Name ", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#92400E" } }, "(optional for updates)")), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.name,
-      onChange: (e) => setCrdSettings({ ...crdSettings, name: e.target.value }),
-      placeholder: "my-collector",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Namespace ", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#92400E" } }, "(optional for updates)")), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.namespace,
-      onChange: (e) => setCrdSettings({ ...crdSettings, namespace: e.target.value }),
-      placeholder: "opentelemetry-operator-system",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Deployment Mode"), /* @__PURE__ */ React.createElement(
-    "select",
-    {
-      value: crdSettings.mode,
-      onChange: (e) => setCrdSettings({ ...crdSettings, mode: e.target.value }),
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
-    },
-    /* @__PURE__ */ React.createElement("option", { value: "deployment" }, "Deployment"),
-    /* @__PURE__ */ React.createElement("option", { value: "daemonset" }, "DaemonSet"),
-    /* @__PURE__ */ React.createElement("option", { value: "statefulset" }, "StatefulSet"),
-    /* @__PURE__ */ React.createElement("option", { value: "sidecar" }, "Sidecar")
-  )), (crdSettings.mode === "deployment" || crdSettings.mode === "statefulset") && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Replicas"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "number",
-      min: "1",
-      max: "100",
-      value: crdSettings.replicas,
-      onChange: (e) => setCrdSettings({ ...crdSettings, replicas: parseInt(e.target.value) || 1 }),
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Container Image"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.image,
-      onChange: (e) => setCrdSettings({ ...crdSettings, image: e.target.value }),
-      placeholder: "otel/opentelemetry-collector-contrib:latest",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Management State"), /* @__PURE__ */ React.createElement(
-    "select",
-    {
-      value: crdSettings.managementState,
-      onChange: (e) => setCrdSettings({ ...crdSettings, managementState: e.target.value }),
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
-    },
-    /* @__PURE__ */ React.createElement("option", { value: "managed" }, "Managed"),
-    /* @__PURE__ */ React.createElement("option", { value: "unmanaged" }, "Unmanaged")
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Upgrade Strategy"), /* @__PURE__ */ React.createElement(
-    "select",
-    {
-      value: crdSettings.upgradeStrategy,
-      onChange: (e) => setCrdSettings({ ...crdSettings, upgradeStrategy: e.target.value }),
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
-    },
-    /* @__PURE__ */ React.createElement("option", { value: "automatic" }, "Automatic"),
-    /* @__PURE__ */ React.createElement("option", { value: "none" }, "None")
-  )), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1", marginTop: 8 } }, /* @__PURE__ */ React.createElement("h4", { style: { fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 12 } }, "\u{1F4CA} Resource Limits & Requests")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "CPU Request"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.resources.requests.cpu,
-      onChange: (e) => setCrdSettings({
-        ...crdSettings,
-        resources: {
-          ...crdSettings.resources,
-          requests: { ...crdSettings.resources.requests, cpu: e.target.value }
-        }
-      }),
-      placeholder: "200m",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "CPU Limit"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.resources.limits.cpu,
-      onChange: (e) => setCrdSettings({
-        ...crdSettings,
-        resources: {
-          ...crdSettings.resources,
-          limits: { ...crdSettings.resources.limits, cpu: e.target.value }
-        }
-      }),
-      placeholder: "1000m",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Memory Request"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.resources.requests.memory,
-      onChange: (e) => setCrdSettings({
-        ...crdSettings,
-        resources: {
-          ...crdSettings.resources,
-          requests: { ...crdSettings.resources.requests, memory: e.target.value }
-        }
-      }),
-      placeholder: "256Mi",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Memory Limit"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      type: "text",
-      value: crdSettings.resources.limits.memory,
-      onChange: (e) => setCrdSettings({
-        ...crdSettings,
-        resources: {
-          ...crdSettings.resources,
-          limits: { ...crdSettings.resources.limits, memory: e.target.value }
-        }
-      }),
-      placeholder: "1Gi",
-      style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1", marginTop: 16, padding: 12, background: "#FFFBF0", borderRadius: 6, border: "1px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { fontSize: 13, fontWeight: 600, color: "#92400E", margin: 0 } }, "\u{1F527} Advanced Configuration (YAML)"), /* @__PURE__ */ React.createElement(
-    "button",
-    {
-      onClick: () => {
-        if (crdSettings.advancedYaml) {
-          if (confirm("Clear advanced YAML configuration?")) {
-            setCrdSettings({ ...crdSettings, advancedYaml: "" });
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Namespace ", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#92400E" } }, "(optional for updates)")), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.namespace,
+        onChange: (e) => setCrdSettings({ ...crdSettings, namespace: e.target.value }),
+        placeholder: "opentelemetry-operator-system",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Deployment Mode"), /* @__PURE__ */ React.createElement(
+      "select",
+      {
+        value: crdSettings.mode,
+        onChange: (e) => setCrdSettings({ ...crdSettings, mode: e.target.value }),
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
+      },
+      /* @__PURE__ */ React.createElement("option", { value: "deployment" }, "Deployment"),
+      /* @__PURE__ */ React.createElement("option", { value: "daemonset" }, "DaemonSet"),
+      /* @__PURE__ */ React.createElement("option", { value: "statefulset" }, "StatefulSet"),
+      /* @__PURE__ */ React.createElement("option", { value: "sidecar" }, "Sidecar")
+    )), (crdSettings.mode === "deployment" || crdSettings.mode === "statefulset") && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Replicas"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "number",
+        min: "1",
+        max: "100",
+        value: crdSettings.replicas,
+        onChange: (e) => setCrdSettings({ ...crdSettings, replicas: parseInt(e.target.value) || 1 }),
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
+      }
+    )), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Container Image"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.image,
+        onChange: (e) => setCrdSettings({ ...crdSettings, image: e.target.value }),
+        placeholder: "otel/opentelemetry-collector-contrib:latest",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Management State"), /* @__PURE__ */ React.createElement(
+      "select",
+      {
+        value: crdSettings.managementState,
+        onChange: (e) => setCrdSettings({ ...crdSettings, managementState: e.target.value }),
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
+      },
+      /* @__PURE__ */ React.createElement("option", { value: "managed" }, "Managed"),
+      /* @__PURE__ */ React.createElement("option", { value: "unmanaged" }, "Unmanaged")
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Upgrade Strategy"), /* @__PURE__ */ React.createElement(
+      "select",
+      {
+        value: crdSettings.upgradeStrategy,
+        onChange: (e) => setCrdSettings({ ...crdSettings, upgradeStrategy: e.target.value }),
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13 }
+      },
+      /* @__PURE__ */ React.createElement("option", { value: "automatic" }, "Automatic"),
+      /* @__PURE__ */ React.createElement("option", { value: "none" }, "None")
+    )), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1", marginTop: 8 } }, /* @__PURE__ */ React.createElement("h4", { style: { fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 12 } }, "\u{1F4CA} Resource Limits & Requests")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "CPU Request"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.resources.requests.cpu,
+        onChange: (e) => setCrdSettings({
+          ...crdSettings,
+          resources: {
+            ...crdSettings.resources,
+            requests: { ...crdSettings.resources.requests, cpu: e.target.value }
           }
-        }
+        }),
+        placeholder: "200m",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "CPU Limit"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.resources.limits.cpu,
+        onChange: (e) => setCrdSettings({
+          ...crdSettings,
+          resources: {
+            ...crdSettings.resources,
+            limits: { ...crdSettings.resources.limits, cpu: e.target.value }
+          }
+        }),
+        placeholder: "1000m",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Memory Request"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.resources.requests.memory,
+        onChange: (e) => setCrdSettings({
+          ...crdSettings,
+          resources: {
+            ...crdSettings.resources,
+            requests: { ...crdSettings.resources.requests, memory: e.target.value }
+          }
+        }),
+        placeholder: "256Mi",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
+      }
+    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#78350F" } }, "Memory Limit"), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: crdSettings.resources.limits.memory,
+        onChange: (e) => setCrdSettings({
+          ...crdSettings,
+          resources: {
+            ...crdSettings.resources,
+            limits: { ...crdSettings.resources.limits, memory: e.target.value }
+          }
+        }),
+        placeholder: "1Gi",
+        style: { width: "100%", padding: "8px", border: "1px solid #FCD34D", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
+      }
+    )), /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1", marginTop: 16, padding: 12, background: "#FFFBF0", borderRadius: 6, border: "1px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { fontSize: 13, fontWeight: 600, color: "#92400E", margin: 0 } }, "\u{1F527} Advanced Configuration (YAML)"), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: () => {
+          if (crdSettings.advancedYaml) {
+            if (confirm("Clear advanced YAML configuration?")) {
+              setCrdSettings({ ...crdSettings, advancedYaml: "" });
+            }
+          }
+        },
+        style: {
+          padding: "4px 8px",
+          background: crdSettings.advancedYaml ? "#FCA5A5" : "#E5E7EB",
+          color: crdSettings.advancedYaml ? "#991B1B" : "#6B7280",
+          border: "none",
+          borderRadius: 4,
+          cursor: "pointer",
+          fontSize: 11,
+          fontWeight: 500
+        },
+        disabled: !crdSettings.advancedYaml
       },
-      style: {
-        padding: "4px 8px",
-        background: crdSettings.advancedYaml ? "#FCA5A5" : "#E5E7EB",
-        color: crdSettings.advancedYaml ? "#991B1B" : "#6B7280",
-        border: "none",
-        borderRadius: 4,
-        cursor: "pointer",
-        fontSize: 11,
-        fontWeight: 500
-      },
-      disabled: !crdSettings.advancedYaml
-    },
-    "Clear"
-  )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#78350F", marginBottom: 12, padding: 8, background: "#FEF9E7", borderRadius: 4 } }, "\u2139\uFE0F Add advanced fields like ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "targetAllocator"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "volumes"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "volumeMounts"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "serviceAccount"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "env"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "ports"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "tolerations"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "nodeSelector"), ", etc."), crdSettings.advancedYaml && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: 8, background: "#F9FAFB", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#374151", marginBottom: 4 } }, "Current Advanced YAML:"), /* @__PURE__ */ React.createElement("pre", { style: {
-    margin: 0,
-    padding: 8,
-    background: "#F3F4F6",
-    borderRadius: 4,
-    fontSize: 11,
-    fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-    color: "#111827",
-    overflowX: "auto",
-    maxHeight: "150px",
-    overflowY: "auto"
-  } }, crdSettings.advancedYaml)), /* @__PURE__ */ React.createElement(
-    "textarea",
-    {
-      value: crdSettings.advancedYaml,
-      onChange: (e) => setCrdSettings({ ...crdSettings, advancedYaml: e.target.value }),
-      placeholder: `# Example: Target Allocator for Prometheus
+      "Clear"
+    )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#78350F", marginBottom: 12, padding: 8, background: "#FEF9E7", borderRadius: 4 } }, "\u2139\uFE0F Add advanced fields like ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "targetAllocator"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "volumes"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "volumeMounts"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "serviceAccount"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "env"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "ports"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "tolerations"), ", ", /* @__PURE__ */ React.createElement("code", { style: { background: "#FCD34D", padding: "2px 4px", borderRadius: 2 } }, "nodeSelector"), ", etc."), crdSettings.advancedYaml && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: 8, background: "#F9FAFB", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#374151", marginBottom: 4 } }, "Current Advanced YAML:"), /* @__PURE__ */ React.createElement("pre", { style: {
+      margin: 0,
+      padding: 8,
+      background: "#F3F4F6",
+      borderRadius: 4,
+      fontSize: 11,
+      fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+      color: "#111827",
+      overflowX: "auto",
+      maxHeight: "150px",
+      overflowY: "auto"
+    } }, crdSettings.advancedYaml)), /* @__PURE__ */ React.createElement(
+      "textarea",
+      {
+        value: crdSettings.advancedYaml,
+        onChange: (e) => setCrdSettings({ ...crdSettings, advancedYaml: e.target.value }),
+        placeholder: `# Example: Target Allocator for Prometheus
 targetAllocator:
   enabled: true
   serviceAccount: opentelemetry-targetallocator-sa
@@ -5320,19 +5887,151 @@ tolerations:
   - key: node.kubernetes.io/disk-pressure
     operator: Exists
     effect: NoSchedule`,
-      style: {
-        width: "100%",
-        minHeight: "200px",
-        padding: "10px",
-        border: "1px solid #FCD34D",
-        borderRadius: 4,
-        fontSize: 12,
-        fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-        background: "#FFFFFF",
-        resize: "vertical"
+        style: {
+          width: "100%",
+          minHeight: "200px",
+          padding: "10px",
+          border: "1px solid #FCD34D",
+          borderRadius: 4,
+          fontSize: 12,
+          fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+          background: "#FFFFFF",
+          resize: "vertical"
+        }
       }
+    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#78350F", marginTop: 8 } }, "\u{1F4A1} This YAML will be merged into the ", /* @__PURE__ */ React.createElement("code", null, "spec"), " section. See ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/open-telemetry/opentelemetry-operator/blob/main/docs/api.md", target: "_blank", rel: "noopener", style: { color: "#D97706", textDecoration: "underline" } }, "OpenTelemetry Operator API docs"), " for all available fields."))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, fontSize: 11, color: "#78350F" } }, "\u2139\uFE0F These settings control how the OpenTelemetry Collector is deployed in Kubernetes. The pipeline configuration (receivers, processors, exporters) will be merged into `spec.config`."));
+  })(), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#111827" } }, "\u{1F4CD} Select Agent / Collector (Required for saving configuration)"), bridges.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: "10px 12px", background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D", fontSize: 12, color: "#92400E" } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " Bridges are management agents and cannot receive collector configurations. Only collectors are shown below."), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
+    const bridgeCollectors = bridge.collectors || [];
+    const isExpanded = expandedGroups.has(`config-${bridge.agentUid}`);
+    if (bridgeCollectors.length === 0) {
+      return null;
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#78350F", marginTop: 8 } }, "\u{1F4A1} This YAML will be merged into the ", /* @__PURE__ */ React.createElement("code", null, "spec"), " section. See ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/open-telemetry/opentelemetry-operator/blob/main/docs/api.md", target: "_blank", rel: "noopener", style: { color: "#D97706", textDecoration: "underline" } }, "OpenTelemetry Operator API docs"), " for all available fields."))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, fontSize: 11, color: "#78350F" } }, "\u2139\uFE0F These settings control how the OpenTelemetry Collector is deployed in Kubernetes. The pipeline configuration (receivers, processors, exporters) will be merged into `spec.config`.")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#111827" } }, "\u{1F4CD} Select Agent / Collector (Required for saving configuration)"), /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        onClick: () => {
+          const newExpanded = new Set(expandedGroups);
+          if (isExpanded) {
+            newExpanded.delete(`config-${bridge.agentUid}`);
+          } else {
+            newExpanded.add(`config-${bridge.agentUid}`);
+          }
+          setExpandedGroups(newExpanded);
+        },
+        style: {
+          padding: "12px 16px",
+          background: isExpanded ? "#F3F4F6" : "#F9FAFB",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          borderLeft: "2px solid #E5E7EB"
+        },
+        onMouseEnter: (e) => {
+          e.currentTarget.style.background = "#F3F4F6";
+        },
+        onMouseLeave: (e) => {
+          e.currentTarget.style.background = isExpanded ? "#F3F4F6" : "#F9FAFB";
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", width: 20 } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
+      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#6B7280", fontSize: 12 } }, bridge.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#9CA3AF" } }, "(Bridge - Management Agent)"), bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""))
+    ), isExpanded && bridgeCollectors.map((collector) => /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        key: collector.agentUid,
+        onClick: (e) => {
+          e.stopPropagation();
+          setSelectedAgentUID(collector.agentUid);
+        },
+        style: {
+          padding: "10px 16px 10px 48px",
+          background: selectedAgentUID === collector.agentUid ? "#DBEAFE" : "#FAFBFC",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          borderLeft: selectedAgentUID === collector.agentUid ? "4px solid #3B82F6" : "none",
+          borderTop: "1px solid #E5E7EB"
+        },
+        onMouseEnter: (e) => {
+          if (selectedAgentUID !== collector.agentUid) {
+            e.currentTarget.style.background = "#F9FAFB";
+          }
+        },
+        onMouseLeave: (e) => {
+          if (selectedAgentUID !== collector.agentUid) {
+            e.currentTarget.style.background = "#FAFBFC";
+          }
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500, color: "#111827" } }, collector.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Collector)"), collector.labels?.["k8s.namespace"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels?.["k8s.crd_name"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#FEF3C7", color: "#92400E", borderRadius: 3 } }, "crd: ", collector.labels["k8s.crd_name"]), collector.labels?.["k8s.cluster"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", collector.labels["k8s.cluster"]), getStatusBadge(collector.status), collector.version && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", collector.version)),
+      /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: (e) => {
+            e.stopPropagation();
+            setSelectedAgentUID(collector.agentUid);
+          },
+          style: {
+            padding: "4px 12px",
+            background: selectedAgentUID === collector.agentUid ? "#3B82F6" : "#E5E7EB",
+            color: selectedAgentUID === collector.agentUid ? "white" : "#374151",
+            border: "none",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontSize: 11,
+            fontWeight: 500
+          }
+        },
+        selectedAgentUID === collector.agentUid ? "\u2713 Selected" : "Select"
+      )
+    )));
+  }), agents.filter((a) => {
+    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
+    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
+    return !isBridge && !isBridgeCollector;
+  }).length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { padding: "12px 16px", background: "#F9FAFB", borderTop: "2px solid #E5E7EB", fontWeight: 600, fontSize: 12, color: "#6B7280" } }, "Standalone Agents"), agents.filter((a) => {
+    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
+    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
+    return !isBridge && !isBridgeCollector;
+  }).map((agent) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: agent.agentUid,
+      onClick: () => setSelectedAgentUID(agent.agentUid),
+      style: {
+        padding: "12px 16px",
+        background: selectedAgentUID === agent.agentUid ? "#DBEAFE" : "white",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        borderLeft: selectedAgentUID === agent.agentUid ? "4px solid #3B82F6" : "none",
+        borderTop: "1px solid #E5E7EB"
+      }
+    },
+    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", null, agent.name || agent.agentUid), getStatusBadge(agent.status), agent.version && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", agent.version)),
+    /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: (e) => {
+          e.stopPropagation();
+          setSelectedAgentUID(agent.agentUid);
+        },
+        style: {
+          padding: "4px 12px",
+          background: selectedAgentUID === agent.agentUid ? "#3B82F6" : "#E5E7EB",
+          color: selectedAgentUID === agent.agentUid ? "white" : "#374151",
+          border: "none",
+          borderRadius: 4,
+          cursor: "pointer",
+          fontSize: 11
+        }
+      },
+      selectedAgentUID === agent.agentUid ? "\u2713 Selected" : "Select"
+    )
+  )))) : /* @__PURE__ */ React.createElement(
     "select",
     {
       value: selectedAgentUID,
@@ -5348,7 +6047,16 @@ tolerations:
     },
     /* @__PURE__ */ React.createElement("option", { value: "" }, agents.length === 0 ? "-- No agents available --" : "-- Select an agent/collector first --"),
     agents.map((a) => /* @__PURE__ */ React.createElement("option", { key: a.agentUid, value: a.agentUid }, a.name || a.agentUid, " (", a.status, ") ", a.version ? `v${a.version}` : ""))
-  ), !selectedAgentUID && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#78350F", padding: 8, background: "#FEF3C7", borderRadius: 4 } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Important:"), " You must select an agent before generating or saving a configuration. The configuration will be associated with the selected agent."), selectedAgentUID && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#065F46", padding: 8, background: "#D1FAE5", borderRadius: 4 } }, "\u2713 Agent selected. You can now generate, edit, and save configurations for this agent.")), !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#3B82F6" } }, "Receivers (", receivers.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("receiver"), style: { padding: "4px 8px", background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), receivers.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No receivers added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, receivers.map((rec, idx) => renderComponentEditor(rec, "receiver", idx)))), /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#10B981" } }, "Processors (", processors.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("processor"), style: { padding: "4px 8px", background: "#10B981", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), processors.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No processors added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, processors.map((proc, idx) => renderComponentEditor(proc, "processor", idx)))), /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#F59E0B" } }, "Exporters (", exporters.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("exporter"), style: { padding: "4px 8px", background: "#F59E0B", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), exporters.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No exporters added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, exporters.map((exp, idx) => {
+  ), (() => {
+    const selectedIsBridge = bridges.some((b) => b.agentUid === selectedAgentUID);
+    if (!selectedAgentUID) {
+      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#78350F", padding: 8, background: "#FEF3C7", borderRadius: 4 } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Important:"), " You must select a collector before generating or saving a configuration. Bridges are management agents and cannot receive collector configurations.");
+    }
+    if (selectedIsBridge) {
+      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#991B1B", padding: 8, background: "#FEE2E2", borderRadius: 4 } }, "\u274C ", /* @__PURE__ */ React.createElement("strong", null, "Error:"), " Bridges cannot receive collector configurations. Please select a collector instead.");
+    }
+    return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#065F46", padding: 8, background: "#D1FAE5", borderRadius: 4 } }, "\u2713 Collector selected. You can now generate, edit, and save configurations for this collector.");
+  })()), !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#3B82F6" } }, "Receivers (", receivers.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("receiver"), style: { padding: "4px 8px", background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), receivers.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No receivers added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, receivers.map((rec, idx) => renderComponentEditor(rec, "receiver", idx)))), /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#10B981" } }, "Processors (", processors.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("processor"), style: { padding: "4px 8px", background: "#10B981", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), processors.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No processors added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, processors.map((proc, idx) => renderComponentEditor(proc, "processor", idx)))), /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#F59E0B" } }, "Exporters (", exporters.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("exporter"), style: { padding: "4px 8px", background: "#F59E0B", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), exporters.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No exporters added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, exporters.map((exp, idx) => {
     const compKey = `exporter-${idx}`;
     const isExtension = exp._isExtension === true;
     if (isExtension) {
@@ -5739,22 +6447,48 @@ service:
         style: { padding: "6px 14px", background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 500 }
       },
       "\u{1F4CA} View Diff"
-    ), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => {
-          const configId = version.id || version["id"];
-          if (!configId) {
-            alert("Invalid config ID");
-            console.error("Config ID missing in version:", version);
-            return;
+    ), (() => {
+      const agentConfigs = configVersions.filter((v) => v.agentUid === selectedAgentUID);
+      const latestVersion = agentConfigs.length > 0 ? Math.max(...agentConfigs.map((v) => v.version || 0)) : 0;
+      const isLatestVersion = version.version === latestVersion;
+      const isNotApproved = version.approvalStatus !== "approved";
+      const agent = agents.find((a) => a.agentUid === selectedAgentUID);
+      const agentNotOnline = !agent || agent.status !== "online";
+      const canRevert = !isLatestVersion && isApproved && !agentNotOnline;
+      const disabledReason = isLatestVersion ? "Cannot revert to the latest version" : isNotApproved ? "Only approved configurations can be reverted" : agentNotOnline ? "Agent must be online to revert" : "";
+      return /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          onClick: () => {
+            if (!canRevert) {
+              alert(`Cannot revert: ${disabledReason}`);
+              return;
+            }
+            const configId = version.id || version["id"];
+            if (!configId) {
+              alert("Invalid config ID");
+              console.error("Config ID missing in version:", version);
+              return;
+            }
+            revertConfig(Number(configId));
+          },
+          disabled: !canRevert,
+          title: disabledReason || "Revert to this configuration version",
+          style: {
+            padding: "6px 14px",
+            background: canRevert ? "#6B7280" : "#D1D5DB",
+            color: canRevert ? "white" : "#9CA3AF",
+            border: "none",
+            borderRadius: 4,
+            cursor: canRevert ? "pointer" : "not-allowed",
+            fontSize: 12,
+            fontWeight: 500,
+            opacity: canRevert ? 1 : 0.6
           }
-          revertConfig(Number(configId));
         },
-        style: { padding: "6px 14px", background: "#6B7280", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 500 }
-      },
-      "\u21A9\uFE0F Revert"
-    ), isApproved && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, !version.pushedAt ? /* @__PURE__ */ React.createElement(
+        "\u21A9\uFE0F Revert"
+      );
+    })(), isApproved && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, !version.pushedAt ? /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: async () => {
@@ -6096,7 +6830,7 @@ ${statusInfo.join("\n")}
     width: 1e3,
     overflow: "auto",
     boxShadow: "0 4px 20px rgba(0,0,0,0.3)"
-  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0 } }, "Configuration Diff"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowDiff(false), style: { background: "none", border: "none", fontSize: 24, cursor: "pointer" } }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#DC2626" } }, "\u274C Previous Version (Removed/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
+  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0 } }, "Configuration Diff"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowDiff(false), style: { background: "none", border: "none", fontSize: 24, cursor: "pointer" } }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#DC2626" } }, "\u274C ", diffData.isUsingBaseline ? "Baseline" : `Previous Version (v${diffData.previousVersion || "N/A"})`, " (Removed/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
     width: "100%",
     minHeight: 400,
     maxHeight: 500,
@@ -6119,7 +6853,7 @@ ${statusInfo.join("\n")}
       } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#991B1B", marginRight: 8, userSelect: "none", fontWeight: 600 } }, "L", change.line), /* @__PURE__ */ React.createElement("span", { style: { color: "#7F1D1D" } }, change.old || " "));
     }
     return null;
-  }) : /* @__PURE__ */ React.createElement("div", { style: { color: "#6B7280", fontStyle: "italic" } }, "No changes detected"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#059669" } }, "\u2705 Current Version (New/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
+  }) : /* @__PURE__ */ React.createElement("div", { style: { color: "#6B7280", fontStyle: "italic" } }, "No changes detected"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#059669" } }, "\u2705 Selected Version (v", diffData.currentVersion || "N/A", ") (New/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
     width: "100%",
     minHeight: 400,
     maxHeight: 500,

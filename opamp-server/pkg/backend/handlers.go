@@ -146,6 +146,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		// Use subquery to get latest agent per agent_uid to prevent duplicates
 		// For OpAMP Bridge instances, deduplicate by name since they share the same logical identity
 		// Also filter out agents that haven't been seen in last 24 hours if they're offline
+		// CRITICAL: Exclude discovered collectors (agents with bridge.instance_uid label) - they belong under bridges
 		rows, err := db.Query(`
 			SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json 
 			FROM agents a
@@ -170,6 +171,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				AND a.last_seen_at = latest.max_seen
 			)
 			WHERE a.org_id=?
+			  AND (JSON_EXTRACT(a.labels_json, '$."bridge.instance_uid"') IS NULL OR JSON_EXTRACT(a.labels_json, '$."bridge.instance_uid"') = '')
 			ORDER BY a.last_seen_at DESC 
 			LIMIT 200
 		`, orgID, orgID)
@@ -260,6 +262,177 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// bridgesCollectionHandler returns a hierarchical structure of OpAMP Bridges with their managed collectors
+func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	db := mustDB()
+	defer db.Close()
+
+	orgIDParam := r.URL.Query().Get("org_id")
+	var orgID int64 = c.OrgID
+	if orgIDParam != "" {
+		fmt.Sscanf(orgIDParam, "%d", &orgID)
+	}
+
+	// Get all OpAMP Bridges - deduplicate by name, keeping only the most recent instance
+	bridgeRows, err := db.Query(`
+		SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json
+		FROM agents a
+		INNER JOIN (
+			SELECT name, MAX(last_seen_at) as max_seen
+			FROM agents
+			WHERE org_id=? 
+			  AND (name LIKE '%opamp-bridge%' OR name LIKE '%operator-opamp-bridge%')
+			  AND (status='online' OR last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+			GROUP BY name
+		) latest ON a.name = latest.name AND a.last_seen_at = latest.max_seen
+		WHERE a.org_id=?
+		  AND (a.name LIKE '%opamp-bridge%' OR a.name LIKE '%operator-opamp-bridge%')
+		  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+		ORDER BY a.last_seen_at DESC
+	`, orgID, orgID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer bridgeRows.Close()
+
+	type Collector struct {
+		ID           int64                  `json:"id"`
+		AgentUID     string                 `json:"agentUid"`
+		Name         string                 `json:"name"`
+		Version      *string                `json:"version,omitempty"`
+		Status       string                 `json:"status"`
+		LastSeen     *string                `json:"lastSeen,omitempty"`
+		Labels       map[string]string      `json:"labels,omitempty"`
+		Capabilities map[string]interface{} `json:"capabilities,omitempty"`
+	}
+
+	type Bridge struct {
+		ID           int64                  `json:"id"`
+		OrgID        int64                  `json:"orgId"`
+		AgentUID     string                 `json:"agentUid"`
+		Name         string                 `json:"name"`
+		Version      *string                `json:"version,omitempty"`
+		Status       string                 `json:"status"`
+		LastSeen     *string                `json:"lastSeen,omitempty"`
+		Labels       map[string]string      `json:"labels,omitempty"`
+		Capabilities map[string]interface{} `json:"capabilities,omitempty"`
+		Cluster      string                 `json:"cluster,omitempty"`
+		Namespace    string                 `json:"namespace,omitempty"`
+		Collectors   []Collector            `json:"collectors"`
+	}
+
+	bridges := []Bridge{}
+
+	for bridgeRows.Next() {
+		var bridge Bridge
+		var ver string
+		var lastSeen sql.NullTime
+		var labelsJSON sql.NullString
+		var capabilitiesJSON sql.NullString
+
+		if err := bridgeRows.Scan(&bridge.ID, &bridge.OrgID, &bridge.AgentUID, &bridge.Name, &ver, &bridge.Status, &lastSeen, &labelsJSON, &capabilitiesJSON); err != nil {
+			continue
+		}
+
+		if ver != "" && ver != "unknown" {
+			bridge.Version = &ver
+		}
+		if lastSeen.Valid {
+			ls := lastSeen.Time.Format(time.RFC3339)
+			bridge.LastSeen = &ls
+		}
+		if labelsJSON.Valid && labelsJSON.String != "" {
+			json.Unmarshal([]byte(labelsJSON.String), &bridge.Labels)
+			// Extract cluster and namespace from labels
+			if cluster, ok := bridge.Labels["k8s.cluster"]; ok {
+				bridge.Cluster = cluster
+			} else if cluster, ok := bridge.Labels["cluster"]; ok {
+				bridge.Cluster = cluster
+			}
+			if namespace, ok := bridge.Labels["k8s.namespace"]; ok {
+				bridge.Namespace = namespace
+			} else if namespace, ok := bridge.Labels["namespace"]; ok {
+				bridge.Namespace = namespace
+			}
+		}
+		if capabilitiesJSON.Valid && capabilitiesJSON.String != "" {
+			json.Unmarshal([]byte(capabilitiesJSON.String), &bridge.Capabilities)
+		}
+
+		// Get collectors managed by this bridge
+		// Use bracket notation for JSON keys with dots: $."key.with.dots"
+		// CRITICAL: Match collectors by bridge.instance_uid label
+		// Bridge UID in database is normalized, collectors also store normalized UID
+		// Try both normalized and original formats to handle any edge cases
+		bridgeNormalizedUID := normalizeAgentUID(bridge.AgentUID)
+		collectorRows, err := db.Query(`
+			SELECT id, agent_uid, name, COALESCE(version,''), status, last_seen_at, labels_json, capabilities_json
+			FROM agents
+			WHERE org_id=?
+			  AND (
+				JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') = ?
+				OR JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') = ?
+			  )
+			  AND agent_uid != ?
+			ORDER BY name
+		`, orgID, bridge.AgentUID, bridgeNormalizedUID, bridge.AgentUID)
+		if err != nil {
+			log.Printf("ERROR: Failed to query collectors for bridge %s: %v", bridge.AgentUID, err)
+			bridge.Collectors = []Collector{}
+			bridges = append(bridges, bridge)
+			continue
+		}
+
+		collectors := []Collector{}
+		for collectorRows.Next() {
+			var collector Collector
+			var ver string
+			var lastSeen sql.NullTime
+			var labelsJSON sql.NullString
+			var capabilitiesJSON sql.NullString
+
+			if err := collectorRows.Scan(&collector.ID, &collector.AgentUID, &collector.Name, &ver, &collector.Status, &lastSeen, &labelsJSON, &capabilitiesJSON); err != nil {
+				continue
+			}
+
+			if ver != "" && ver != "unknown" {
+				collector.Version = &ver
+			}
+			if lastSeen.Valid {
+				ls := lastSeen.Time.Format(time.RFC3339)
+				collector.LastSeen = &ls
+			}
+			if labelsJSON.Valid && labelsJSON.String != "" {
+				json.Unmarshal([]byte(labelsJSON.String), &collector.Labels)
+			}
+			if capabilitiesJSON.Valid && capabilitiesJSON.String != "" {
+				json.Unmarshal([]byte(capabilitiesJSON.String), &collector.Capabilities)
+			}
+
+			collectors = append(collectors, collector)
+		}
+		collectorRows.Close()
+
+		bridge.Collectors = collectors
+		bridges = append(bridges, bridge)
+	}
+
+	// Get org name for display
+	var orgName sql.NullString
+	db.QueryRow(`SELECT name FROM organizations WHERE id=?`, orgID).Scan(&orgName)
+
+	jsonOK(w, map[string]any{
+		"bridges": bridges,
+		"userRole": map[string]any{
+			"role":    c.Role,
+			"isAdmin": c.IsAdmin,
+		},
+		"orgID":   orgID,
+		"orgName": orgName.String,
+	})
 }
 
 func agentEntityHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
@@ -794,12 +967,14 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		}
 	}
 
-	// If CRD settings provided, build OpenTelemetry Collector spec
-	// NOTE: For EXISTING collectors, OpAMP Bridge only needs the spec (it merges with existing metadata)
-	// For NEW collectors, full CRD with metadata would be needed
+	// If CRD settings provided, generate full CRD
+	// For NEW collectors (name+namespace provided): Full CRD with metadata
+	// For EXISTING collectors: Full CRD without metadata (PushConfig will merge with existing CRD)
+	// For DaemonSet: Deployment settings are ignored by PushConfig, only spec.config is used
+	isNewCollector := req.CRDSettings != nil && req.CRDSettings.Name != "" && req.CRDSettings.Namespace != ""
+	
 	if req.CRDSettings != nil {
-		// Build spec only (for updating existing collectors via OpAMP)
-		// The OpAMP Bridge will merge this with the existing collector's metadata
+		// Build full CRD with deployment settings
 		spec := map[string]any{
 			"mode":            req.CRDSettings.Mode,
 			"image":           req.CRDSettings.Image,
@@ -833,27 +1008,26 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			}
 		}
 
-		// For OpAMP updates, wrap spec in a partial CRD structure
-		// The bridge expects a full CRD but will merge metadata from existing collector
-		metadata := map[string]any{
-			"labels": map[string]any{
-				"opentelemetry.io/opamp-managed": "true",
-			},
-		}
-		
-		// Add name/namespace if provided (for creating NEW collectors)
-		if req.CRDSettings.Name != "" {
-			metadata["name"] = req.CRDSettings.Name
-		}
-		if req.CRDSettings.Namespace != "" {
-			metadata["namespace"] = req.CRDSettings.Namespace
-		}
-
 		crd := map[string]any{
 			"apiVersion": "opentelemetry.io/v1beta1",
 			"kind":       "OpenTelemetryCollector",
-			"metadata":   metadata,
 			"spec":       spec,
+		}
+
+		// Only add metadata for NEW collectors
+		if isNewCollector {
+			crd["metadata"] = map[string]any{
+				"name": req.CRDSettings.Name,
+				"labels": map[string]any{
+					"opentelemetry.io/opamp-managed": "true",
+				},
+			}
+			if req.CRDSettings.Namespace != "" {
+				crd["metadata"].(map[string]any)["namespace"] = req.CRDSettings.Namespace
+			}
+			log.Printf("DEBUG: Generated FULL CRD for NEW collector %s/%s (includes deployment settings)", req.CRDSettings.Namespace, req.CRDSettings.Name)
+		} else {
+			log.Printf("DEBUG: Generated FULL CRD for EXISTING collector (includes deployment settings - PushConfig will merge with existing CRD)")
 		}
 
 		// Convert to YAML
@@ -864,17 +1038,16 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			return
 		}
 
-		jsonOK(w, map[string]any{"config": string(yamlBytes), "format": "yaml", "isCRD": true})
+		jsonOK(w, map[string]any{"config": string(yamlBytes), "format": "yaml", "isCRD": true, "isNewCollector": isNewCollector})
 	} else {
-		// Backward compatible: just return config
+		// No CRD settings: Only return spec.config (pipeline configuration)
 		yamlBytes, err := yaml.Marshal(config)
 		if err != nil {
 			log.Printf("Failed to marshal config to YAML: %v", err)
 			http.Error(w, err.Error(), 500)
 			return
 		}
-
-		jsonOK(w, map[string]any{"config": string(yamlBytes), "format": "yaml"})
+		jsonOK(w, map[string]any{"config": string(yamlBytes), "format": "yaml", "isCRD": false})
 	}
 }
 
@@ -883,6 +1056,17 @@ func buildComponentMap(components []map[string]any) map[string]any {
 	for _, comp := range components {
 		if name, ok := comp["name"].(string); ok {
 			compType, _ := comp["type"].(string)
+
+			// Validate that component name doesn't match a known processor type
+			// This prevents issues where "attributes_2" might be confused with type "attributes"
+			knownProcessorTypes := map[string]bool{
+				"attributes": true, "batch": true, "memory_limiter": true,
+				"transform": true, "filter": true, "resource": true,
+				"probabilistic_sampler": true, "span": true, "groupbytrace": true,
+			}
+			if knownProcessorTypes[name] {
+				log.Printf("WARNING: Component name '%s' matches a known processor type. This may cause validation errors.", name)
+			}
 
 			// If it's a custom component with customYaml, parse it
 			if compType == "custom" {
@@ -931,10 +1115,21 @@ func buildComponentMap(components []map[string]any) map[string]any {
 
 			// Check if config is nested under the component type name (e.g., debug: {debug: {verbosity: normal}})
 			// If so, flatten it (e.g., debug: {verbosity: normal})
-			if len(config) == 1 && compType != "" {
+			// IMPORTANT: Only flatten if the key matches the TYPE, not the NAME
+			// This prevents "attributes_2: {attributes_2: {...}}" from being incorrectly flattened
+			if len(config) == 1 && compType != "" && compType != name {
 				if nestedConfig, ok := config[compType].(map[string]any); ok {
 					// Config is nested under type name, flatten it
 					config = nestedConfig
+				}
+			}
+			
+			// Additional safety check: if config has a key matching the component name,
+			// and it's NOT a custom component, this is likely an error - remove it
+			if compType != "custom" && compType != "" {
+				if nestedNameConfig, ok := config[name].(map[string]any); ok {
+					log.Printf("WARNING: Config for component '%s' (type: '%s') has nested key matching component name. This may cause validation errors. Flattening.", name, compType)
+					config = nestedNameConfig
 				}
 			}
 
@@ -1917,10 +2112,11 @@ func agentConfigDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		return
 	}
 
-	// Get proposed config (the modified config user wants to push)
-	var proposedConfig sql.NullString
-	row := db.QueryRow(`SELECT config_yaml FROM agent_configs WHERE id=? AND org_id=?`, configID, c.OrgID)
-	if err := row.Scan(&proposedConfig); err != nil {
+	// Fix 4: Get current config (the one being viewed)
+	var currentConfig sql.NullString
+	var currentVersion sql.NullInt64
+	row := db.QueryRow(`SELECT config_yaml, version FROM agent_configs WHERE id=? AND org_id=?`, configID, c.OrgID)
+	if err := row.Scan(&currentConfig, &currentVersion); err != nil {
 		http.Error(w, "config not found", 404)
 		return
 	}
@@ -1930,55 +2126,93 @@ func agentConfigDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		"configId": configID,
 	}
 
-	proposed := ""
-	if proposedConfig.Valid {
-		proposed = proposedConfig.String
+	current := ""
+	if currentConfig.Valid {
+		current = currentConfig.String
 	}
-	result["proposedConfig"] = proposed
-	result["hasProposedConfig"] = proposed != ""
-
-	// Get baseline config (first sync from agent) - prefer from agent_configs version 1, fallback to agents.current_config_yaml
-	var baselineConfig sql.NullString
-	var baselineConfigID sql.NullInt64
-	var baselineName sql.NullString
-
-	// Try to get baseline from agent_configs (version 1, baseline)
-	row2 := db.QueryRow(`
-		SELECT id, config_yaml, name FROM agent_configs 
-		WHERE org_id=? AND agent_uid=? AND version=1 AND name LIKE 'Baseline%'
-		ORDER BY id DESC LIMIT 1
-	`, c.OrgID, uid)
-	if err := row2.Scan(&baselineConfigID, &baselineConfig, &baselineName); err != nil {
-		// Fallback: get from agents.current_config_yaml (first sync)
-		log.Printf("DEBUG: No baseline in agent_configs for agent %s, using agents.current_config_yaml", uid)
-		db.QueryRow(`SELECT current_config_yaml FROM agents WHERE org_id=? AND agent_uid=?`, c.OrgID, uid).Scan(&baselineConfig)
+	result["currentConfig"] = current
+	result["hasCurrentConfig"] = current != ""
+	if currentVersion.Valid {
+		result["currentVersion"] = currentVersion.Int64
 	}
 
-	baseline := ""
-	if baselineConfig.Valid {
-		baseline = baselineConfig.String
+	// Fix 4: Get previous version (version N-1) instead of baseline
+	var previousConfig sql.NullString
+	var previousVersion sql.NullInt64
+	var previousConfigID sql.NullInt64
+	var isUsingBaseline bool = false
+	
+	if currentVersion.Valid {
+		// Try to get previous version (version < current version, maximum)
+		row2 := db.QueryRow(`
+			SELECT id, config_yaml, version FROM agent_configs 
+			WHERE org_id=? AND agent_uid=? AND version < ?
+			ORDER BY version DESC LIMIT 1
+		`, c.OrgID, uid, currentVersion.Int64)
+		if err := row2.Scan(&previousConfigID, &previousConfig, &previousVersion); err != nil {
+			// No previous version found - fall back to baseline
+			isUsingBaseline = true
+			var baselineConfig sql.NullString
+			var baselineConfigID sql.NullInt64
+			// Try to get baseline from agent_configs (version 1, baseline)
+			row3 := db.QueryRow(`
+				SELECT id, config_yaml FROM agent_configs 
+				WHERE org_id=? AND agent_uid=? AND version=1 AND name LIKE 'Baseline%'
+				ORDER BY id DESC LIMIT 1
+			`, c.OrgID, uid)
+			if err3 := row3.Scan(&baselineConfigID, &baselineConfig); err3 == nil {
+				previousConfig = baselineConfig
+				previousConfigID = baselineConfigID
+				previousVersion = sql.NullInt64{Int64: 1, Valid: true}
+				log.Printf("DEBUG: No previous version for config %s, using baseline (version 1)", configID)
+			} else {
+				// Fallback: get from agents.current_config_yaml
+				log.Printf("DEBUG: No baseline in agent_configs for agent %s, using agents.current_config_yaml", uid)
+				db.QueryRow(`SELECT current_config_yaml FROM agents WHERE org_id=? AND agent_uid=?`, c.OrgID, uid).Scan(&previousConfig)
+				previousVersion = sql.NullInt64{Int64: 0, Valid: true} // Version 0 = baseline from agent
+			}
+		}
+	} else {
+		// No version info - fall back to baseline
+		isUsingBaseline = true
+		var baselineConfig sql.NullString
+		var baselineConfigID sql.NullInt64
+		row2 := db.QueryRow(`
+			SELECT id, config_yaml FROM agent_configs 
+			WHERE org_id=? AND agent_uid=? AND version=1 AND name LIKE 'Baseline%'
+			ORDER BY id DESC LIMIT 1
+		`, c.OrgID, uid)
+		if err := row2.Scan(&baselineConfigID, &baselineConfig); err == nil {
+			previousConfig = baselineConfig
+			previousConfigID = baselineConfigID
+			previousVersion = sql.NullInt64{Int64: 1, Valid: true}
+		} else {
+			db.QueryRow(`SELECT current_config_yaml FROM agents WHERE org_id=? AND agent_uid=?`, c.OrgID, uid).Scan(&previousConfig)
+			previousVersion = sql.NullInt64{Int64: 0, Valid: true}
+		}
 	}
 
-	// Set result fields - "previous" = baseline (first sync), "current" = proposed (modified)
-	// Frontend expects "previous" and "current" fields for diff display
-	result["previous"] = baseline       // Previous version = baseline (first sync) - used by frontend
-	result["current"] = proposed        // Current version = proposed (modified) - used by frontend
-	result["previousConfig"] = baseline // Also include for backward compatibility
-	result["currentConfig"] = proposed  // Also include for backward compatibility
-	result["hasCurrentConfig"] = proposed != ""
-	result["hasPreviousConfig"] = baseline != ""
-
-	if baselineConfigID.Valid {
-		result["baselineConfigId"] = baselineConfigID.Int64
+	previous := ""
+	if previousConfig.Valid {
+		previous = previousConfig.String
 	}
-	if baselineName.Valid {
-		result["baselineName"] = baselineName.String
+	
+	// Set result fields - "previous" = previous version (or baseline), "current" = selected version
+	result["previous"] = previous
+	result["previousConfig"] = previous
+	result["hasPreviousConfig"] = previous != ""
+	result["isUsingBaseline"] = isUsingBaseline // Flag to indicate if we're comparing against baseline
+	
+	if previousVersion.Valid {
+		result["previousVersion"] = previousVersion.Int64
+	}
+	if previousConfigID.Valid {
+		result["previousConfigId"] = previousConfigID.Int64
 	}
 
-	// Calculate diff: proposed (modified) vs baseline (first sync)
-	// diff shows: previous (baseline) vs current (proposed)
-	if baseline != "" && proposed != "" {
-		diff := calculateDiff(proposed, baseline)
+	// Calculate diff: current (selected) vs previous (version N-1 or baseline)
+	if previous != "" && current != "" {
+		diff := calculateDiff(current, previous) // Compare current vs previous
 		result["diff"] = diff
 		result["hasChanges"] = len(diff) > 0
 	} else {
@@ -2137,10 +2371,17 @@ func componentTypesHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			return
 		}
 
+		// CRITICAL: Use parameterized query - updates slice contains only safe column names (hardcoded)
+		// Never use user input for column names - always use hardcoded strings
+		// Add modified_by and modified_at (modified_at uses NOW() function, no placeholder needed)
 		updates = append(updates, "modified_by=?", "modified_at=NOW()")
-		args = append(args, c.UserName, in.ID, c.OrgID)
-
-		query := fmt.Sprintf(`UPDATE component_types SET %s WHERE id=? AND org_id=? AND is_system=FALSE`, strings.Join(updates, ", "))
+		args = append(args, c.UserName)
+		// Add WHERE clause parameters (id and org_id)
+		args = append(args, in.ID, c.OrgID)
+		
+		// Build query safely - updates only contains hardcoded column names like "display_label=?", "description=?", etc.
+		// All user input is in args slice and will be properly escaped by database driver
+		query := `UPDATE component_types SET ` + strings.Join(updates, ", ") + ` WHERE id=? AND org_id=? AND is_system=FALSE`
 		_, err := db.Exec(query, args...)
 		if err != nil {
 			http.Error(w, err.Error(), 500)

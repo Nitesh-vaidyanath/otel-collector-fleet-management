@@ -51,18 +51,31 @@ func main() {
 			opampEndpoint = "0.0.0.0:4321"
 		}
 
+		// Get TLS configuration from environment variables
+		certFile := os.Getenv("OPAMP_TLS_CERT")
+		keyFile := os.Getenv("OPAMP_TLS_KEY")
+		
+		tlsEnabled := certFile != "" && keyFile != ""
+
 		appLogger.Info("Starting embedded OPAMP server", map[string]interface{}{
 			"endpoint": opampEndpoint,
+			"tls":      tlsEnabled,
 		})
 
 		go func() {
-			if err := globalOpampManager.Start(opampEndpoint); err != nil {
+			if err := globalOpampManager.Start(opampEndpoint, certFile, keyFile); err != nil {
 				appLogger.Error("Failed to start OPAMP server", err, map[string]interface{}{
 					"endpoint": opampEndpoint,
+					"tls":      tlsEnabled,
 				})
 			} else {
+				protocol := "ws://"
+				if tlsEnabled {
+					protocol = "wss://"
+				}
 				appLogger.Info("OPAMP server started successfully", map[string]interface{}{
 					"endpoint": opampEndpoint,
+					"protocol": protocol,
 				})
 			}
 		}()

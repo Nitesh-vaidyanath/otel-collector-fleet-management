@@ -137,7 +137,7 @@ DISCOVERED COLLECTOR: namespace=default, name=test-simple, stable_uid=...
 
 ### Config Push Fails
 
-Error: `cannot modify a collector that doesn't have opentelemetry.io/opamp-managed set`
+#### Error: `cannot modify a collector that doesn't have opentelemetry.io/opamp-managed set`
 
 **Fix**: Ensure the label value matches the bridge deployment name exactly:
 ```bash
@@ -147,6 +147,26 @@ BRIDGE_NAME=$(kubectl get deployment -n opentelemetry-operator-system \
 kubectl label opentelemetrycollector test-simple -n default \
   opentelemetry.io/opamp-managed=$BRIDGE_NAME --overwrite
 ```
+
+#### Error: `admission webhook denied the request: the OpenTelemetry Collector mode is set to daemonset, which does not support modification`
+
+**Problem**: This occurs when trying to update a DaemonSet collector via OpAMP Bridge.
+
+**Root Cause**: The OpAMP Bridge sends full-object updates instead of patching only `spec.config`. The operator's webhook rejects DaemonSet updates that touch non-config fields.
+
+**Workaround**: Use `kubectl patch` to update only `spec.config`:
+```bash
+# Patch only the config field for DaemonSet collectors
+kubectl patch opentelemetrycollector otel-collector-daemonset -n default \
+  --type='merge' \
+  -p='{"spec":{"config":"<your-config-yaml>"}}'
+```
+
+**Alternative**: Use `deployment` or `statefulset` mode instead of `daemonset` if you need remote config updates via OpAMP Bridge.
+
+**Related Issue**: [open-telemetry/opentelemetry-operator#4481](https://github.com/open-telemetry/opentelemetry-operator/issues/4481)
+
+See [TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md#opamp-bridge-daemonset-mode-configuration-update-failure) for more details.
 
 ## Cleanup
 

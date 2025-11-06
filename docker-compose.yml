@@ -37,6 +37,9 @@ services:
       - ./provisioning:/etc/grafana/provisioning/plugins:ro
       # RECOMMENDED: Persist Grafana data (dashboards, users, settings) between restarts
       - grafana_data:/var/lib/grafana
+      # OPTIONAL: Mount kubectl and kubeconfig for pod health checks (if kubectl is available on host)
+      - /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro
+      - ~/.kube/config:/root/.kube/config:ro
     depends_on:
       - mysql
 

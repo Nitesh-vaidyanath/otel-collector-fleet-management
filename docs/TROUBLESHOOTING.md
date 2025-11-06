@@ -110,3 +110,78 @@ docker compose restart grafana
 docker compose logs grafana --tail 50
 ```
 
+---
+
+## OpAMP Bridge: DaemonSet Mode Configuration Update Failure
+
+### Problem
+
+When using the OpenTelemetry Operator's OpAMP Bridge to update an `OpenTelemetryCollector` that runs in `spec.mode: daemonset`, the bridge fails with a webhook denial error even if the remote config only intends to change `spec.config`.
+
+**Error Message:**
+```
+admission webhook "vopentelemetrycollectorcreateupdatebeta.kb.io" denied the request: 
+the OpenTelemetry Collector mode is set to daemonset, which does not support modification
+```
+
+### Root Cause
+
+The OpAMP Bridge uses `collector.DeepCopy()` and sends a full-object update to the Kubernetes API, which unintentionally "touches" fields that the operator's webhook forbids for DaemonSet pools. The webhook blocks DaemonSet updates that modify:
+
+- `spec.mode`
+- `spec.image`
+- `spec.targetAllocator`
+- `spec.volumes`
+- `spec.volumeMounts`
+- `spec.env`
+- `spec.resources`
+- `spec.upgradeStrategy`
+- Other non-config spec mutations
+
+Even though the bridge only intends to update `spec.config`, the full-object update includes zero-values or unchanged fields that still register as a spec mutation, causing the webhook to reject the update.
+
+**Related Issue:** [open-telemetry/opentelemetry-operator#4481](https://github.com/open-telemetry/opentelemetry-operator/issues/4481)
+
+### Workaround
+
+**Option 1: Use `kubectl patch` for DaemonSet collectors (Manual)**
+
+For DaemonSet collectors, manually patch only `spec.config`:
+
+```bash
+# Patch only the config field
+kubectl patch opentelemetrycollector <collector-name> -n <namespace> \
+  --type='merge' \
+  -p='{"spec":{"config":"<your-config-yaml>"}}'
+```
+
+**Option 2: Use Deployment or StatefulSet mode instead**
+
+If you need remote configuration updates via OpAMP Bridge, consider using:
+- `spec.mode: deployment` - Supports full remote configuration updates
+- `spec.mode: statefulset` - Supports full remote configuration updates
+
+**Option 3: Wait for Operator Fix**
+
+This is a known limitation in the OpenTelemetry Operator's OpAMP Bridge. Monitor the [GitHub issue](https://github.com/open-telemetry/opentelemetry-operator/issues/4481) for updates. The fix would require the bridge to use strategic merge patches for `spec.config` only instead of full-object updates.
+
+### Current Status
+
+- ✅ **Manual `kubectl patch` works** - You can manually update DaemonSet collector configs
+- ✅ **Deployment/StatefulSet mode works** - Full OpAMP Bridge support for these modes
+- ❌ **OpAMP Bridge + DaemonSet mode** - Currently blocked by operator webhook validation
+- 🔄 **Fix in progress** - Tracked in operator issue #4481
+
+### Verification
+
+To verify if your collector is in DaemonSet mode:
+
+```bash
+kubectl get opentelemetrycollector <collector-name> -n <namespace> \
+  -o jsonpath='{.spec.mode}'
+```
+
+If it returns `daemonset`, remote config updates via OpAMP Bridge will fail until the operator issue is resolved.
+
+---
+

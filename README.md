@@ -4,14 +4,13 @@ A comprehensive Grafana app plugin for managing OpenTelemetry Collector agents u
 
 **Author**: Nitesh Vaidyanath  
 **Email**: niteshbv@ymail.com  
-**GitHub**: [https://github.com/nitesh-bv](https://github.com/nitesh-bv)
 
 ## 🚀 Quick Start
 
 ```bash
 # 1. Clone the repository
 git clone <repository-url>
-cd grafana-agents-app
+cd otel-collector-fleet-management
 
 # 2. Build the plugin
 make build-plugin
@@ -43,6 +42,7 @@ This plugin provides a complete solution for managing fleets of OpenTelemetry Co
 - View agent capabilities and version information
 - Organize agents by organization
 - Filter and search agents by labels
+- Secure WSS (WebSocket Secure) connections with TLS/SSL
 
 ### Configuration Management
 - Visual configuration builder
@@ -203,6 +203,7 @@ All documentation is organized in the [`docs/`](./docs/) folder. See [Documentat
 ### Quick Links
 
 - **[Plugin Configuration Guide](./docs/PLUGIN_CONFIGURATION.md)** ⭐ - Complete guide to plugin settings, `backend: true`, OpAMP modes, and configuration
+- **[WSS/TLS Setup Guide](./docs/WSS_TLS_SETUP.md)** 🔒 - Enable secure WebSocket connections with TLS/SSL
 - **[API Specification](./docs/API_SPEC.md)** - Complete REST API reference
 - **[Backend Configuration](./docs/BACKEND_CONFIG.md)** - Database setup (MySQL, Cloud SQL, RDS, Spanner)
 - **[Standalone OpAMP Setup](./docs/STANDALONE_OPAMP_SETUP.md)** - Running OpAMP server separately
@@ -325,6 +326,12 @@ See [Backend Configuration](./docs/BACKEND_CONFIG.md) for detailed setup.
 - Check network connectivity
 - Verify OpAMP server is running
 - Check agent configuration
+
+**OpAMP Bridge + DaemonSet mode**:
+- ⚠️ **Known Limitation**: OpAMP Bridge cannot update DaemonSet collectors due to operator webhook restrictions
+- Workaround: Use `kubectl patch` to update `spec.config` manually, or use `deployment`/`statefulset` mode instead
+- See [Troubleshooting Guide](./docs/TROUBLESHOOTING.md#opamp-bridge-daemonset-mode-configuration-update-failure) for details
+- Related Issue: [open-telemetry/opentelemetry-operator#4481](https://github.com/open-telemetry/opentelemetry-operator/issues/4481)
 
 For more troubleshooting help, see [Troubleshooting Guide](./docs/TROUBLESHOOTING.md).
 
