@@ -2,6 +2,8 @@ package main
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -12,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"gopkg.in/yaml.v3"
 )
 
@@ -2488,6 +2490,20 @@ func getDBDSN() string {
 	// Try environment variable first (for standalone backend)
 	dsn := os.Getenv("AGENTS_MYSQL_DSN")
 	if dsn != "" {
+		// If DSN already includes TLS parameters, use as-is
+		// Otherwise, add TLS configuration if enabled
+		if strings.Contains(dsn, "tls=") {
+			return dsn
+		}
+		// Add TLS configuration if enabled via environment variables
+		tlsMode := os.Getenv("DB_TLS_MODE")
+		if tlsMode != "" {
+			separator := "&"
+			if !strings.Contains(dsn, "?") {
+				separator = "?"
+			}
+			dsn += fmt.Sprintf("%stls=%s", separator, tlsMode)
+		}
 		return dsn
 	}
 
@@ -2524,6 +2540,35 @@ func getDBDSN() string {
 		dbName = "grafana_agents"
 	}
 
+	// TLS Configuration
+	tlsMode := os.Getenv("DB_TLS_MODE") // preferred, required, verify-ca, verify-full, skip-verify, or custom name
+	tlsCAFile := os.Getenv("DB_TLS_CA_FILE")
+	tlsCertFile := os.Getenv("DB_TLS_CERT_FILE")
+	tlsKeyFile := os.Getenv("DB_TLS_KEY_FILE")
+
+	// Register custom TLS configuration if certificates are provided
+	tlsConfigName := ""
+	if tlsCertFile != "" && tlsKeyFile != "" {
+		tlsConfigName = "custom"
+		if err := registerCustomTLSConfig(tlsConfigName, tlsCAFile, tlsCertFile, tlsKeyFile); err != nil {
+			log.Printf("WARNING: Failed to register custom TLS config: %v", err)
+			tlsConfigName = ""
+		} else {
+			log.Printf("✓ Registered custom TLS configuration for MySQL")
+		}
+	}
+
+	// Build TLS parameter for DSN
+	tlsParam := ""
+	if tlsMode != "" {
+		tlsParam = fmt.Sprintf("&tls=%s", tlsMode)
+	} else if tlsConfigName != "" {
+		tlsParam = fmt.Sprintf("&tls=%s", tlsConfigName)
+	} else {
+		// Default: prefer TLS but don't require it
+		tlsParam = "&tls=preferred"
+	}
+
 	// Build DSN based on database type
 	switch dbType {
 	case "cloudsql-mysql":
@@ -2534,24 +2579,70 @@ func getDBDSN() string {
 		cloudSQLInstance := os.Getenv("CLOUD_SQL_INSTANCE")
 		if cloudSQLInstance != "" && strings.HasPrefix(dbHost, "/cloudsql/") {
 			// Use Unix socket for Cloud SQL (when running in GCP)
-			dsn = fmt.Sprintf("%s:%s@unix(%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8",
-				dbUser, dbPassword, cloudSQLInstance, dbName)
+			dsn = fmt.Sprintf("%s:%s@unix(%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8%s",
+				dbUser, dbPassword, cloudSQLInstance, dbName, tlsParam)
 		} else {
 			// Direct TCP connection via host:port (recommended)
 			// Works with public IP, private IP, or Cloud SQL Proxy
-			dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8",
-				dbUser, dbPassword, dbHost, dbPort, dbName)
+			dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8%s",
+				dbUser, dbPassword, dbHost, dbPort, dbName, tlsParam)
 		}
 	case "aws-rds-mysql":
 		// AWS RDS typically requires SSL
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8&tls=skip-verify",
-			dbUser, dbPassword, dbHost, dbPort, dbName)
+		// Use skip-verify if no custom certs provided, otherwise use custom config
+		if tlsConfigName != "" {
+			tlsParam = fmt.Sprintf("&tls=%s", tlsConfigName)
+		} else {
+			tlsParam = "&tls=skip-verify"
+		}
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8%s",
+			dbUser, dbPassword, dbHost, dbPort, dbName, tlsParam)
 	default: // mysql
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8",
-			dbUser, dbPassword, dbHost, dbPort, dbName)
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4,utf8%s",
+			dbUser, dbPassword, dbHost, dbPort, dbName, tlsParam)
 	}
 
 	return dsn
+}
+
+// registerCustomTLSConfig registers a custom TLS configuration with the MySQL driver
+// This allows using client certificates and custom CA certificates
+func registerCustomTLSConfig(name, caFile, certFile, keyFile string) error {
+	// Load client certificate and key
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load client certificate: %w", err)
+	}
+
+	// Create TLS config
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}
+
+	// Load CA certificate if provided
+	if caFile != "" {
+		caCert, err := os.ReadFile(caFile)
+		if err != nil {
+			return fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return fmt.Errorf("failed to parse CA certificate")
+		}
+		tlsConfig.RootCAs = caCertPool
+		tlsConfig.InsecureSkipVerify = false
+	} else {
+		// If no CA file, use system CA pool but skip verification
+		// For production, always provide CA file
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	// Register with MySQL driver using mysql.RegisterTLSConfig()
+	mysql.RegisterTLSConfig(name, tlsConfig)
+	log.Printf("✓ Registered custom TLS configuration '%s' for MySQL (cert: %s, key: %s, ca: %s)", name, certFile, keyFile, caFile)
+
+	return nil
 }
 
 func agentTelemetryHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {

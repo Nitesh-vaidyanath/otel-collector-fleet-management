@@ -100,6 +100,7 @@ grafana-agents-app/
 └──────────────┬──────────────────────────────────────────┘
                │
                │ HTTP API (/api/plugins/.../resources/*)
+               │ HTTPS/TLS (optional)
                │
 ┌──────────────▼──────────────────────────────────────────┐
 │  Plugin Backend (Go)                                    │
@@ -107,17 +108,30 @@ grafana-agents-app/
 │  - OpAMP Server (Embedded or External)                 │
 │  - RBAC Middleware                                      │
 │  - Database Access                                      │
+│  - TLS Configuration                                    │
 └──────────────┬──────────────────────────────────────────┘
-               │
-               │ OpAMP Protocol (WebSocket/gRPC)
-               │
-┌──────────────▼──────────────────────────────────────────┐
-│  OpenTelemetry Collector Agents                         │
-│  - Receive configurations                               │
-│  - Report health and telemetry                          │
-│  - Send metrics/logs/traces                              │
+               │                                    │
+               │ OpAMP Protocol (WebSocket/gRPC)     │ Database Connection
+               │ WSS/TLS (optional)                 │ TLS/SSL (optional)
+               │                                    │ Certificate Auth
+               │                                    │
+┌──────────────▼───────────────────────────────────┴──────┐
+│  OpenTelemetry Collector Agents      MySQL Database    │
+│  - Receive configurations            - TLS/SSL Support  │
+│  - Report health and telemetry       - Certificate Auth │
+│  - Send metrics/logs/traces         - CA Verification│
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Security Layers
+
+1. **Frontend ↔ Backend**: HTTPS/TLS (via Grafana or reverse proxy)
+2. **Backend ↔ Database**: TLS/SSL with certificate verification and optional client certificate authentication
+3. **Backend ↔ Agents**: WSS/TLS for OpAMP protocol (optional)
+4. **Authentication**: RBAC middleware for API access control
+5. **Secrets Management**: Encrypted storage for database credentials
+
+For detailed architecture and data model, see [Data Model and Architecture](./docs/DATA_MODEL.md).
 
 ## 📦 Installation
 
@@ -204,6 +218,7 @@ All documentation is organized in the [`docs/`](./docs/) folder. See [Documentat
 
 - **[Plugin Configuration Guide](./docs/PLUGIN_CONFIGURATION.md)** ⭐ - Complete guide to plugin settings, `backend: true`, OpAMP modes, and configuration
 - **[WSS/TLS Setup Guide](./docs/WSS_TLS_SETUP.md)** 🔒 - Enable secure WebSocket connections with TLS/SSL
+- **[MySQL TLS Configuration](./docs/MYSQL_TLS_CONFIG.md)** 🔒 - Secure MySQL connections with TLS/SSL and certificate authentication
 - **[API Specification](./docs/API_SPEC.md)** - Complete REST API reference
 - **[Backend Configuration](./docs/BACKEND_CONFIG.md)** - Database setup (MySQL, Cloud SQL, RDS, Spanner)
 - **[Standalone OpAMP Setup](./docs/STANDALONE_OPAMP_SETUP.md)** - Running OpAMP server separately
@@ -289,8 +304,13 @@ See [Standalone OpAMP Setup](./docs/STANDALONE_OPAMP_SETUP.md) for details.
 
 - **Database Passwords**: Stored encrypted in `secureJsonData`
 - **RBAC**: Role-based access control for API endpoints
-- **TLS Support**: Optional TLS for OpAMP server (via reverse proxy)
+- **TLS Support**: 
+  - **OpAMP Server**: Optional TLS for OpAMP server (via reverse proxy or certificates)
+  - **MySQL Connections**: Full TLS/SSL support with certificate verification and client certificate authentication
 - **Environment Variables**: Sensitive values via environment variables
+- **Certificate Management**: Support for CA certificates, client certificates, and custom TLS configurations
+
+See [MySQL TLS Configuration](./docs/MYSQL_TLS_CONFIG.md) for detailed TLS setup.
 
 ## 📊 Database Support
 

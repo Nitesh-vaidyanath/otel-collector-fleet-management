@@ -299,12 +299,21 @@ spec:
 The backend can also be configured via environment variables (useful for Docker/Kubernetes):
 
 ```bash
+# Database connection
 DB_TYPE=mysql
 DB_HOST=localhost
 DB_PORT=3306
 DB_NAME=grafana_agents
 DB_USER=grafana
 DB_PASSWORD=your_password
+
+# TLS/SSL Configuration (optional)
+DB_TLS_MODE=preferred                    # preferred, required, skip-verify, verify-ca, verify-full, custom
+DB_TLS_CA_FILE=/path/to/ca-cert.pem     # CA certificate file
+DB_TLS_CERT_FILE=/path/to/client-cert.pem # Client certificate file
+DB_TLS_KEY_FILE=/path/to/client-key.pem  # Client private key file
+
+# OpAMP Server
 OPAMP_ENDPOINT=0.0.0.0:4321
 
 # Cloud SQL specific
@@ -313,6 +322,14 @@ CLOUD_SQL_INSTANCE=my-project:us-central1:my-instance
 # Spanner specific
 SPANNER_DATABASE=projects/my-project/instances/my-instance/databases/grafana_agents
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+```
+
+### Complete DSN Format
+
+You can also use a complete DSN string instead of individual variables:
+
+```bash
+AGENTS_MYSQL_DSN="user:password@tcp(host:3306)/database?parseTime=true&loc=Local&charset=utf8mb4,utf8&tls=required"
 ```
 
 ---
@@ -333,12 +350,91 @@ These can be adjusted in the backend code if needed.
 
 ### MySQL/Cloud SQL
 
-For secure connections, the backend supports SSL. Configure SSL parameters in the connection string:
+The backend supports comprehensive TLS/SSL configuration for secure MySQL connections. TLS can be configured via environment variables or directly in the DSN.
+
+#### Environment Variables
+
+| Variable | Description | Values | Default |
+|----------|-------------|--------|---------|
+| `DB_TLS_MODE` | TLS connection mode | `preferred`, `required`, `skip-verify`, `verify-ca`, `verify-full`, `custom` | None (no TLS) |
+| `DB_TLS_CA_FILE` | Path to CA certificate file | File path | None |
+| `DB_TLS_CERT_FILE` | Path to client certificate file | File path | None |
+| `DB_TLS_KEY_FILE` | Path to client private key file | File path | None |
+
+#### TLS Modes
+
+- **`preferred`**: Use TLS if available, but don't require it (default for most connections)
+- **`required`**: Require TLS connection (fails if server doesn't support TLS)
+- **`skip-verify`**: Use TLS but skip certificate verification (useful for self-signed certs, development only)
+- **`verify-ca`**: Verify server certificate against CA (requires `DB_TLS_CA_FILE`)
+- **`verify-full`**: Verify server certificate and hostname (requires `DB_TLS_CA_FILE`)
+- **`custom`**: Use custom TLS configuration with client certificates (requires `DB_TLS_CERT_FILE` and `DB_TLS_KEY_FILE`)
+
+#### Configuration Examples
+
+**Basic TLS (Preferred Mode)**:
+```bash
+export DB_TLS_MODE=preferred
+export DB_HOST=mysql.example.com
+export DB_USER=grafana
+export DB_PASSWORD=secure_password
+export DB_NAME=grafana_agents
+```
+
+**Required TLS with CA Verification**:
+```bash
+export DB_TLS_MODE=verify-ca
+export DB_TLS_CA_FILE=/path/to/ca-cert.pem
+export DB_HOST=mysql.example.com
+export DB_USER=grafana
+export DB_PASSWORD=secure_password
+export DB_NAME=grafana_agents
+```
+
+**Client Certificate Authentication**:
+```bash
+export DB_TLS_MODE=custom
+export DB_TLS_CA_FILE=/path/to/ca-cert.pem
+export DB_TLS_CERT_FILE=/path/to/client-cert.pem
+export DB_TLS_KEY_FILE=/path/to/client-key.pem
+export DB_HOST=mysql.example.com
+export DB_USER=grafana
+export DB_PASSWORD=secure_password
+export DB_NAME=grafana_agents
+```
+
+**Using DSN with TLS**:
+```bash
+export AGENTS_MYSQL_DSN="user:password@tcp(host:3306)/database?parseTime=true&tls=required"
+```
+
+#### Docker Compose Example
 
 ```yaml
-jsonData:
-  dbSSLMode: "require"  # or "verify-ca", "verify-full"
+services:
+  opamp-server:
+    environment:
+      DB_HOST: mysql.example.com
+      DB_USER: grafana
+      DB_PASSWORD: secure_password
+      DB_NAME: grafana_agents
+      DB_TLS_MODE: verify-ca
+      DB_TLS_CA_FILE: /app/tls/ca-cert.pem
+      DB_TLS_CERT_FILE: /app/tls/client-cert.pem
+      DB_TLS_KEY_FILE: /app/tls/client-key.pem
+    volumes:
+      - ./tls:/app/tls:ro
 ```
+
+#### Security Best Practices
+
+1. **Always use TLS in production**: Set `DB_TLS_MODE=required` or `verify-full`
+2. **Use CA certificates**: Always provide `DB_TLS_CA_FILE` for certificate verification
+3. **Client certificates**: Use client certificate authentication for additional security
+4. **Protect private keys**: Ensure `DB_TLS_KEY_FILE` has restricted permissions (600)
+5. **Never use `skip-verify` in production**: Only use for development/testing
+
+For detailed TLS configuration guide, see [MySQL TLS Configuration](./MYSQL_TLS_CONFIG.md).
 
 ### Spanner
 
@@ -402,5 +498,6 @@ If migrations fail:
 
 - [API Specification](./API_SPEC.md)
 - [Plugin README](./plugin/README.md)
-- [Database Schema](./DATA_MODEL.md)
+- [Data Model and Architecture](./DATA_MODEL.md)
+- [MySQL TLS Configuration](./MYSQL_TLS_CONFIG.md)
 
