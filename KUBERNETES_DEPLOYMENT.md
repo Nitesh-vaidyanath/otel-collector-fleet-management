@@ -69,6 +69,21 @@ This creates:
 - `dist/public/` - Frontend assets
 - `dist/plugin.json` - Plugin manifest
 
+### Required Grafana Environment Variables
+
+Make sure your Grafana deployment includes the following environment variables so the UI can call the plugin backend safely:
+
+| Variable | Purpose | Suggested value |
+|----------|---------|-----------------|
+| `GF_SECURITY_ACTIONS_ALLOW_POST_URL` | Allow Grafana frontends to call this plugin’s backend resources | `/api/plugins/otel-collector-agent-fleet-management/*` |
+| `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS` | Permit loading this unsigned plugin | `otel-collector-agent-fleet-management` |
+| `GF_SERVER_ROOT_URL` | Set when serving Grafana behind a sub-path (example `https://nitesh.test/grafana/`) | *(your Grafana URL)* |
+| `GF_SERVER_SERVE_FROM_SUB_PATH` | Required when using a sub-path ingress | `true` |
+
+Adjust cookie/path settings (`GF_SECURITY_COOKIE_PATH`, etc.) if you host Grafana under a path prefix.
+
+> 📘 **Grafana Enterprise Access Control:** assign the `plugins.app:access` permission for this plugin ID to the Viewer/Editor roles. See `docs/ACCESS_CONTROL.md` for provisioning examples.
+
 ### 2. Prepare for Kubernetes Deployment
 
 #### Option A: Use ConfigMaps

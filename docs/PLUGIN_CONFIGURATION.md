@@ -34,6 +34,19 @@ This plugin requires `backend: true` because it:
 - **Performance**: Processes large amounts of agent data efficiently
 - **Real-time Operations**: Pushes configurations to agents, receives telemetry
 
+### Grafana Instance Settings Required
+
+Set the following Grafana configuration values (environment variables or `grafana.ini`) so the frontend can communicate with the backend:
+
+| Setting | Purpose | Suggested value |
+|---------|---------|-----------------|
+| `GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS` | Allow this unsigned app plugin to load | `otel-collector-agent-fleet-management` |
+| `GF_SECURITY_ACTIONS_ALLOW_POST_URL` | Permit the frontend to call the plugin backend resources | `/api/plugins/otel-collector-agent-fleet-management/*` |
+| `GF_SERVER_ROOT_URL` / `GF_SERVER_SERVE_FROM_SUB_PATH` | Needed when Grafana is exposed under a sub-path (e.g., `/grafana`) | Your external Grafana URL and `true` |
+| `GF_SECURITY_COOKIE_PATH` / `GF_SECURITY_COOKIE_DOMAIN` | Ensure auth cookies are sent when using a sub-path/domain | Match your ingress path/domain |
+
+Restart Grafana after updating these settings.
+
 ## Configuration Fields Explained
 
 ### OpAMP Server Mode (`opampServerMode`)

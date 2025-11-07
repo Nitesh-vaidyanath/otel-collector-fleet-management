@@ -92,6 +92,7 @@ The `docker-compose.standalone.yml` file includes:
 | `OPAMP_SERVER_MODE` | `embedded` or `external` | `embedded` |
 | `OPAMP_SERVER_URL` | External OpAMP server URL | - |
 | `AGENTS_MYSQL_DSN` | Database connection (for plugin features) | - |
+| `GF_SECURITY_ACTIONS_ALLOW_POST_URL` | Allow frontend calls to the plugin backend resources | `/api/plugins/otel-collector-agent-fleet-management/*` |
 
 ## Command Line Options
 
