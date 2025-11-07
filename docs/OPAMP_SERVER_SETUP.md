@@ -18,7 +18,7 @@ Grafana Container
 
 1. **Grafana loads the plugin:**
    - Reads `plugin.json` (says `"backend": true`)
-   - Executes the backend binary: `plugin_linux_amd64` or `plugin_linux_arm64`
+   - Executes the backend binary: `plugin` (symlink to `plugin_linux_amd64`)
 
 2. **Backend starts (in `main.go`):**
    - Initializes OpAMP manager
@@ -47,7 +47,7 @@ grafana:
 ### Check 1: Backend Process
 ```bash
 docker compose exec grafana ps aux | grep plugin
-# Should see: plugin_linux_amd64 or plugin_linux_arm64
+# Should see: plugin_linux_amd64 and plugin (symlink)
 ```
 
 ### Check 2: OpAMP Server Logs

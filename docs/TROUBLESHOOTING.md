@@ -61,7 +61,7 @@
 2. **Files are in dist folder:**
    ```bash
    ls -la dist/
-   # Should see: plugin.json, public/module.js, plugin_linux_amd64, plugin_linux_arm64
+   # Should see: plugin.json, public/module.js, plugin_linux_amd64, plugin (symlink)
    ```
 
 3. **Docker volume is mounted correctly:**

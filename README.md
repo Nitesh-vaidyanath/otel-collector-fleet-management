@@ -3,7 +3,7 @@
 A comprehensive Grafana app plugin for managing OpenTelemetry Collector agents using the OpAMP (OpenTelemetry Agent Management Protocol) server.
 
 **Author**: Nitesh Vaidyanath  
-**Email**: niteshbv@ymail.com  
+**Email**: nitesh.b.v.11@gmail.com  
 
 ## 🚀 Quick Start
 
@@ -410,7 +410,7 @@ See LICENSE file for details.
 For issues and questions:
 - **GitHub Issues**: [https://github.com/nitesh-bv/grafana-agents-app/issues](https://github.com/nitesh-bv/grafana-agents-app/issues)
 - **Documentation**: See [docs](./docs/) folder for detailed guides
-- **Email**: niteshbv@ymail.com
+- **Email**: nitesh.b.v.11@gmail.com
 
 ## 📖 Documentation
 

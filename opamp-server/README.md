@@ -61,7 +61,8 @@ GOOS=linux GOARCH=amd64 go build -o plugin_linux_amd64 ./pkg/backend
 
 ```bash
 cd opamp-server
-GOOS=linux GOARCH=arm64 go build -o plugin_linux_arm64 ./pkg/backend
+# Optional: build for other architectures (not packaged by default)
+# GOOS=linux GOARCH=arm64 go build -o plugin_linux_arm64 ./pkg/backend
 ```
 
 ## Database Migrations

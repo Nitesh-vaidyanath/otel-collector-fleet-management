@@ -18,7 +18,7 @@ kubectl exec -it deployment/grafana -n platform -- \
   ps aux | grep plugin
 
 # If you see nothing → Backend didn't start
-# If you see plugin_linux_amd64 or plugin_linux_arm64 → Backend is running
+# If you see plugin_linux_amd64 (and plugin symlink) → Backend is running
 ```
 
 ### Step 2: Check Grafana Logs for Backend Errors
@@ -42,7 +42,7 @@ kubectl exec -it deployment/grafana -n platform -- \
 
 # Must see:
 # lrwxrwxrwx ... _linux_amd64 -> plugin_linux_amd64
-# lrwxrwxrwx ... _linux_arm64 -> plugin_linux_arm64
+# lrwxrwxrwx ... plugin -> plugin_linux_amd64
 ```
 
 ### Step 4: Test Database Connection
@@ -63,8 +63,8 @@ kubectl exec -it deployment/grafana -n platform -- \
 kubectl exec -it deployment/grafana -n platform -- sh -c "
   cd /var/lib/grafana/plugins/otel-collector-agent-fleet-management
   ln -sf plugin_linux_amd64 _linux_amd64 2>/dev/null || true
-  ln -sf plugin_linux_arm64 _linux_arm64 2>/dev/null || true
-  chmod +x plugin_linux_amd64 plugin_linux_arm64
+  ln -sf plugin_linux_amd64 plugin 2>/dev/null || true
+  chmod +x plugin_linux_amd64
   ls -la | grep -E '_linux|plugin_linux'
 "
 
@@ -139,8 +139,8 @@ kubectl logs deployment/grafana -n $NAMESPACE --tail=50 | grep -iE "error|fatal|
 kubectl exec -it deployment/grafana -n platform -- sh -c "
   cd /var/lib/grafana/plugins/otel-collector-agent-fleet-management
   ln -sf plugin_linux_amd64 _linux_amd64
-  ln -sf plugin_linux_arm64 _linux_arm64
-  chmod +x plugin_linux_amd64 plugin_linux_arm64
+  ln -sf plugin_linux_amd64 plugin
+  chmod +x plugin_linux_amd64
 "
 kubectl rollout restart deployment/grafana -n platform
 ```

@@ -65,7 +65,7 @@ make build-frontend   # Builds React frontend
 
 This creates:
 - `dist/plugin_linux_amd64` - Backend binary for AMD64
-- `dist/plugin_linux_arm64` - Backend binary for ARM64
+- (Optional) Build artifacts for other architectures such as ARM64 are no longer packaged by default. If you need them, run `GOARCH=arm64 go build` manually and add the result to the plugin directory.
 - `dist/public/` - Frontend assets
 - `dist/plugin.json` - Plugin manifest
 

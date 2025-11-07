@@ -20,7 +20,7 @@ The `"backend": true` field tells Grafana that this plugin has server-side code 
 ### What Happens When `backend: true` is Set?
 
 1. **Grafana launches a backend process** when the plugin is enabled
-2. **Looks for executable files**: `plugin_linux_amd64` or `plugin_linux_arm64`
+2. **Looks for executable file**: `plugin` (symlinked to `plugin_linux_amd64`)
 3. **Routes API requests** from frontend to backend via `/api/plugins/{plugin-id}/resources/*`
 4. **Manages backend lifecycle**: Starts, stops, and restarts the backend process
 
