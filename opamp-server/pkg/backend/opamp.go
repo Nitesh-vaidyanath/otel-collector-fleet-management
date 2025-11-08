@@ -131,7 +131,7 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 		capabilitiesJSON = []byte("{}")
 	}
 
-	// Try to determine org_id from bridge labels or default to 1
+	// Try to determine org_id/tenant from bridge labels or default to 1
 	orgID := int64(1)
 	if orgLabel, ok := labels["org_id"]; ok {
 		fmt.Sscanf(orgLabel, "%d", &orgID)
@@ -141,6 +141,21 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 	}
 	if orgLabel, ok := labels["tenant.id"]; ok {
 		fmt.Sscanf(orgLabel, "%d", &orgID)
+	}
+	if tenantName, ok := labels["tenant.name"]; ok {
+		if id, ok := lookupOrgIDByName(tenantName); ok {
+			orgID = id
+		}
+	}
+	if tenantName, ok := labels["organization.name"]; ok {
+		if id, ok := lookupOrgIDByName(tenantName); ok {
+			orgID = id
+		}
+	}
+	if tenantName, ok := labels["tenant"]; ok {
+		if id, ok := lookupOrgIDByName(tenantName); ok {
+			orgID = id
+		}
 	}
 
 	// Mark old bridge instances as offline (same org_id, different bridge_uid)
@@ -204,6 +219,21 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 	}
 	if orgLabel, ok := labels["tenant.id"]; ok {
 		fmt.Sscanf(orgLabel, "%d", &orgID)
+	}
+	if tenantName, ok := labels["tenant.name"]; ok {
+		if id, ok := lookupOrgIDByName(tenantName); ok {
+			orgID = id
+		}
+	}
+	if tenantName, ok := labels["organization.name"]; ok {
+		if id, ok := lookupOrgIDByName(tenantName); ok {
+			orgID = id
+		}
+	}
+	if tenantName, ok := labels["tenant"]; ok {
+		if id, ok := lookupOrgIDByName(tenantName); ok {
+			orgID = id
+		}
 	}
 
 	// Get org name
@@ -1136,12 +1166,28 @@ func (m *OpampManager) cleanupStaleAgents() {
 	}
 }
 
+func (m *OpampManager) cleanupStaleBridges() {
+	db := mustDB()
+	defer db.Close()
+
+	_, err := db.Exec(`
+		UPDATE bridges
+		SET status = 'offline'
+		WHERE status = 'online'
+		  AND last_seen_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+	`)
+	if err != nil {
+		log.Printf("ERROR: Failed to cleanup stale bridges: %v", err)
+	}
+}
+
 // startCleanupWorker runs periodic cleanup of stale agents
 func (m *OpampManager) startCleanupWorker() {
 	ticker := time.NewTicker(30 * time.Second) // Run every 30 seconds
 	go func() {
 		for range ticker.C {
 			m.cleanupStaleAgents()
+			m.cleanupStaleBridges()
 		}
 	}()
 	log.Printf("✓ Started agent cleanup worker (runs every 30 seconds, marks agents offline after 2 minutes of no heartbeat)")

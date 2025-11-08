@@ -135,6 +135,7 @@ spec:
         image: ${BRIDGE_IMAGE}
         args:
           - "--zap-log-level=debug"
+          - "--config-file=/conf/remoteconfiguration.yaml"
         ports:
           - name: http
             containerPort: 8080
@@ -148,10 +149,51 @@ spec:
             mountPath: /conf
       volumes:
         - name: opamp-bridge-internal
-          emptyDir: {}
+          configMap:
+            name: opamp-bridge-config
 EOF
   echo "   Waiting for bridge..."
   kubectl -n ${NS_OPERATOR} rollout status deploy/opamp-bridge --timeout=120s
+}
+
+detect_local_backend_gateway() {
+  if [ -n "${LOCAL_BACKEND_GATEWAY:-}" ]; then
+    echo "${LOCAL_BACKEND_GATEWAY}"
+    return
+  fi
+
+  if gateway=$(docker network inspect otel-collector-fleet-management_default --format '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null); then
+    if [ -n "${gateway}" ] && [ "${gateway}" != "<no value>" ]; then
+      echo "${gateway}"
+      return
+    fi
+  fi
+
+  # Fallback for historical compose setups
+  echo "192.168.0.1"
+}
+
+ensure_bridge_config() {
+  local backend_gateway
+  backend_gateway=$(detect_local_backend_gateway)
+
+  echo "   Using local backend gateway: ${backend_gateway}"
+
+  cat <<EOF | kubectl apply -n ${NS_OPERATOR} -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opamp-bridge-config
+data:
+  remoteconfiguration.yaml: |
+    bridges:
+      - manager:
+          namespaces: ["default", "telemetry-ns"]
+        opamp:
+          endpoint: "ws://${backend_gateway}:4321/v1/opamp" # auto-detected Docker network gateway
+        labels:
+          tenant.name: "test"
+EOF
 }
 
 create_test_collectors() {
@@ -167,6 +209,7 @@ metadata:
   name: test-collector
   labels:
     opentelemetry.io/opamp-managed: "true"  # requested label
+    tenant: test
 spec:
   mode: daemonset
   image: otel/opentelemetry-collector-contrib:latest
@@ -195,6 +238,7 @@ metadata:
   name: test-collector
   labels:
     opentelemetry.io/opamp-managed: "true"  # requested label
+    tenant: test1
 spec:
   mode: deployment
   replicas: 1
@@ -215,6 +259,38 @@ spec:
         metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }
         traces:  { receivers: [otlp], processors: [batch], exporters: [debug] }
 EOF
+
+
+  # 2) Deployment gateway (fully remote-manageable; label added)
+  cat <<'EOF' | kubectl apply -n telemetry-ns -f -
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: test-collector-1
+  labels:
+    opentelemetry.io/opamp-managed: "true"  # requested label
+    tenant: test1
+spec:
+  mode: deployment
+  replicas: 1
+  image: otel/opentelemetry-collector-contrib:latest
+  config: |
+    receivers:
+      otlp:
+        protocols:
+          http: {}
+          grpc: {}
+    processors:
+      batch: {}
+    exporters:
+      debug: {}
+    service:
+      pipelines:
+        logs:    { receivers: [otlp], processors: [batch], exporters: [debug] }
+        metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }
+        traces:  { receivers: [otlp], processors: [batch], exporters: [debug] }
+EOF
+
 
   echo "   Waiting for DS in ${NS_APP_A} and Deploy in ${NS_APP_B}..."
   kubectl -n ${NS_APP_A} rollout status ds/test-collector-collector --timeout=180s || true
@@ -259,7 +335,7 @@ cleanup() {
 }
 
 case "${1:-}" in
-  up)       install_cert_manager; install_operator; deploy_bridge; create_test_collectors; status ;;
+  up)       install_cert_manager; install_operator; ensure_bridge_config; deploy_bridge; create_test_collectors; status ;;
   down)     cleanup ;;
   status)   status ;;
   pf-bridge) pf_bridge ;;

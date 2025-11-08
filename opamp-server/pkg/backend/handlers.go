@@ -2986,7 +2986,21 @@ func mustDB() *sql.DB {
 	}
 	// Test connection
 	if err := db.Ping(); err != nil {
-		panic(fmt.Sprintf("Failed to connect to database: %v (DSN: %s)", err, dsn))
+		panic(fmt.Sprintf("Failed to connect to database: %v (DSN: %s)", err, maskDSN(dsn)))
 	}
 	return db
+}
+
+func maskDSN(dsn string) string {
+	at := strings.Index(dsn, "@")
+	if at == -1 {
+		return dsn
+	}
+	prefix := dsn[:at]
+	suffix := dsn[at:]
+	colon := strings.Index(prefix, ":")
+	if colon == -1 {
+		return "****" + suffix
+	}
+	return prefix[:colon+1] + "****" + suffix
 }

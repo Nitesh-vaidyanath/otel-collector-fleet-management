@@ -327,7 +327,9 @@ export const App = () => {
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 2);
       }
-      // Update org name
+      if (response.orgId !== undefined && response.orgId !== null) {
+        setSelectedOrgId(response.orgId);
+      }
       if (response.orgName) {
         setCurrentOrgName(response.orgName);
       }

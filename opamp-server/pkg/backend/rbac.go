@@ -88,6 +88,23 @@ func getUserFromRequest(r *http.Request) (int64, string) {
 }
 
 func getOrgFromRequest(r *http.Request) int64 {
+	if orgHeader := r.Header.Get("X-Scoper-Org-Id"); orgHeader != "" {
+		var orgID int64
+		if _, err := fmt.Sscanf(orgHeader, "%d", &orgID); err == nil && orgID > 0 {
+			return orgID
+		}
+	}
+	if orgHeader := r.Header.Get("X-Scoper-OrgID"); orgHeader != "" {
+		var orgID int64
+		if _, err := fmt.Sscanf(orgHeader, "%d", &orgID); err == nil && orgID > 0 {
+			return orgID
+		}
+	}
+	if tenantName := r.Header.Get("X-Scoper-Tenant"); tenantName != "" {
+		if orgID, ok := lookupOrgIDByName(tenantName); ok {
+			return orgID
+		}
+	}
 	// Get org ID from query parameter (for UI selection)
 	if orgParam := r.URL.Query().Get("org_id"); orgParam != "" {
 		var orgID int64

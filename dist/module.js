@@ -2862,6 +2862,9 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === 2);
       }
+      if (response.orgId !== void 0 && response.orgId !== null) {
+        setSelectedOrgId(response.orgId);
+      }
       if (response.orgName) {
         setCurrentOrgName(response.orgName);
       }
