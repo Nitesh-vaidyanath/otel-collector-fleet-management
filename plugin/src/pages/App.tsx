@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { getBackendSrv } from '@grafana/runtime';
+import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
 
 interface Agent {
@@ -32,6 +33,26 @@ interface Bridge {
 }
 
 type Tab = 'collectors' | 'configurations' | 'monitoring';
+
+const backendSrv = getBackendSrv() as any;
+const backendFetch = backendSrv.fetch.bind(backendSrv);
+
+const performBackendRequest = async <T = any>(options: any) => {
+  const response = await lastValueFrom(
+    backendFetch<T>({
+      responseType: 'json',
+      ...options,
+    })
+  );
+  return response.data;
+};
+
+backendSrv.get = <T = any>(url: string) => performBackendRequest<T>({ method: 'GET', url });
+backendSrv.post = <T = any>(url: string, data?: any) => performBackendRequest<T>({ method: 'POST', url, data });
+backendSrv.put = <T = any>(url: string, data?: any) => performBackendRequest<T>({ method: 'PUT', url, data });
+backendSrv.patch = <T = any>(url: string, data?: any) => performBackendRequest<T>({ method: 'PATCH', url, data });
+backendSrv.delete = <T = any>(url: string, data?: any) => performBackendRequest<T>({ method: 'DELETE', url, data });
+backendSrv.request = <T = any>(options: any) => performBackendRequest<T>(options);
 
 // Shared status badge function for all components
 const getStatusBadge = (status: string) => {
@@ -80,8 +101,6 @@ export const App = () => {
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
-
-  const backendSrv = getBackendSrv();
 
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -2514,7 +2533,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
   const [monitoringData, setMonitoringData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const backendSrv = getBackendSrv();
 
   // Prevent selecting bridges - only collectors can be monitored (bridges don't have pipelines/configs)
   useEffect(() => {
@@ -3591,8 +3609,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     },
     advancedYaml: ''  // For custom fields: targetAllocator, volumes, serviceAccount, etc.
   });
-
-  const backendSrv = getBackendSrv();
 
   useEffect(() => {
     loadTemplates();
