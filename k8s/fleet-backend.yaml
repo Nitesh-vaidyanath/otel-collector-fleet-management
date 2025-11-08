@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-backend
+  labels:
+    app: fleet-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fleet-backend
+  template:
+    metadata:
+      labels:
+        app: fleet-backend
+    spec:
+      containers:
+        - name: fleet-backend
+          # Replace this image with the registry location where you publish
+          # opamp-server/Dockerfile.loopback (make build/push first).
+          image: your-registry.example.com/otel-fleet-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5801
+            - name: opamp
+              containerPort: 4321
+          env:
+            # Prefer referencing a Secret for the DSN in production.
+            - name: AGENTS_MYSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-backend-db
+                  key: dsn
+            - name: OPAMP_ENDPOINT
+              value: "0.0.0.0:4321"
+            - name: DB_TYPE
+              value: "mysql"
+            - name: DB_HOST
+              value: "mysql"
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_NAME
+              value: "grafana_agents"
+            - name: DB_USER
+              value: "grafana"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-backend-db
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: /plugin-api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /plugin-api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-backend
+  labels:
+    app: fleet-backend
+spec:
+  selector:
+    app: fleet-backend
+  ports:
+    - name: http
+      port: 5801
+      targetPort: http
+    - name: opamp
+      port: 4321
+      targetPort: opamp
+  type: ClusterIP

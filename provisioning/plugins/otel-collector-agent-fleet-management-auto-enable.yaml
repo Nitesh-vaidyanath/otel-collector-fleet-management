@@ -6,10 +6,10 @@ plugins:
     enabled: true
     jsonData:
       dbType: mysql
-      dbHost: mysql.platform.svc.cluster.local
+      dbHost: mysql
       dbPort: 3306
       dbName: grafana_agents
       dbUser: grafana
       opampEndpoint: 0.0.0.0:4321
     secureJsonData:
-      dbPassword: your_password_here
+      dbPassword: grafana123

@@ -6,6 +6,52 @@ define(["@grafana/data","@grafana/runtime","@grafana/ui","react","react-dom"], f
 var React = __REACT__.default || __REACT__; var { useEffect, useState, useMemo, useCallback } = __REACT__;
 
 
+// node_modules/rxjs/dist/esm5/internal/util/createErrorClass.js
+function createErrorClass(createImpl) {
+  var _super = function(instance) {
+    Error.call(instance);
+    instance.stack = new Error().stack;
+  };
+  var ctorFunc = createImpl(_super);
+  ctorFunc.prototype = Object.create(Error.prototype);
+  ctorFunc.prototype.constructor = ctorFunc;
+  return ctorFunc;
+}
+
+// node_modules/rxjs/dist/esm5/internal/util/EmptyError.js
+var EmptyError = createErrorClass(function(_super) {
+  return function EmptyErrorImpl() {
+    _super(this);
+    this.name = "EmptyError";
+    this.message = "no elements in sequence";
+  };
+});
+
+// node_modules/rxjs/dist/esm5/internal/lastValueFrom.js
+function lastValueFrom(source, config) {
+  var hasConfig = typeof config === "object";
+  return new Promise(function(resolve, reject) {
+    var _hasValue = false;
+    var _value;
+    source.subscribe({
+      next: function(value) {
+        _value = value;
+        _hasValue = true;
+      },
+      error: reject,
+      complete: function() {
+        if (_hasValue) {
+          resolve(_value);
+        } else if (hasConfig) {
+          resolve(config.defaultValue);
+        } else {
+          reject(new EmptyError());
+        }
+      }
+    });
+  });
+}
+
 // node_modules/js-yaml/dist/js-yaml.mjs
 function isNothing(subject) {
   return typeof subject === "undefined" || subject === null;
@@ -2590,6 +2636,147 @@ var safeLoadAll = renamed("safeLoadAll", "loadAll");
 var safeDump = renamed("safeDump", "dump");
 
 // pages/App.tsx
+var PLUGIN_ID = "otel-collector-agent-fleet-management";
+var RESOURCE_ROOT = `/api/plugins/${PLUGIN_ID}/resources`;
+var RESOURCE_PREFIX = `${RESOURCE_ROOT}/plugin-api`;
+var PROXY_PREFIX = `/api/plugin-proxy/${PLUGIN_ID}/plugin-api`;
+var STANDALONE_PREFIX = "/plugin-api";
+var detectRuntimeMode = () => {
+  if (typeof window === "undefined") {
+    return "grafana";
+  }
+  const coerceMode = (value) => {
+    if (!value) {
+      return null;
+    }
+    const lower = value.toLowerCase();
+    if (lower === "grafana" || lower === "standalone") {
+      return lower;
+    }
+    return null;
+  };
+  let storedMode = null;
+  try {
+    storedMode = window.localStorage?.getItem("otelFleetAppMode") ?? null;
+  } catch {
+    storedMode = null;
+  }
+  const forcedMode = coerceMode(window.__OTEL_FLEET_APP_MODE__) || coerceMode(new URLSearchParams(window.location.search).get("mode")) || coerceMode(storedMode);
+  if (forcedMode) {
+    return forcedMode;
+  }
+  const grafanaMarkers = [
+    window.__grafanaBootData,
+    window.grafanaBootData,
+    window.__grafana_public_path__
+  ];
+  if (grafanaMarkers.some(Boolean)) {
+    return "grafana";
+  }
+  if (typeof document !== "undefined") {
+    const grafanaRoot = document.getElementById("grafana-app") || document.getElementById("grafanaRoot") || document.querySelector("grafana-app");
+    if (grafanaRoot) {
+      return "grafana";
+    }
+  }
+  const path = window.location?.pathname ?? "";
+  if (path.includes("/api/plugins/") || path.includes("/a/")) {
+    return "grafana";
+  }
+  return "standalone";
+};
+var runtimeMode = detectRuntimeMode();
+var isRunningInGrafana = runtimeMode === "grafana";
+var detectGrafanaTransport = () => {
+  if (!isRunningInGrafana) {
+    return "resources";
+  }
+  const coerce = (value) => {
+    if (!value) {
+      return null;
+    }
+    const lower = value.toLowerCase();
+    if (lower === "proxy" || lower === "resources") {
+      return lower;
+    }
+    if (lower === "callresource") {
+      return "resources";
+    }
+    return null;
+  };
+  let stored = null;
+  try {
+    stored = window.localStorage?.getItem("otelFleetTransport") ?? null;
+  } catch {
+    stored = null;
+  }
+  return coerce(window.__OTEL_FLEET_TRANSPORT__) || coerce(new URLSearchParams(window.location.search).get("transport")) || coerce(stored) || "proxy";
+};
+var grafanaTransport = detectGrafanaTransport();
+var normalizeUrl = (rawUrl) => {
+  if (!rawUrl) {
+    if (!isRunningInGrafana) {
+      return STANDALONE_PREFIX;
+    }
+    return grafanaTransport === "proxy" ? PROXY_PREFIX : RESOURCE_PREFIX;
+  }
+  if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+    return rawUrl;
+  }
+  const base = !isRunningInGrafana ? STANDALONE_PREFIX : grafanaTransport === "proxy" ? PROXY_PREFIX : RESOURCE_PREFIX;
+  let urlWithoutBase = rawUrl;
+  if (urlWithoutBase.startsWith(base)) {
+    return urlWithoutBase;
+  }
+  if (urlWithoutBase.startsWith(RESOURCE_PREFIX)) {
+    urlWithoutBase = urlWithoutBase.slice(RESOURCE_PREFIX.length);
+  } else if (urlWithoutBase.startsWith(RESOURCE_ROOT)) {
+    urlWithoutBase = urlWithoutBase.slice(RESOURCE_ROOT.length);
+  } else if (urlWithoutBase.startsWith(PROXY_PREFIX)) {
+    urlWithoutBase = urlWithoutBase.slice(PROXY_PREFIX.length);
+  } else if (urlWithoutBase.startsWith(STANDALONE_PREFIX)) {
+    urlWithoutBase = urlWithoutBase.slice(STANDALONE_PREFIX.length);
+  } else if (urlWithoutBase.startsWith(`/api/plugins/${PLUGIN_ID}/resources`)) {
+    const parts = urlWithoutBase.split("/resources");
+    if (parts.length > 1) {
+      urlWithoutBase = parts.slice(1).join("/resources");
+    }
+  }
+  urlWithoutBase = urlWithoutBase.replace(/^\/plugin-api(\/|$)/, "/");
+  urlWithoutBase = urlWithoutBase.replace(/^\/r(\/|$)/, "/");
+  if (!urlWithoutBase.startsWith("/")) {
+    urlWithoutBase = `/${urlWithoutBase}`;
+  }
+  return `${base}${urlWithoutBase}`;
+};
+var rawBackendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
+var fetchWithAuth = async ({ responseType, ...rest }) => {
+  const response = await lastValueFrom(
+    rawBackendSrv.fetch({
+      responseType: responseType ?? "json",
+      ...rest
+    })
+  );
+  if (response.status >= 200 && response.status < 300) {
+    return response.data;
+  }
+  const error = new Error(response.statusText || `Request failed with status ${response.status}`);
+  error.status = response.status;
+  error.statusText = response.statusText;
+  error.data = response.data;
+  throw error;
+};
+var backendSrv = {
+  get: (url, options = {}) => fetchWithAuth({ ...options, url: normalizeUrl(url), method: "GET" }),
+  post: (url, data, options = {}) => fetchWithAuth({ ...options, url: normalizeUrl(url), data, method: "POST" }),
+  delete: (url, options = {}) => fetchWithAuth({ ...options, url: normalizeUrl(url), method: "DELETE" }),
+  patch: (url, data, options = {}) => fetchWithAuth({ ...options, url: normalizeUrl(url), data, method: "PATCH" }),
+  request: (options) => fetchWithAuth({
+    ...options,
+    url: normalizeUrl(options.url ?? ""),
+    method: options.method
+  })
+};
 var getStatusBadge = (status) => {
   const styles = {
     online: { bg: "#10B981", color: "white", icon: "\u25CF" },
@@ -2630,7 +2817,6 @@ var App = () => {
   const [organizations, setOrganizations] = useState([]);
   const [currentOrgName, setCurrentOrgName] = useState("");
   const [agentActivityLog, setAgentActivityLog] = useState([]);
-  const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
   const [isAdmin, setIsAdmin] = useState(false);
   const handleDeleteBridge = async (bridgeUid, bridgeName) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?
@@ -4111,7 +4297,6 @@ function MonitoringSection({ agents, bridges }) {
   const [monitoringData, setMonitoringData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
-  const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
   useEffect(() => {
     if (selectedAgentUID) {
       const isBridge = bridges.some((b) => b.agentUid === selectedAgentUID);
@@ -4685,7 +4870,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
     advancedYaml: ""
     // For custom fields: targetAllocator, volumes, serviceAccount, etc.
   });
-  const backendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
   useEffect(() => {
     loadTemplates();
     fetchUserRole();

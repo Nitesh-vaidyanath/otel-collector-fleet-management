@@ -133,6 +133,16 @@ func organizationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 }
 
 func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	if appLogger != nil {
+		appLogger.Info("agentsCollectionHandler invoked", map[string]interface{}{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"query":  r.URL.RawQuery,
+			"userID": c.UserID,
+			"orgID":  c.OrgID,
+		})
+	}
+
 	db := mustDB()
 	defer db.Close()
 
@@ -285,12 +295,12 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		log.Printf("Please run migration 0018_create_bridges_table.sql to fix this.")
 		// Fallback: Query agents table for bridges (old behavior)
 		bridgeRows, err = db.Query(`
-			SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json
-			FROM agents a
-			WHERE a.org_id=?
+		SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json
+		FROM agents a
+		WHERE a.org_id=?
 			  AND JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') = true
-			  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
-			ORDER BY a.last_seen_at DESC
+		  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+		ORDER BY a.last_seen_at DESC
 		`, orgID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to query bridges: %v", err), 500)

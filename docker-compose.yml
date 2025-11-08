@@ -22,13 +22,14 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-      - "4321:4321"  # OPAMP server port
     environment:
         GF_SECURITY_ADMIN_USER: admin
         GF_SECURITY_ADMIN_PASSWORD: admin
         GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: otel-collector-agent-fleet-management
         GF_LOG_FILTERS: plugin.otel-collector-agent-fleet-management:debug
-        OPAMP_ENDPOINT: "0.0.0.0:4321"
+        GF_SERVER_DOMAIN: 127.0.0.1
+        GF_SERVER_ROOT_URL: http://127.0.0.1:3000
+        GF_SERVER_ROUTER_LOGGING: "true"
         AGENTS_MYSQL_DSN: "grafana:grafana123@tcp(mysql:3306)/grafana_agents?parseTime=true&loc=Local&charset=utf8mb4,utf8"
     volumes:
       # REQUIRED: Mount built plugin so Grafana can load it
@@ -42,6 +43,28 @@ services:
       - ~/.kube/config:/root/.kube/config:ro
     depends_on:
       - mysql
+      - fleet-backend
+
+  fleet-backend:
+    build:
+      context: ./opamp-server
+      dockerfile: Dockerfile.loopback
+    container_name: fleet_backend
+    restart: unless-stopped
+    environment:
+      AGENTS_MYSQL_DSN: "grafana:grafana123@tcp(mysql:3306)/grafana_agents?parseTime=true&loc=Local&charset=utf8mb4,utf8"
+      OPAMP_ENDPOINT: "0.0.0.0:4321"
+      DB_TYPE: mysql
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: grafana_agents
+      DB_USER: grafana
+      DB_PASSWORD: grafana123
+    depends_on:
+      - mysql
+    ports:
+      - "5801:5801"
+      - "4321:4321"
 
 volumes:
   mysql_data:

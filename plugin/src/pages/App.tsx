@@ -1,6 +1,159 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { getBackendSrv } from '@grafana/runtime';
+import { getBackendSrv, type FetchRequest } from '@grafana/runtime';
+import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
+
+const PLUGIN_ID = 'otel-collector-agent-fleet-management';
+const RESOURCE_ROOT = `/api/plugins/${PLUGIN_ID}/resources`;
+const RESOURCE_PREFIX = `${RESOURCE_ROOT}/plugin-api`;
+const PROXY_PREFIX = `/api/plugin-proxy/${PLUGIN_ID}/plugin-api`;
+const STANDALONE_PREFIX = '/plugin-api';
+
+type RuntimeMode = 'grafana' | 'standalone';
+type GrafanaTransport = 'proxy' | 'resources';
+
+const detectRuntimeMode = (): RuntimeMode => {
+  if (typeof window === 'undefined') {
+    return 'grafana';
+  }
+
+  const coerceMode = (value: string | null | undefined): RuntimeMode | null => {
+    if (!value) {
+      return null;
+    }
+    const lower = value.toLowerCase();
+    if (lower === 'grafana' || lower === 'standalone') {
+      return lower as RuntimeMode;
+    }
+    return null;
+  };
+
+  let storedMode: string | null = null;
+  try {
+    storedMode = window.localStorage?.getItem('otelFleetAppMode') ?? null;
+  } catch {
+    storedMode = null;
+  }
+
+  const forcedMode =
+    coerceMode((window as any).__OTEL_FLEET_APP_MODE__) ||
+    coerceMode(new URLSearchParams(window.location.search).get('mode')) ||
+    coerceMode(storedMode);
+  if (forcedMode) {
+    return forcedMode;
+  }
+
+  const grafanaMarkers = [
+    (window as any).__grafanaBootData,
+    (window as any).grafanaBootData,
+    (window as any).__grafana_public_path__,
+  ];
+  if (grafanaMarkers.some(Boolean)) {
+    return 'grafana';
+  }
+
+  if (typeof document !== 'undefined') {
+    const grafanaRoot =
+      document.getElementById('grafana-app') ||
+      document.getElementById('grafanaRoot') ||
+      document.querySelector('grafana-app');
+    if (grafanaRoot) {
+      return 'grafana';
+    }
+  }
+
+  const path = window.location?.pathname ?? '';
+  if (path.includes('/api/plugins/') || path.includes('/a/')) {
+    return 'grafana';
+  }
+
+  return 'standalone';
+};
+
+const runtimeMode = detectRuntimeMode();
+const isRunningInGrafana = runtimeMode === 'grafana';
+
+const detectGrafanaTransport = (): GrafanaTransport => {
+  if (!isRunningInGrafana) {
+    return 'resources';
+  }
+
+  const coerce = (value: string | null | undefined): GrafanaTransport | null => {
+    if (!value) {
+      return null;
+    }
+    const lower = value.toLowerCase();
+    if (lower === 'proxy' || lower === 'resources') {
+      return lower as GrafanaTransport;
+    }
+    if (lower === 'callresource') {
+      return 'resources';
+    }
+    return null;
+  };
+
+  let stored: string | null = null;
+  try {
+    stored = window.localStorage?.getItem('otelFleetTransport') ?? null;
+  } catch {
+    stored = null;
+  }
+
+  return (
+    coerce((window as any).__OTEL_FLEET_TRANSPORT__) ||
+    coerce(new URLSearchParams(window.location.search).get('transport')) ||
+    coerce(stored) ||
+    'proxy'
+  );
+};
+
+const grafanaTransport = detectGrafanaTransport();
+
+const normalizeUrl = (rawUrl: string): string => {
+  if (!rawUrl) {
+    if (!isRunningInGrafana) {
+      return STANDALONE_PREFIX;
+    }
+    return grafanaTransport === 'proxy' ? PROXY_PREFIX : RESOURCE_PREFIX;
+  }
+
+  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+    return rawUrl;
+  }
+
+  const base = !isRunningInGrafana
+    ? STANDALONE_PREFIX
+    : grafanaTransport === 'proxy'
+      ? PROXY_PREFIX
+      : RESOURCE_PREFIX;
+
+  let urlWithoutBase = rawUrl;
+  if (urlWithoutBase.startsWith(base)) {
+    return urlWithoutBase;
+  }
+  if (urlWithoutBase.startsWith(RESOURCE_PREFIX)) {
+    urlWithoutBase = urlWithoutBase.slice(RESOURCE_PREFIX.length);
+  } else if (urlWithoutBase.startsWith(RESOURCE_ROOT)) {
+    urlWithoutBase = urlWithoutBase.slice(RESOURCE_ROOT.length);
+  } else if (urlWithoutBase.startsWith(PROXY_PREFIX)) {
+    urlWithoutBase = urlWithoutBase.slice(PROXY_PREFIX.length);
+  } else if (urlWithoutBase.startsWith(STANDALONE_PREFIX)) {
+    urlWithoutBase = urlWithoutBase.slice(STANDALONE_PREFIX.length);
+  } else if (urlWithoutBase.startsWith(`/api/plugins/${PLUGIN_ID}/resources`)) {
+    const parts = urlWithoutBase.split('/resources');
+    if (parts.length > 1) {
+      urlWithoutBase = parts.slice(1).join('/resources');
+    }
+  }
+
+  urlWithoutBase = urlWithoutBase.replace(/^\/plugin-api(\/|$)/, '/');
+  urlWithoutBase = urlWithoutBase.replace(/^\/r(\/|$)/, '/');
+  if (!urlWithoutBase.startsWith('/')) {
+    urlWithoutBase = `/${urlWithoutBase}`;
+  }
+
+  return `${base}${urlWithoutBase}`;
+};
 
 interface Agent {
   id: number;
@@ -32,6 +185,46 @@ interface Bridge {
 }
 
 type Tab = 'collectors' | 'configurations' | 'monitoring';
+
+const rawBackendSrv = getBackendSrv();
+
+type FetchOptions = Omit<FetchRequest, 'url' | 'method'>;
+
+const fetchWithAuth = async <T = any>({ responseType, ...rest }: FetchRequest): Promise<T> => {
+  const response = await lastValueFrom(
+    rawBackendSrv.fetch<T>({
+      responseType: (responseType as any) ?? 'json',
+      ...rest,
+    })
+  );
+
+  if (response.status >= 200 && response.status < 300) {
+    return response.data;
+  }
+
+  const error: any = new Error(response.statusText || `Request failed with status ${response.status}`);
+  error.status = response.status;
+  error.statusText = response.statusText;
+  error.data = response.data;
+  throw error;
+};
+
+const backendSrv = {
+  get: <T = any>(url: string, options: FetchOptions = {}) =>
+    fetchWithAuth<T>({ ...options, url: normalizeUrl(url), method: 'GET' }),
+  post: <T = any>(url: string, data?: any, options: FetchOptions = {}) =>
+    fetchWithAuth<T>({ ...options, url: normalizeUrl(url), data, method: 'POST' }),
+  delete: <T = any>(url: string, options: FetchOptions = {}) =>
+    fetchWithAuth<T>({ ...options, url: normalizeUrl(url), method: 'DELETE' }),
+  patch: <T = any>(url: string, data?: any, options: FetchOptions = {}) =>
+    fetchWithAuth<T>({ ...options, url: normalizeUrl(url), data, method: 'PATCH' }),
+  request: <T = any>(options: FetchRequest) =>
+    fetchWithAuth<T>({
+      ...options,
+      url: normalizeUrl(options.url ?? ''),
+      method: options.method,
+    }),
+};
 
 // Shared status badge function for all components
 const getStatusBadge = (status: string) => {
@@ -80,8 +273,6 @@ export const App = () => {
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
-
-  const backendSrv = getBackendSrv();
 
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -2514,7 +2705,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
   const [monitoringData, setMonitoringData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const backendSrv = getBackendSrv();
 
   // Prevent selecting bridges - only collectors can be monitored (bridges don't have pipelines/configs)
   useEffect(() => {
@@ -2754,10 +2944,10 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                         borderLeft: '2px solid #E5E7EB'
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background = '#F9FAFB';
+                          e.currentTarget.style.background = '#F9FAFB';
                       }}
                       onMouseLeave={(e) => {
-                        e.currentTarget.style.background = isExpanded ? '#F3F4F6' : 'white';
+                          e.currentTarget.style.background = isExpanded ? '#F3F4F6' : 'white';
                       }}
                     >
                       <div style={{ fontSize: 12, color: '#6B7280', width: 20 }}>
@@ -3591,8 +3781,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     },
     advancedYaml: ''  // For custom fields: targetAllocator, volumes, serviceAccount, etc.
   });
-
-  const backendSrv = getBackendSrv();
 
   useEffect(() => {
     loadTemplates();

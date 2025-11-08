@@ -1,0 +1,21 @@
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY pkg/ ./pkg/
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags loopback -o loopback_server ./pkg/backend
+
+FROM alpine:3.19
+
+WORKDIR /app
+
+COPY --from=builder /build/loopback_server ./loopback_server
+
+ENV LOOPBACK_LISTEN_ADDR=0.0.0.0:5801
+EXPOSE 5801 4321
+
+CMD ["./loopback_server"]

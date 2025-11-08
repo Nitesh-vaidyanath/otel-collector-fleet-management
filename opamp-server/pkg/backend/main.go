@@ -1,22 +1,21 @@
-//go:build !standalone
-// +build !standalone
+//go:build !standalone && !loopback
+// +build !standalone,!loopback
 
 package main
 
 // This is the plugin backend main - used when running as Grafana plugin
 
 import (
+	"context"
 	"log"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
-	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 )
 
-var (
-	globalOpampManager *OpampManager
-	appLogger          *Logger
-)
+var loopbackServer *http.Server
 
 func main() {
 	backend.SetupPluginEnvironment("otel-collector-agent-fleet-management")
@@ -54,7 +53,7 @@ func main() {
 		// Get TLS configuration from environment variables
 		certFile := os.Getenv("OPAMP_TLS_CERT")
 		keyFile := os.Getenv("OPAMP_TLS_KEY")
-		
+
 		tlsEnabled := certFile != "" && keyFile != ""
 
 		appLogger.Info("Starting embedded OPAMP server", map[string]interface{}{
@@ -81,11 +80,12 @@ func main() {
 		}()
 	}
 
-	mux := newHTTPMux()
+	httpHandler := newHTTPHandler()
+	startLoopbackProxy(httpHandler)
 
 	appLogger.Info("Starting Grafana plugin backend")
 	if err := backend.Serve(backend.ServeOpts{
-		CallResourceHandler: httpadapter.New(mux),
+		CallResourceHandler: newResourceAdapter(httpHandler),
 	}); err != nil {
 		appLogger.Error("Failed to start backend", err)
 		log.Fatal(err)
@@ -96,4 +96,35 @@ func main() {
 		appLogger.Info("Shutting down OPAMP server")
 		globalOpampManager.Stop()
 	}
+	if loopbackServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := loopbackServer.Shutdown(ctx); err != nil {
+			appLogger.Error("Failed to shut down loopback proxy", err)
+		}
+	}
+}
+
+func startLoopbackProxy(handler http.Handler) {
+	if handler == nil {
+		return
+	}
+	addr := os.Getenv("PLUGIN_LOOPBACK_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:5801"
+	}
+	if os.Getenv("PLUGIN_LOOPBACK_DISABLE") == "1" {
+		appLogger.Info("Loopback proxy disabled", map[string]interface{}{"addr": addr})
+		return
+	}
+	loopbackServer = &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+	go func() {
+		appLogger.Info("Starting loopback proxy", map[string]interface{}{"addr": addr})
+		if err := loopbackServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLogger.Error("Loopback proxy stopped unexpectedly", err, map[string]interface{}{"addr": addr})
+		}
+	}()
 }

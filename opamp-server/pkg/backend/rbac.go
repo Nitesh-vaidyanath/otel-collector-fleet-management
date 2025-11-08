@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -30,7 +29,7 @@ func roleFromHeader(r *http.Request) Role {
 	if isGrafanaAdmin == "true" {
 		return RoleAdmin
 	}
-	
+
 	// Check for role override header (for testing)
 	v := strings.ToLower(r.Header.Get("X-Role"))
 	switch v {
@@ -57,7 +56,7 @@ func getUserFromRequest(r *http.Request) (int64, string) {
 	// Grafana passes these headers for authenticated requests through resource handlers
 	userID := int64(1)
 	userName := "unknown"
-	
+
 	// Primary: Try Grafana headers (most reliable)
 	if uid := r.Header.Get("X-Grafana-User-Id"); uid != "" {
 		fmt.Sscanf(uid, "%d", &userID)
@@ -65,26 +64,26 @@ func getUserFromRequest(r *http.Request) (int64, string) {
 	if uname := r.Header.Get("X-Grafana-User-Name"); uname != "" && uname != "user" {
 		userName = uname
 	}
-	
+
 	// Secondary: Try other possible Grafana headers
 	if userName == "unknown" || userName == "user" {
 		if uname := r.Header.Get("X-User-Name"); uname != "" {
 			userName = uname
 		}
 	}
-	
+
 	// Fallback for testing
 	if userName == "unknown" || userName == "user" {
 		if uname := r.Header.Get("X-User"); uname != "" {
 			userName = uname
 		}
 	}
-	
+
 	// Last resort: use user ID as string if nothing else works
 	if userName == "unknown" || userName == "user" {
 		userName = fmt.Sprintf("user-%d", userID)
 	}
-	
+
 	return userID, userName
 }
 
@@ -112,6 +111,19 @@ func allow(have Role, need Role) bool { return int(have) >= int(need) }
 // wrap converts handler with reqCtx to standard http.HandlerFunc
 func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				if appLogger != nil {
+					appLogger.Error("panic recovered in handler", nil, map[string]interface{}{
+						"path":   r.URL.Path,
+						"method": r.Method,
+						"panic":  rec,
+					})
+				}
+				writeJSONError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+
 		role := roleFromHeader(r)
 		userID, userName := getUserFromRequest(r)
 		orgID := getOrgFromRequest(r)
@@ -123,9 +135,22 @@ func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFun
 // rbac wraps a handler and enforces minimum role
 func rbac(min Role, next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				if appLogger != nil {
+					appLogger.Error("panic recovered in RBAC handler", nil, map[string]interface{}{
+						"path":   r.URL.Path,
+						"method": r.Method,
+						"panic":  rec,
+					})
+				}
+				writeJSONError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+
 		role := roleFromHeader(r)
 		if !allow(role, min) {
-			http.Error(w, "forbidden: insufficient role", http.StatusForbidden)
+			writeJSONError(w, http.StatusForbidden, "forbidden: insufficient role")
 			return
 		}
 		userID, userName := getUserFromRequest(r)
