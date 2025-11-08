@@ -44,6 +44,17 @@ Complete documentation for OTel Collector Agent Fleet Management plugin.
   - How it's embedded in the plugin
   - Configuration options
   - Protocol details
+- **[Kubernetes Deployment Guide](./KUBERNETES_DEPLOYMENT.md)**
+  - Deploying Grafana + fleet-backend in Kubernetes
+  - Persistent storage, services, and TLS notes
+- **[Pending Requests Fix](./KUBERNETES_PENDING_REQUESTS_FIX.md)**
+  - Historical context on request throttling and how we mitigated it
+- **[OpAMP Server Internals](./opamp-server/STRUCTURE.md)**
+  - Detailed breakdown of packages inside `opamp-server/pkg`
+- **[Plugin Developer Guide](./plugin/README.md)**
+  - Frontend build/lint/test instructions
+- **[OpAMP Server README](./opamp-server/README.md)**
+  - Backend build + contribution guidance
 
 ### Troubleshooting
 - **[Troubleshooting Guide](./TROUBLESHOOTING.md)**
@@ -81,4 +92,3 @@ Complete documentation for OTel Collector Agent Fleet Management plugin.
 
 **Something not working?**
 → [Troubleshooting Guide](./TROUBLESHOOTING.md)
-

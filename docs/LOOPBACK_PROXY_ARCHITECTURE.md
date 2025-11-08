@@ -36,7 +36,7 @@ Database / OpAMP logic
 |------|---------|---------|
 | Loopback binary | `opamp-server/pkg/backend/main_loopback.go`, `opamp-server/pkg/backend/globals.go`, `opamp-server/Dockerfile.loopback` | Introduces a standalone entry-point that starts the original HTTP mux plus the OpAMP server and listens on `LOOPBACK_LISTEN_ADDR` (default `0.0.0.0:5801`). |
 | Docker topology | `docker-compose.yml` | Builds and runs a new `fleet-backend` service (from `Dockerfile.loopback`) alongside Grafana/MySQL and exposes `5801` plus the OpAMP port. Grafana now depends on this service. |
-| Plugin manifest | `plugin/src/plugin.json` | Adds proxy `routes` for all HTTP verbs: `path: "plugin-api/*"` maps to `http://fleet-backend:5801/plugin-api`. |
+| Plugin manifest | `plugin/src/plugin.json` | Adds proxy `routes` for all HTTP verbs: the route points to `http://fleet-backend:5801/plugin-api` in Docker; in Kubernetes point it at the Service DNS (e.g., `http://fleet-backend.<ns>.svc.cluster.local:5801/plugin-api`). |
 | Frontend | `plugin/src/pages/App.tsx` | All API calls now use the normalized `backendSrv` wrapper. When running inside Grafana the wrapper automatically targets `/api/plugin-proxy/<id>/plugin-api/*`. The Monitoring tab no longer re-initializes `backendSrv`, so it also goes through the proxy. |
 | Backend entry point | `opamp-server/pkg/backend/main.go`, `opamp-server/pkg/backend/resource_adapter.go` | The CallResource handler is still registered (for standalone mode and older Grafana versions), but plugin traffic normally bypasses it via the proxy. |
 | Provisioning | `provisioning/plugins/otel-collector-agent-fleet-management-auto-enable.yaml` | Updated with the correct DSN (`mysql`) and password so Grafana can auto-enable the app on startup. |
@@ -62,4 +62,4 @@ so there are no more 404s or 301 redirects from the CallResource path.
 - If you run Grafana on ARM hardware, ensure `dist/plugin_linux_arm64` exists (run `GOARCH=arm64` builds) because Grafana loads the backend binary for the host architecture.
 - When testing via `curl` remember Grafana’s proxy still requires auth. Include either a session cookie or an API key, e.g. `curl -H "Authorization: Bearer <key>" http://localhost:3000/api/plugin-proxy/...`.
 - You can temporarily fall back to the legacy CallResource path by setting `localStorage.otelFleetTransport = 'resources'` before reloading the UI, but the proxy + loopback configuration is the long-term fix.
-
+- In managed Grafana (Grafana Cloud / hosted clusters) you cannot patch `plugin.json` yourself. Deploy the loopback backend inside the same cluster, expose it via a Service, and file a Grafana support ticket asking them to register a proxy route that points to that Service (`/api/plugin-proxy/<id>/plugin-api/* -> http://fleet-backend.<ns>.svc.cluster.local:5801/plugin-api`). Grafana only accepts plugin assets after signing, so any manifest change must go through their signing pipeline.
