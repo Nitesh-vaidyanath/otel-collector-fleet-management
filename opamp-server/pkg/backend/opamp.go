@@ -1259,11 +1259,13 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 		Settings: server.Settings{
 			Callbacks: types.Callbacks{
 				OnConnecting: func(request *http.Request) types.ConnectionResponse {
-					tenantOverride := strings.TrimSpace(request.Header.Get("X-Scope-OrgName"))
+					rawScopeName := strings.TrimSpace(request.Header.Get("X-Scope-OrgName"))
+					rawScoperTenant := strings.TrimSpace(request.Header.Get("X-Scoper-Tenant"))
+					tenantOverride := rawScopeName
 					if tenantOverride == "" {
-						tenantOverride = strings.TrimSpace(request.Header.Get("X-Scoper-Tenant"))
+						tenantOverride = rawScoperTenant
 					}
-					log.Printf("OPAMP connection request from: %s", request.RemoteAddr)
+					log.Printf("OPAMP connection request from: %s (X-Scope-OrgName=%q, X-Scoper-Tenant=%q)", request.RemoteAddr, rawScopeName, rawScoperTenant)
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: types.ConnectionCallbacks{
