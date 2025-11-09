@@ -9,6 +9,83 @@ const RESOURCE_PREFIX = `${RESOURCE_ROOT}/plugin-api`;
 const PROXY_PREFIX = `/api/plugin-proxy/${PLUGIN_ID}/plugin-api`;
 const STANDALONE_PREFIX = '/plugin-api';
 
+const DEFAULT_OPAMP_WS = 'ws://localhost:4321/v1/opamp';
+
+const normalizeOpampPath = (pathname?: string | null): string => {
+  if (!pathname || pathname.trim() === '' || pathname === '/') {
+    return '/v1/opamp';
+  }
+  const trimmed = pathname.replace(/\/+$/, '');
+  if (trimmed.endsWith('/v1/opamp')) {
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  }
+  const normalized = `${trimmed}/v1/opamp`;
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+};
+
+const coerceWebsocketUrlFromServer = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    let protocol = parsed.protocol;
+    if (protocol === 'http:') {
+      protocol = 'ws:';
+    } else if (protocol === 'https:') {
+      protocol = 'wss:';
+    } else if (protocol !== 'ws:' && protocol !== 'wss:') {
+      protocol = 'ws:';
+    }
+    const path = normalizeOpampPath(parsed.pathname);
+    const search = parsed.search ?? '';
+    return `${protocol}//${parsed.host}${path}${search}`;
+  } catch {
+    // If parsing fails, fall through to other strategies
+  }
+  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) {
+    const cleaned = trimmed.replace(/\/+$/, '');
+    if (/\/v1\/opamp$/i.test(cleaned)) {
+      return cleaned;
+    }
+    return `${cleaned}/v1/opamp`;
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return coerceWebsocketUrlFromServer(trimmed);
+  }
+  return null;
+};
+
+const coerceWebsocketUrlFromEndpoint = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return coerceWebsocketUrlFromServer(trimmed);
+  }
+  if (/^[\w\.\-]+:\d+$/.test(trimmed)) {
+    const sanitized = trimmed.replace(/^0\.0\.0\.0/, 'localhost');
+    return `ws://${sanitized}/v1/opamp`;
+  }
+  return null;
+};
+
+const buildOpampConnectionUrl = (serverUrl?: string | null, endpoint?: string | null): string => {
+  return (
+    coerceWebsocketUrlFromServer(serverUrl) ??
+    coerceWebsocketUrlFromEndpoint(endpoint) ??
+    DEFAULT_OPAMP_WS
+  );
+};
+
 type RuntimeMode = 'grafana' | 'standalone';
 type GrafanaTransport = 'proxy' | 'resources';
 
@@ -190,6 +267,11 @@ const rawBackendSrv = getBackendSrv();
 
 type FetchOptions = Omit<FetchRequest, 'url' | 'method'>;
 
+type OpampSettingsResponse = {
+  opampServerURL?: string | null;
+  opampEndpoint?: string | null;
+};
+
 const fetchWithAuth = async <T = any>({ responseType, ...rest }: FetchRequest): Promise<T> => {
   const response = await lastValueFrom(
     rawBackendSrv.fetch<T>({
@@ -273,6 +355,7 @@ export const App = () => {
   const [organizations, setOrganizations] = useState<any[]>([]);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
+  const [opampConnectionUrl, setOpampConnectionUrl] = useState<string>(DEFAULT_OPAMP_WS);
 
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -344,13 +427,24 @@ export const App = () => {
     }
   };
 
+  const loadOpampSettings = useCallback(async () => {
+    try {
+      const response = await backendSrv.get<OpampSettingsResponse>('/settings');
+      const derived = buildOpampConnectionUrl(response?.opampServerURL, response?.opampEndpoint);
+      setOpampConnectionUrl(derived);
+    } catch (err) {
+      console.error('Failed to load OpAMP settings:', err);
+    }
+  }, []);
+
   useEffect(() => {
     loadOrganizations();
     fetchAgents();
+    loadOpampSettings();
     // Poll every 10 seconds to quickly catch health status changes (degraded/unhealthy agents)
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadOpampSettings]);
 
   useEffect(() => {
     if (selectedOrgId !== null) {
@@ -360,6 +454,18 @@ export const App = () => {
       return () => clearInterval(interval);
     }
   }, [selectedOrgId]);
+
+  useEffect(() => {
+    if (selectedOrgId === null) {
+      return;
+    }
+    const match = organizations.find((org: any) => org.id === selectedOrgId);
+    if (match && match.name) {
+      setCurrentOrgName(match.name);
+    } else if (!match) {
+      setCurrentOrgName('');
+    }
+  }, [selectedOrgId, organizations]);
 
   const loadOrganizations = async () => {
     try {
@@ -835,8 +941,14 @@ export const App = () => {
                       borderLeft: '1px solid #E5E7EB',
                       fontSize: 12 
                     }}>
-                      <span style={{ color: '#6B7280' }}>Viewing:</span> <span style={{ fontWeight: 600, color: '#3B82F6' }}>Organization {selectedOrgId}</span>
-                      {currentOrgName && <span style={{ color: '#9CA3AF' }}> ({currentOrgName})</span>}
+                      <span style={{ color: '#6B7280' }}>Viewing:</span>{' '}
+                      <span style={{ fontWeight: 600, color: '#3B82F6' }}>
+                        {currentOrgName || `Organization ${selectedOrgId}`}
+                      </span>
+                      <span style={{ color: '#9CA3AF' }}>
+                        {' '}
+                        (ID: {selectedOrgId})
+                      </span>
                     </div>
                   )}
                 </div>
@@ -876,7 +988,9 @@ export const App = () => {
               }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
                 <div style={{ fontSize: 18, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
-                  {selectedOrgId ? `No collectors found in Organization ${selectedOrgId}` : 'No collectors found'}
+                  {selectedOrgId
+                    ? `No collectors found in ${currentOrgName ? `${currentOrgName} (ID: ${selectedOrgId})` : `Organization ${selectedOrgId}`}`
+                    : 'No collectors found'}
                 </div>
                 <div style={{ fontSize: 14, color: '#6B7280', maxWidth: 500, margin: '0 auto' }}>
                   {searchQuery ? (
@@ -888,17 +1002,18 @@ export const App = () => {
                       <br />
                       Connect your OpenTelemetry Collector agents via OpAMP to see them here.
                       <br />
-                      Configure your agent to connect to: <code style={{
+                      Configure your agent to connect to:{' '}
+                      <code style={{
                         background: '#F3F4F6',
                         padding: '2px 8px',
                         borderRadius: 4,
                         fontSize: 13,
                         fontFamily: 'monospace'
-                      }}>ws://localhost:4321/opamp</code>
+                      }}>{opampConnectionUrl}</code>
                       <br />
                       <br />
                       <span style={{ fontSize: 12, color: '#9CA3AF' }}>
-                        💡 Tip: Set <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>org_id</code> or <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>organization.id</code> in agent labels to assign them to this organization.
+                        💡 Tip: Set <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>org_id</code>, <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>organization.id</code>, or <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>tenant.id</code> in agent labels, or provide <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>tenant.name</code>/<code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>organization.name</code> that matches an existing organization.
                       </span>
                     </>
                   ) : (
@@ -908,13 +1023,14 @@ export const App = () => {
                       <br />
                       Or connect your OpenTelemetry Collector agents via OpAMP to see them here.
                       <br />
-                      Configure your agent to connect to: <code style={{
+                      Configure your agent to connect to:{' '}
+                      <code style={{
                         background: '#F3F4F6',
                         padding: '2px 8px',
                         borderRadius: 4,
                         fontSize: 13,
                         fontFamily: 'monospace'
-                      }}>ws://localhost:4321/opamp</code>
+                      }}>{opampConnectionUrl}</code>
                     </>
                   )}
                 </div>

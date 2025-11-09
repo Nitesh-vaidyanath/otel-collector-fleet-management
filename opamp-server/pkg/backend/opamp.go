@@ -45,6 +45,54 @@ func normalizeAgentUID(uid string) string {
 	return strings.ReplaceAll(uid, "-", "")
 }
 
+func resolveOrgIDFromLabels(labels map[string]string) (int64, string) {
+	orgID := int64(1)
+	matchedKey := ""
+
+	if labels == nil {
+		return orgID, matchedKey
+	}
+
+	numericKeys := []string{"org_id", "organization.id", "tenant.id"}
+	numericMatched := false
+	for _, key := range numericKeys {
+		if val, ok := labels[key]; ok {
+			var parsed int64
+			if _, err := fmt.Sscanf(val, "%d", &parsed); err == nil && parsed > 0 {
+				orgID = parsed
+				matchedKey = key
+				numericMatched = true
+				break
+			}
+		}
+	}
+
+	attemptedNames := []string{}
+	nameKeys := []string{"tenant.name", "organization.name", "tenant"}
+	for _, key := range nameKeys {
+		if val, ok := labels[key]; ok {
+			trimmed := strings.TrimSpace(val)
+			if trimmed == "" {
+				continue
+			}
+			if id, found := lookupOrgIDByName(trimmed); found {
+				return id, key
+			}
+			attemptedNames = append(attemptedNames, fmt.Sprintf("%s=%q", key, trimmed))
+		}
+	}
+
+	if len(attemptedNames) > 0 {
+		if numericMatched && matchedKey != "" {
+			log.Printf("WARNING: Could not resolve organization by name for labels (%s); keeping org_id=%d from %s", strings.Join(attemptedNames, ", "), orgID, matchedKey)
+		} else {
+			log.Printf("WARNING: Could not resolve organization by name for labels (%s); defaulting to org_id=%d", strings.Join(attemptedNames, ", "), orgID)
+		}
+	}
+
+	return orgID, matchedKey
+}
+
 // extractCollectorConfigFromCRD extracts the collector configuration from a full OpenTelemetryCollector CRD YAML
 // The bridge sends the full CRD (with metadata, spec, etc.) but we only need spec.config (the actual collector config)
 // For pushing config to existing collectors, we MUST send ONLY spec.config, not the full CRD
@@ -132,31 +180,7 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 	}
 
 	// Try to determine org_id/tenant from bridge labels or default to 1
-	orgID := int64(1)
-	if orgLabel, ok := labels["org_id"]; ok {
-		fmt.Sscanf(orgLabel, "%d", &orgID)
-	}
-	if orgLabel, ok := labels["organization.id"]; ok {
-		fmt.Sscanf(orgLabel, "%d", &orgID)
-	}
-	if orgLabel, ok := labels["tenant.id"]; ok {
-		fmt.Sscanf(orgLabel, "%d", &orgID)
-	}
-	if tenantName, ok := labels["tenant.name"]; ok {
-		if id, ok := lookupOrgIDByName(tenantName); ok {
-			orgID = id
-		}
-	}
-	if tenantName, ok := labels["organization.name"]; ok {
-		if id, ok := lookupOrgIDByName(tenantName); ok {
-			orgID = id
-		}
-	}
-	if tenantName, ok := labels["tenant"]; ok {
-		if id, ok := lookupOrgIDByName(tenantName); ok {
-			orgID = id
-		}
-	}
+	orgID, _ := resolveOrgIDFromLabels(labels)
 
 	// Mark old bridge instances as offline (same org_id, different bridge_uid)
 	_, err := db.Exec(`
@@ -209,32 +233,7 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 	labelsJSON, _ := json.Marshal(labels)
 	capabilitiesJSON, _ := json.Marshal(capabilities)
 
-	// Try to determine org_id from agent labels or default to 1
-	orgID := int64(1)
-	if orgLabel, ok := labels["org_id"]; ok {
-		fmt.Sscanf(orgLabel, "%d", &orgID)
-	}
-	if orgLabel, ok := labels["organization.id"]; ok {
-		fmt.Sscanf(orgLabel, "%d", &orgID)
-	}
-	if orgLabel, ok := labels["tenant.id"]; ok {
-		fmt.Sscanf(orgLabel, "%d", &orgID)
-	}
-	if tenantName, ok := labels["tenant.name"]; ok {
-		if id, ok := lookupOrgIDByName(tenantName); ok {
-			orgID = id
-		}
-	}
-	if tenantName, ok := labels["organization.name"]; ok {
-		if id, ok := lookupOrgIDByName(tenantName); ok {
-			orgID = id
-		}
-	}
-	if tenantName, ok := labels["tenant"]; ok {
-		if id, ok := lookupOrgIDByName(tenantName); ok {
-			orgID = id
-		}
-	}
+	orgID, _ := resolveOrgIDFromLabels(labels)
 
 	// Get org name
 	var orgName string
