@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ const (
 
 type reqCtx struct {
 	OrgID    int64
+	OrgName  string
 	Role     Role
 	UserID   int64
 	UserName string
@@ -87,40 +89,28 @@ func getUserFromRequest(r *http.Request) (int64, string) {
 	return userID, userName
 }
 
-func getOrgFromRequest(r *http.Request) int64 {
-	if orgHeader := r.Header.Get("X-Scoper-Org-Id"); orgHeader != "" {
-		var orgID int64
-		if _, err := fmt.Sscanf(orgHeader, "%d", &orgID); err == nil && orgID > 0 {
-			return orgID
-		}
+func resolveOrgContext(r *http.Request) (int64, string) {
+	name := strings.TrimSpace(r.Header.Get("X-Scoper-Tenant"))
+	if name == "" {
+		name = strings.TrimSpace(r.Header.Get("X-Grafana-Org-Name"))
 	}
-	if orgHeader := r.Header.Get("X-Scoper-OrgID"); orgHeader != "" {
-		var orgID int64
-		if _, err := fmt.Sscanf(orgHeader, "%d", &orgID); err == nil && orgID > 0 {
-			return orgID
-		}
+	if name == "" {
+		name = "Default Organization"
 	}
-	if tenantName := r.Header.Get("X-Scoper-Tenant"); tenantName != "" {
-		if orgID, ok := lookupOrgIDByName(tenantName); ok {
-			return orgID
-		}
+	if id, ok := ensureOrgIDByName(name); ok {
+		return id, name
 	}
-	// Get org ID from query parameter (for UI selection)
-	if orgParam := r.URL.Query().Get("org_id"); orgParam != "" {
-		var orgID int64
-		if _, err := fmt.Sscanf(orgParam, "%d", &orgID); err == nil && orgID > 0 {
-			return orgID
-		}
+	return 1, "Default Organization"
+}
+
+func lookupOrgNameByID(orgID int64) string {
+	db := mustDB()
+	defer db.Close()
+	var orgName sql.NullString
+	if err := db.QueryRow(`SELECT name FROM organizations WHERE id=?`, orgID).Scan(&orgName); err == nil && orgName.Valid && strings.TrimSpace(orgName.String) != "" {
+		return orgName.String
 	}
-	// Get org ID from Grafana header
-	if orgHeader := r.Header.Get("X-Grafana-Org-Id"); orgHeader != "" {
-		var orgID int64
-		if _, err := fmt.Sscanf(orgHeader, "%d", &orgID); err == nil && orgID > 0 {
-			return orgID
-		}
-	}
-	// Default to org 1
-	return 1
+	return fmt.Sprintf("Organization %d", orgID)
 }
 
 func allow(have Role, need Role) bool { return int(have) >= int(need) }
@@ -143,9 +133,16 @@ func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFun
 
 		role := roleFromHeader(r)
 		userID, userName := getUserFromRequest(r)
-		orgID := getOrgFromRequest(r)
+		orgID, orgName := resolveOrgContext(r)
 		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
-		next(w, r, reqCtx{OrgID: orgID, Role: role, UserID: userID, UserName: userName, IsAdmin: isAdmin})
+		next(w, r, reqCtx{
+			OrgID:    orgID,
+			OrgName:  orgName,
+			Role:     role,
+			UserID:   userID,
+			UserName: userName,
+			IsAdmin:  isAdmin,
+		})
 	}
 }
 
@@ -171,8 +168,15 @@ func rbac(min Role, next func(http.ResponseWriter, *http.Request, reqCtx)) http.
 			return
 		}
 		userID, userName := getUserFromRequest(r)
-		orgID := getOrgFromRequest(r)
+		orgID, orgName := resolveOrgContext(r)
 		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
-		next(w, r, reqCtx{OrgID: orgID, Role: role, UserID: userID, UserName: userName, IsAdmin: isAdmin})
+		next(w, r, reqCtx{
+			OrgID:    orgID,
+			OrgName:  orgName,
+			Role:     role,
+			UserID:   userID,
+			UserName: userName,
+			IsAdmin:  isAdmin,
+		})
 	}
 }

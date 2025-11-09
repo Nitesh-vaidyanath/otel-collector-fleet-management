@@ -148,12 +148,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// Get org_id from query param if provided, otherwise use context org_id
-		orgIDParam := r.URL.Query().Get("org_id")
-		var orgID int64 = c.OrgID
-		if orgIDParam != "" {
-			fmt.Sscanf(orgIDParam, "%d", &orgID)
-		}
+		orgID := c.OrgID
 
 		// Use subquery to get latest agent per agent_uid to prevent duplicates
 		// For OpAMP Bridge instances, deduplicate by name since they share the same logical identity
@@ -229,9 +224,10 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			list = append(list, a)
 		}
 		// Get org name for display
-		var orgName sql.NullString
-		db.QueryRow(`SELECT name FROM organizations WHERE id=?`, orgID).Scan(&orgName)
-
+		responseOrgName := c.OrgName
+		if strings.TrimSpace(responseOrgName) == "" {
+			responseOrgName = lookupOrgNameByID(orgID)
+		}
 		jsonOK(w, map[string]any{
 			"items": list,
 			"userRole": map[string]any{
@@ -239,7 +235,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				"isAdmin": c.IsAdmin,
 			},
 			"orgID":   orgID,
-			"orgName": orgName.String,
+			"orgName": responseOrgName,
 		})
 	case http.MethodPost:
 		var in struct{ AgentUID, Name string }
@@ -268,11 +264,7 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 	db := mustDB()
 	defer db.Close()
 
-	orgIDParam := r.URL.Query().Get("org_id")
-	var orgID int64 = c.OrgID
-	if orgIDParam != "" {
-		fmt.Sscanf(orgIDParam, "%d", &orgID)
-	}
+	orgID := c.OrgID
 
 	// Get all OpAMP Bridges from bridges table (NOT agents table)
 	// CRITICAL: Bridges are stored in bridges table, collectors in agents table
@@ -451,9 +443,10 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		bridges = append(bridges, bridge)
 	}
 
-	// Get org name for display
-	var orgName sql.NullString
-	db.QueryRow(`SELECT name FROM organizations WHERE id=?`, orgID).Scan(&orgName)
+	orgName := c.OrgName
+	if strings.TrimSpace(orgName) == "" {
+		orgName = lookupOrgNameByID(orgID)
+	}
 
 	jsonOK(w, map[string]any{
 		"bridges": bridges,
@@ -462,7 +455,7 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			"isAdmin": c.IsAdmin,
 		},
 		"orgID":   orgID,
-		"orgName": orgName.String,
+		"orgName": orgName,
 	})
 }
 
@@ -497,6 +490,10 @@ func bridgeDeleteHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			http.Error(w, "bridge not found", 404)
 			return
 		}
+		if orgID != c.OrgID {
+			http.Error(w, "bridge belongs to a different tenant", http.StatusForbidden)
+			return
+		}
 		// Delete from agents table (fallback)
 		_, err = db.Exec(`DELETE FROM agents WHERE id=? AND org_id=?`, bridgeID, c.OrgID)
 		if err != nil {
@@ -504,6 +501,10 @@ func bridgeDeleteHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			return
 		}
 	} else {
+		if orgID != c.OrgID {
+			http.Error(w, "bridge belongs to a different tenant", http.StatusForbidden)
+			return
+		}
 		// Delete from bridges table
 		_, err = db.Exec(`DELETE FROM bridges WHERE id=? AND org_id=?`, bridgeID, c.OrgID)
 		if err != nil {

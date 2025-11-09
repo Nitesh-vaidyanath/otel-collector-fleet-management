@@ -42,3 +42,32 @@ func lookupOrgIDByName(name string) (int64, bool) {
 
 	return 0, false
 }
+
+func ensureOrgIDByName(name string) (int64, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, false
+	}
+
+	if id, ok := lookupOrgIDByName(name); ok {
+		return id, true
+	}
+
+	db := mustDB()
+	defer db.Close()
+
+	res, err := db.Exec(`
+		INSERT INTO organizations (name) VALUES (?)
+		ON DUPLICATE KEY UPDATE name=VALUES(name)
+	`, name)
+	if err != nil {
+		return 0, false
+	}
+
+	if id, err := res.LastInsertId(); err == nil && id > 0 {
+		return id, true
+	}
+
+	// If LastInsertId is 0 (duplicate key path), re-query
+	return lookupOrgIDByName(name)
+}

@@ -2817,11 +2817,41 @@ var normalizeUrl = (rawUrl) => {
   return `${base}${urlWithoutBase}`;
 };
 var rawBackendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
-var fetchWithAuth = async ({ responseType, ...rest }) => {
+var tenantHeaderValue = null;
+var setTenantHeaderValue = (value) => {
+  tenantHeaderValue = value && value.trim() ? value.trim() : null;
+};
+var normalizeRequestHeaders = (incoming) => {
+  if (!incoming) {
+    return {};
+  }
+  if (incoming instanceof Headers) {
+    const headers = {};
+    incoming.forEach((value, key) => {
+      headers[key] = value;
+    });
+    return headers;
+  }
+  if (Array.isArray(incoming)) {
+    return incoming.reduce((acc, [key, value]) => {
+      if (key) {
+        acc[key] = String(value ?? "");
+      }
+      return acc;
+    }, {});
+  }
+  return { ...incoming };
+};
+var fetchWithAuth = async ({ responseType, headers: requestHeaders, ...rest }) => {
+  const headers = normalizeRequestHeaders(requestHeaders);
+  if (tenantHeaderValue && !headers["X-Scoper-Tenant"]) {
+    headers["X-Scoper-Tenant"] = tenantHeaderValue;
+  }
   const response = await lastValueFrom(
     rawBackendSrv.fetch({
       responseType: responseType ?? "json",
-      ...rest
+      ...rest,
+      headers
     })
   );
   if (response.status >= 200 && response.status < 300) {
@@ -2883,6 +2913,7 @@ var App = () => {
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [currentOrgName, setCurrentOrgName] = useState("");
   const [agentActivityLog, setAgentActivityLog] = useState([]);
+  const [grafanaOrgName, setGrafanaOrgName] = useState("");
   const [opampConnectionUrl, setOpampConnectionUrl] = useState(DEFAULT_OPAMP_WS);
   const [isAdmin, setIsAdmin] = useState(false);
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
@@ -2952,12 +2983,31 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       console.error("Failed to load OpAMP settings:", err);
     }
   }, []);
+  const loadGrafanaOrgContext = useCallback(async () => {
+    try {
+      const org = await rawBackendSrv.get("/api/org");
+      const orgName = org && org.name ? String(org.name) : "";
+      setGrafanaOrgName(orgName);
+      setTenantHeaderValue(orgName);
+    } catch (err) {
+      console.error("Failed to load Grafana org context:", err);
+    }
+  }, []);
   useEffect(() => {
-    fetchAgents();
+    const init = async () => {
+      await loadGrafanaOrgContext();
+      await fetchAgents();
+    };
+    init();
     loadOpampSettings();
     const interval = setInterval(fetchAgents, 1e4);
     return () => clearInterval(interval);
-  }, [loadOpampSettings]);
+  }, [loadGrafanaOrgContext, loadOpampSettings]);
+  useEffect(() => {
+    if (!currentOrgName && grafanaOrgName) {
+      setCurrentOrgName(grafanaOrgName);
+    }
+  }, [grafanaOrgName, currentOrgName]);
   const handleRefresh = () => {
     setRefreshing(true);
     fetchAgents();
@@ -3336,7 +3386,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     color: "#111827"
   } }, "OpAMP Bridges (", bridges.length, ")"), /* @__PURE__ */ React.createElement("div", { style: {
     display: "grid",
-    gridTemplateColumns: "30px 200px 1fr 120px 100px 100px",
+    gridTemplateColumns: "30px minmax(200px, 260px) minmax(0, 1fr) 120px 120px 110px",
     gap: 12,
     padding: "12px 16px",
     background: "#F9FAFB",
@@ -3362,7 +3412,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         },
         style: {
           display: "grid",
-          gridTemplateColumns: "30px 200px 1fr 120px 100px 100px",
+          gridTemplateColumns: "30px minmax(200px, 260px) minmax(0, 1fr) 120px 120px 110px",
           gap: 12,
           padding: "12px 16px",
           background: isExpanded ? "#F3F4F6" : "white",
@@ -3383,9 +3433,11 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         fontFamily: "monospace",
         fontSize: 12,
         color: "#111827",
-        fontWeight: 600
+        fontWeight: 600,
+        wordBreak: "break-all",
+        whiteSpace: "normal"
       } }, bridge.name),
-      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", bridge.cluster), bridge.labels && Object.keys(bridge.labels).length > 0 && Object.entries(bridge.labels).filter(([key]) => !["k8s.namespace", "k8s.cluster", "cluster", "namespace"].includes(key)).slice(0, 2).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key, style: { fontSize: 10, color: "#374151", padding: "3px 8px", background: "#F3F4F6", borderRadius: 4 } }, key, ": ", value)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 500 } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", bridge.cluster), bridge.labels && Object.keys(bridge.labels).length > 0 ? Object.entries(bridge.labels).filter(([key]) => !["k8s.namespace", "k8s.cluster", "cluster", "namespace"].includes(key)).slice(0, 3).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key: `${key}:${value}`, style: { fontSize: 10, color: "#374151", padding: "3px 8px", background: "#F3F4F6", borderRadius: 4 } }, key, ": ", value)) : /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#9CA3AF" } }, "no labels"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 500 } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
       /* @__PURE__ */ React.createElement("div", null, getStatusBadge(bridge.status)),
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridge.version || "unknown"),
       /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation() }, bridge.status === "offline" && /* @__PURE__ */ React.createElement(

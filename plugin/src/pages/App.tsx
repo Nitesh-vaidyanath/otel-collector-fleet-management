@@ -272,11 +272,45 @@ type OpampSettingsResponse = {
   opampEndpoint?: string | null;
 };
 
-const fetchWithAuth = async <T = any>({ responseType, ...rest }: FetchRequest): Promise<T> => {
+let tenantHeaderValue: string | null = null;
+
+const setTenantHeaderValue = (value?: string | null) => {
+  tenantHeaderValue = value && value.trim() ? value.trim() : null;
+};
+
+const normalizeRequestHeaders = (incoming?: HeadersInit | Record<string, string>): Record<string, string> => {
+  if (!incoming) {
+    return {};
+  }
+  if (incoming instanceof Headers) {
+    const headers: Record<string, string> = {};
+    incoming.forEach((value, key) => {
+      headers[key] = value;
+    });
+    return headers;
+  }
+  if (Array.isArray(incoming)) {
+    return incoming.reduce<Record<string, string>>((acc, [key, value]) => {
+      if (key) {
+        acc[key] = String(value ?? '');
+      }
+      return acc;
+    }, {});
+  }
+  return { ...(incoming as Record<string, string>) };
+};
+
+const fetchWithAuth = async <T = any>({ responseType, headers: requestHeaders, ...rest }: FetchRequest): Promise<T> => {
+  const headers = normalizeRequestHeaders(requestHeaders);
+  if (tenantHeaderValue && !headers['X-Scoper-Tenant']) {
+    headers['X-Scoper-Tenant'] = tenantHeaderValue;
+  }
+
   const response = await lastValueFrom(
     rawBackendSrv.fetch<T>({
       responseType: (responseType as any) ?? 'json',
       ...rest,
+      headers,
     })
   );
 
@@ -354,6 +388,7 @@ export const App = () => {
   const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
+  const [grafanaOrgName, setGrafanaOrgName] = useState<string>('');
   const [opampConnectionUrl, setOpampConnectionUrl] = useState<string>(DEFAULT_OPAMP_WS);
 
   const [isAdmin, setIsAdmin] = useState(false);
@@ -431,13 +466,33 @@ export const App = () => {
     }
   }, []);
 
+  const loadGrafanaOrgContext = useCallback(async () => {
+    try {
+      const org = await rawBackendSrv.get('/api/org');
+      const orgName = (org && org.name) ? String(org.name) : '';
+      setGrafanaOrgName(orgName);
+      setTenantHeaderValue(orgName);
+    } catch (err) {
+      console.error('Failed to load Grafana org context:', err);
+    }
+  }, []);
+
   useEffect(() => {
-    fetchAgents();
+    const init = async () => {
+      await loadGrafanaOrgContext();
+      await fetchAgents();
+    };
+    init();
     loadOpampSettings();
-    // Poll every 10 seconds to quickly catch health status changes (degraded/unhealthy agents)
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
-  }, [loadOpampSettings]);
+  }, [loadGrafanaOrgContext, loadOpampSettings]);
+
+  useEffect(() => {
+    if (!currentOrgName && grafanaOrgName) {
+      setCurrentOrgName(grafanaOrgName);
+    }
+  }, [grafanaOrgName, currentOrgName]);
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -986,7 +1041,7 @@ export const App = () => {
                 {/* Bridge Header Row */}
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '30px 200px 1fr 120px 100px 100px',
+                  gridTemplateColumns: '30px minmax(200px, 260px) minmax(0, 1fr) 120px 120px 110px',
                   gap: 12,
                   padding: '12px 16px',
                   background: '#F9FAFB',
@@ -1023,7 +1078,7 @@ export const App = () => {
                             }}
                             style={{
                               display: 'grid',
-                              gridTemplateColumns: '30px 200px 1fr 120px 100px 100px',
+                              gridTemplateColumns: '30px minmax(200px, 260px) minmax(0, 1fr) 120px 120px 110px',
                               gap: 12,
                               padding: '12px 16px',
                               background: isExpanded ? '#F3F4F6' : 'white',
@@ -1049,7 +1104,9 @@ export const App = () => {
                               fontFamily: 'monospace',
                               fontSize: 12,
                               color: '#111827',
-                              fontWeight: 600
+                              fontWeight: 600,
+                              wordBreak: 'break-all',
+                              whiteSpace: 'normal'
                             }}>
                               {bridge.name}
                             </div>
@@ -1066,15 +1123,17 @@ export const App = () => {
                                   cluster: {bridge.cluster}
                                 </span>
                               )}
-                              {bridge.labels && Object.keys(bridge.labels).length > 0 && (
+                              {bridge.labels && Object.keys(bridge.labels).length > 0 ? (
                                 Object.entries(bridge.labels)
                                   .filter(([key]) => !['k8s.namespace', 'k8s.cluster', 'cluster', 'namespace'].includes(key))
-                                  .slice(0, 2)
+                                  .slice(0, 3)
                                   .map(([key, value]) => (
-                                    <span key={key} style={{ fontSize: 10, color: '#374151', padding: '3px 8px', background: '#F3F4F6', borderRadius: 4 }}>
+                                    <span key={`${key}:${value}`} style={{ fontSize: 10, color: '#374151', padding: '3px 8px', background: '#F3F4F6', borderRadius: 4 }}>
                                       {key}: {value}
                                     </span>
                                   ))
+                              ) : (
+                                <span style={{ fontSize: 10, color: '#9CA3AF' }}>no labels</span>
                               )}
                               <span style={{ fontSize: 11, color: '#6B7280', fontWeight: 500 }}>
                                 {bridgeCollectors.length} collector{bridgeCollectors.length !== 1 ? 's' : ''}

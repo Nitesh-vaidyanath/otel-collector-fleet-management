@@ -75,7 +75,10 @@ func resolveOrgIDFromLabels(labels map[string]string) (int64, string) {
 			if trimmed == "" {
 				continue
 			}
-			if id, found := lookupOrgIDByName(trimmed); found {
+			if strings.EqualFold(trimmed, "main org.") || strings.EqualFold(trimmed, "main org") || strings.EqualFold(trimmed, "default organization") {
+				return 1, key
+			}
+			if id, found := ensureOrgIDByName(trimmed); found {
 				return id, key
 			}
 			attemptedNames = append(attemptedNames, fmt.Sprintf("%s=%q", key, trimmed))
@@ -192,6 +195,24 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 	`, orgID, instanceUID)
 	if err == nil {
 		log.Printf("OpAMP Bridge reconnected: Marked old bridge instances as offline (org_id=%d, new_uid=%s)", orgID, instanceUID[:8])
+	}
+
+	// Derive nicer defaults for name/version from labels if not provided
+	if name == "" || name == instanceUID || (len(name) == len(instanceUID) && normalizeAgentUID(name) == instanceUID) {
+		if v, ok := labels["service.name"]; ok && strings.TrimSpace(v) != "" {
+			name = v
+		} else if v, ok := labels["resource.attributes.service.name"]; ok && strings.TrimSpace(v) != "" {
+			name = v
+		}
+	}
+	if version == "" || version == "unknown" {
+		if v, ok := labels["service.version"]; ok && strings.TrimSpace(v) != "" {
+			version = v
+		} else if v, ok := labels["collector.version"]; ok && strings.TrimSpace(v) != "" {
+			version = v
+		} else if v, ok := labels["version"]; ok && strings.TrimSpace(v) != "" {
+			version = v
+		}
 	}
 
 	// UPSERT bridge into bridges table
