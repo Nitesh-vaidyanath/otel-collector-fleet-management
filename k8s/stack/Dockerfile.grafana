@@ -1,2 +1,0 @@
-FROM grafana/grafana:11.2.0
-COPY dist /var/lib/grafana/plugins/otel-collector-agent-fleet-management

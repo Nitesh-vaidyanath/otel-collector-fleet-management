@@ -168,7 +168,7 @@ func determineConfigMapKey(isKubernetes bool, namespace, collectorName string) (
 
 // registerBridge registers an OpAMP Bridge in the bridges table (NOT agents table)
 // Bridges are NOT collectors - they manage collectors
-func (m *OpampManager) registerBridge(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}) error {
+func (m *OpampManager) registerBridge(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, tenantOverride string) error {
 	// Normalize UID for consistent storage
 	instanceUID = normalizeAgentUID(instanceUID)
 	db := mustDB()
@@ -184,6 +184,11 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 
 	// Try to determine org_id/tenant from bridge labels or default to 1
 	orgID, _ := resolveOrgIDFromLabels(labels)
+	if tenantOverride := strings.TrimSpace(tenantOverride); tenantOverride != "" {
+		if overrideID, ok := ensureOrgIDByName(tenantOverride); ok {
+			orgID = overrideID
+		}
+	}
 
 	// Mark old bridge instances as offline (same org_id, different bridge_uid)
 	_, err := db.Exec(`
@@ -1254,6 +1259,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 		Settings: server.Settings{
 			Callbacks: types.Callbacks{
 				OnConnecting: func(request *http.Request) types.ConnectionResponse {
+					tenantOverride := strings.TrimSpace(request.Header.Get("X-Scope-OrgName"))
+					if tenantOverride == "" {
+						tenantOverride = strings.TrimSpace(request.Header.Get("X-Scoper-Tenant"))
+					}
 					log.Printf("OPAMP connection request from: %s", request.RemoteAddr)
 					return types.ConnectionResponse{
 						Accept: true,
@@ -2008,7 +2017,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 
 								if isOpAMPBridge {
 									// This is a bridge - register in bridges table, NOT agents table
-									if err := m.registerBridge(instanceUID, name, version, labels, capabilities); err != nil {
+									if err := m.registerBridge(instanceUID, name, version, labels, capabilities, tenantOverride); err != nil {
 										log.Printf("Failed to register bridge: %v", err)
 									} else {
 										log.Printf("✓ Registered OpAMP Bridge: %s (name: %s, version: %s)", instanceUID[:8], name, version)

@@ -1,0 +1,56 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: OpAMPBridge
+metadata:
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+spec:
+  # Replace the endpoint below with the reachable OpAMP WebSocket address for your backend.
+  # Examples:
+  #   Docker Desktop (hosted backend): ws://host.docker.internal:4321/v1/opamp
+  #   In-cluster service: ws://fleet-backend.grafana-fleet.svc.cluster.local:4321/v1/opamp
+  endpoint: ws://host.docker.internal:4321/v1/opamp
+
+  serviceAccount: opamp-bridge
+
+  capabilities:
+    ReportsStatus: true
+    ReportsHealth: true
+    ReportsHeartbeat: true
+    AcceptsRemoteConfig: true
+    ReportsEffectiveConfig: true
+    ReportsRemoteConfig: true
+    ReportsRemoteConfigStatus: true
+    AcceptsOpampConnectionSettings: true
+    AcceptsOtherConnectionSettings: true
+    ReportsConnectionSettingsStatus: true
+    AcceptsRestartCommand: true
+    ReportsAvailableComponents: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opamp-bridge
+rules:
+- apiGroups: ["opentelemetry.io"]
+  resources: ["opentelemetrycollectors"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opamp-bridge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opamp-bridge
+subjects:
+- kind: ServiceAccount
+  name: opamp-bridge
+  namespace: opentelemetry-operator-system
+

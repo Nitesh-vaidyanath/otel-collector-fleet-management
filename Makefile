@@ -56,7 +56,7 @@ build-plugin: build-backend build-frontend
 
 build-test:
 	@echo ">> Building test Docker image"
-	@docker build -f Dockerfile.test -t otel-collector-agent-fleet-management-test:latest .
+	@docker build -f tests/docker/Dockerfile.test -t otel-collector-agent-fleet-management-test:latest .
 	@echo "✓ Test image built"
 
 # Test targets
@@ -82,23 +82,8 @@ test-e2e:
 	@echo ">> Installing Playwright browsers..."
 	@npx playwright install chromium || true
 	@echo ">> Running Playwright tests..."
-	@GRAFANA_USER=admin GRAFANA_PASS=admin npx playwright test || echo "⚠ E2E tests require Grafana running"
+	@GRAFANA_USER=admin GRAFANA_PASS=admin npx playwright test --config tests/e2e/playwright.config.ts || echo "⚠ E2E tests require Grafana running"
 	@echo "✓ E2E tests complete"
-
-test-opamp:
-	@echo ">> Testing OpAMP agent connections"
-	@echo "  - Starting test agents..."
-	@cd test-agents && docker compose -f docker-compose.test-agents.yml up -d
-	@sleep 5
-	@echo "  - Checking agent connections..."
-	@curl -s http://localhost:3000/api/plugins/otel-collector-agent-fleet-management/resources/agents | jq '.' || echo "⚠ Agents not connected yet"
-	@echo "✓ OpAMP agent test complete"
-	@echo "  Run 'make test-opamp-down' to stop test agents"
-
-test-opamp-down:
-	@echo ">> Stopping OpAMP test agents"
-	@cd test-agents && docker compose -f docker-compose.test-agents.yml down
-	@echo "✓ Test agents stopped"
 
 # Docker targets
 docker-build: build-plugin build-test
@@ -121,7 +106,7 @@ docker-down:
 
 docker-test: build-test
 	@echo ">> Running tests in Docker"
-	@docker compose -f docker-compose.test.yml up --abort-on-container-exit
+	@docker compose -f tests/docker/docker-compose.test.yml up --abort-on-container-exit
 	@echo "✓ Docker tests complete"
 
 docker-clean:
@@ -138,7 +123,7 @@ dev-up: build-plugin docker-up
 	@echo ">> Waiting for services to be ready..."
 	@sleep 10
 	@echo "✓ Development environment started"
-	@echo "  Run migrations: ./run-migrations.sh"
+	@echo "  Run migrations: ./scripts/run-migrations.sh"
 	@echo "  Check status: ./status.sh"
 
 dev-down: docker-down
@@ -155,7 +140,7 @@ build-standalone:
 
 standalone-up: build-standalone
 	@echo ">> Starting standalone OpAMP server with Grafana"
-	@docker compose -f docker-compose.standalone.yml up -d
+	@docker compose -f tests/docker/docker-compose.standalone.yml up -d
 	@echo "✓ Standalone services started"
 	@echo "  - Grafana: http://localhost:3000"
 	@echo "  - OpAMP Server: http://localhost:4321"
@@ -163,7 +148,7 @@ standalone-up: build-standalone
 
 standalone-down:
 	@echo ">> Stopping standalone OpAMP server"
-	@docker compose -f docker-compose.standalone.yml down
+	@docker compose -f tests/docker/docker-compose.standalone.yml down
 	@echo "✓ Standalone services stopped"
 
 # Clean target

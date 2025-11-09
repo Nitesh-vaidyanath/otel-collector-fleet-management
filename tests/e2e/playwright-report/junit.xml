@@ -1,0 +1,123 @@
+<testsuites id="" name="" tests="28" failures="1" skipped="27" errors="0" time="0.7494870000000001">
+<testsuite name="auth.setup.ts" timestamp="2025-11-09T17:28:27.868Z" hostname="setup" tests="1" failures="1" skipped="0" time="0.003" errors="0">
+<testcase name="authenticate" classname="auth.setup.ts" time="0.003">
+<failure message="auth.setup.ts:5:6 authenticate" type="FAILURE">
+<![CDATA[  [setup] › auth.setup.ts:5:6 › authenticate ───────────────────────────────────────────────────────
+
+    Error: Error reading storage state from /Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json:
+    ENOENT: no such file or directory, open '/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json'
+]]>
+</failure>
+</testcase>
+</testsuite>
+<testsuite name="plugin.spec.ts" timestamp="2025-11-09T17:28:27.868Z" hostname="chromium" tests="27" failures="0" skipped="27" time="0" errors="0">
+<testcase name="OTel Collector Agent Fleet Management Plugin › should load the plugin page" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display agents list" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display configuration management section" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display monitoring section" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle agent selection" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display pipeline flow diagram" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle organization selection" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display API endpoints correctly" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle error states gracefully" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should refresh metrics automatically" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle configuration creation" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display telemetry data" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle configuration approval workflow" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle configuration revert" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should verify sync status" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display agent health status" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle component type selection" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle YAML configuration editing" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle full-width pipeline diagram" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display processor order correctly" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should display bandwidth metrics between processors" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle receiver to processor mapping" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="OTel Collector Agent Fleet Management Plugin › should handle multiple receiver display" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="API Integration Tests › should fetch agents via API" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="API Integration Tests › should fetch organizations via API" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="API Integration Tests › should fetch health status via API" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+<testcase name="API Integration Tests › should handle 404 for non-existent agent" classname="plugin.spec.ts" time="0">
+<skipped>
+</skipped>
+</testcase>
+</testsuite>
+</testsuites>

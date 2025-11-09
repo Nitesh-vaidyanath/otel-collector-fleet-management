@@ -99,7 +99,7 @@ yarn build
 ### Running E2E Tests
 
 ```bash
-npx playwright test
+npm run test:e2e
 ```
 
 ### Development Workflow
