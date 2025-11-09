@@ -491,7 +491,7 @@ func bridgeDeleteHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			return
 		}
 		if orgID != c.OrgID {
-			http.Error(w, "bridge belongs to a different tenant", http.StatusForbidden)
+			writeJSONError(w, http.StatusForbidden, "bridge belongs to a different tenant")
 			return
 		}
 		// Delete from agents table (fallback)
@@ -502,7 +502,7 @@ func bridgeDeleteHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		}
 	} else {
 		if orgID != c.OrgID {
-			http.Error(w, "bridge belongs to a different tenant", http.StatusForbidden)
+			writeJSONError(w, http.StatusForbidden, "bridge belongs to a different tenant")
 			return
 		}
 		// Delete from bridges table
