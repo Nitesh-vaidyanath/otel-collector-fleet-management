@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,8 @@ type agentConnection struct {
 	conn        types.Connection
 	instanceUID string // Normalized UID for internal storage/lookup
 	originalUID []byte // Original InstanceUid bytes from agent (required by OpAMP spec for ServerToAgent messages)
+	orgID       int64
+	orgName     string
 }
 
 type OpampManager struct {
@@ -168,7 +171,7 @@ func determineConfigMapKey(isKubernetes bool, namespace, collectorName string) (
 
 // registerBridge registers an OpAMP Bridge in the bridges table (NOT agents table)
 // Bridges are NOT collectors - they manage collectors
-func (m *OpampManager) registerBridge(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, tenantOverride string) error {
+func (m *OpampManager) registerBridge(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, tenantOverride string, orgOverrideID int64) error {
 	// Normalize UID for consistent storage
 	instanceUID = normalizeAgentUID(instanceUID)
 	db := mustDB()
@@ -184,7 +187,9 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 
 	// Try to determine org_id/tenant from bridge labels or default to 1
 	orgID, _ := resolveOrgIDFromLabels(labels)
-	if tenantOverride := strings.TrimSpace(tenantOverride); tenantOverride != "" {
+	if orgOverrideID > 0 {
+		orgID = orgOverrideID
+	} else if tenantOverride := strings.TrimSpace(tenantOverride); tenantOverride != "" {
 		if overrideID, ok := ensureOrgIDByName(tenantOverride); ok {
 			orgID = overrideID
 		}
@@ -239,6 +244,40 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 
 	log.Printf("✓ Registered/Updated OpAMP Bridge: %s (version: %s, org_id: %d)", instanceUID[:8], version, orgID)
 	return nil
+}
+
+func resolveOrgFromBridgeHeaders(r *http.Request, tenantOverride string) (int64, string) {
+	candidate := strings.TrimSpace(tenantOverride)
+	if candidate == "" {
+		candidate = strings.TrimSpace(r.Header.Get("X-Scoper-Tenant"))
+	}
+	if candidate == "" {
+		candidate = strings.TrimSpace(r.Header.Get("X-Scope-OrgName"))
+	}
+	if candidate != "" {
+		if id, ok := ensureOrgIDByName(candidate); ok {
+			return id, candidate
+		}
+	}
+
+	numericHeaders := []string{
+		r.Header.Get("X-Scope-Org-Id"),
+		r.Header.Get("X-Scope-OrgID"),
+		r.Header.Get("X-Scoper-Org-Id"),
+		r.Header.Get("X-Scoper-OrgID"),
+		r.Header.Get("X-Grafana-Org-Id"),
+	}
+	for _, raw := range numericHeaders {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(raw, 10, 64); err == nil && id > 0 {
+			return id, lookupOrgNameByID(id)
+		}
+	}
+
+	return 0, ""
 }
 
 func (m *OpampManager) registerAgent(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, currentConfig, currentConfigHash string) error {
@@ -412,9 +451,47 @@ func (m *OpampManager) updateAgentStatus(instanceUID, status string) {
 // 1. Collectors moved to different namespaces (new stable UID = new entity)
 // 2. Two collectors with same name in different namespaces (separate entities)
 // 3. New collectors that appear only via EffectiveConfig (never had a direct connection)
-func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string, message *protobufs.AgentToServer, conn types.Connection) {
+func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string, message *protobufs.AgentToServer, bridgeConn *agentConnection) {
 	db := mustDB()
 	defer db.Close()
+
+	bridgeNormalizedUID := normalizeAgentUID(bridgeInstanceUID)
+	bridgeOrgID := int64(1)
+	bridgeOrgName := "default"
+	if bridgeConn != nil {
+		if bridgeConn.orgID > 0 {
+			bridgeOrgID = bridgeConn.orgID
+		}
+		if strings.TrimSpace(bridgeConn.orgName) != "" {
+			bridgeOrgName = bridgeConn.orgName
+		}
+	}
+
+	// Prefer org assignment from bridges table
+	var orgName sql.NullString
+	orgRow := db.QueryRow(`SELECT org_id FROM bridges WHERE bridge_uid=? OR bridge_uid=? LIMIT 1`, bridgeInstanceUID, bridgeNormalizedUID)
+	if err := orgRow.Scan(&bridgeOrgID); err == nil {
+		orgNameRow := db.QueryRow(`SELECT name FROM organizations WHERE id=? LIMIT 1`, bridgeOrgID)
+		if err := orgNameRow.Scan(&orgName); err == nil && orgName.Valid && strings.TrimSpace(orgName.String) != "" {
+			bridgeOrgName = orgName.String
+		} else if bridgeOrgID != 1 {
+			bridgeOrgName = fmt.Sprintf("Organization %d", bridgeOrgID)
+		}
+	} else {
+		// Fallback: legacy deployments may still have bridge entry in agents table
+		var agentOrgID sql.NullInt64
+		var agentOrgName sql.NullString
+		if err := db.QueryRow(`SELECT org_id, org_name FROM agents WHERE agent_uid=? OR agent_uid=? LIMIT 1`, bridgeInstanceUID, bridgeNormalizedUID).Scan(&agentOrgID, &agentOrgName); err == nil {
+			if agentOrgID.Valid && agentOrgID.Int64 > 0 {
+				bridgeOrgID = agentOrgID.Int64
+			}
+			if agentOrgName.Valid && strings.TrimSpace(agentOrgName.String) != "" {
+				bridgeOrgName = agentOrgName.String
+			} else if bridgeOrgID != 1 {
+				bridgeOrgName = fmt.Sprintf("Organization %d", bridgeOrgID)
+			}
+		}
+	}
 
 	// Fix 1: Check bridge's own health status
 	// If bridge sends Health message, update bridge status based on it
@@ -499,7 +576,6 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 	// If bridge didn't send EffectiveConfig OR ComponentHealthMap, skip status updates (don't mark anything offline)
 	// This can happen during config push or bridge restart
 	// BUT: Still update last_seen_at for all collectors managed by this bridge to prevent cleanup worker from marking them offline
-	bridgeNormalizedUID := normalizeAgentUID(bridgeInstanceUID)
 	if !hasEffectiveConfig {
 		log.Printf("DEBUG: Bridge %s did not send EffectiveConfig or ComponentHealthMap (or both are empty) - updating last_seen_at for all collectors but skipping status updates", bridgeInstanceUID[:8])
 		// Still update last_seen_at for all collectors to prevent them being marked offline
@@ -604,7 +680,7 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 			INSERT INTO agents (org_id, org_name, agent_uid, name, version, status, last_seen_at,
 			                    labels_json, capabilities_json, k8s_namespace, k8s_crd_name, cluster_id,
 			                    current_config_yaml, current_config_hash)
-			VALUES (1, 'default', ?, ?, ?, 'online', NOW(), ?, JSON_OBJECT(), ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, 'online', NOW(), ?, JSON_OBJECT(), ?, ?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE
 				last_seen_at = NOW(),
 				status = IF(status='offline', 'online', status),
@@ -612,10 +688,12 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 				k8s_namespace = VALUES(k8s_namespace),
 				k8s_crd_name = VALUES(k8s_crd_name),
 				cluster_id = VALUES(cluster_id),
+				org_id = VALUES(org_id),
+				org_name = VALUES(org_name),
 				version = IF(VALUES(version) != 'unknown' AND VALUES(version) != '', VALUES(version), version),
 				current_config_yaml = IF(VALUES(current_config_yaml) IS NOT NULL AND VALUES(current_config_yaml) != '', VALUES(current_config_yaml), current_config_yaml),
 				current_config_hash = IF(VALUES(current_config_hash) IS NOT NULL AND VALUES(current_config_hash) != '', VALUES(current_config_hash), current_config_hash)
-		`, stableUID, name, collectorVersion, string(labelsJSON), ns, name, clusterID, collectorConfigYAML, collectorConfigHash)
+		`, bridgeOrgID, bridgeOrgName, stableUID, name, collectorVersion, string(labelsJSON), ns, name, clusterID, collectorConfigYAML, collectorConfigHash)
 
 		if err != nil {
 			log.Printf("ERROR: Failed to UPSERT collector %s/%s (uid: %s): %v", ns, name, stableUID[:8], err)
@@ -624,10 +702,16 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 
 		// CRITICAL FIX (B): Map stable UID to bridge connection so config pushes work
 		// This allows us to send ServerToAgent messages to specific collectors via the bridge
+		var bridgeConnection types.Connection
+		if bridgeConn != nil {
+			bridgeConnection = bridgeConn.conn
+		}
 		m.conns[stableUID] = &agentConnection{
-			conn:        conn,              // Bridge's WebSocket connection
+			conn:        bridgeConnection,  // Bridge's WebSocket connection
 			instanceUID: stableUID,         // Stable UID for this collector
 			originalUID: bridgeOriginalUID, // Bridge's original InstanceUID bytes (per OpAMP spec)
+			orgID:       bridgeOrgID,
+			orgName:     bridgeOrgName,
 		}
 
 		log.Printf("DEBUG: UPSERTed collector %s/%s (uid: %s, version: %s) from bridge EffectiveConfig", ns, name, stableUID[:8], collectorVersion)
@@ -1265,6 +1349,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 					if tenantOverride == "" {
 						tenantOverride = rawScoperTenant
 					}
+					orgOverrideID, orgOverrideName := resolveOrgFromBridgeHeaders(request, tenantOverride)
 					log.Printf("OPAMP connection request from: %s (X-Scope-OrgName=%q, X-Scoper-Tenant=%q)", request.RemoteAddr, rawScopeName, rawScoperTenant)
 					return types.ConnectionResponse{
 						Accept: true,
@@ -2019,7 +2104,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 
 								if isOpAMPBridge {
 									// This is a bridge - register in bridges table, NOT agents table
-									if err := m.registerBridge(instanceUID, name, version, labels, capabilities, tenantOverride); err != nil {
+									if err := m.registerBridge(instanceUID, name, version, labels, capabilities, tenantOverride, orgOverrideID); err != nil {
 										log.Printf("Failed to register bridge: %v", err)
 									} else {
 										log.Printf("✓ Registered OpAMP Bridge: %s (name: %s, version: %s)", instanceUID[:8], name, version)
@@ -2032,11 +2117,22 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 											conn:        conn,
 											instanceUID: instanceUID,
 											originalUID: message.InstanceUid,
+											orgID:       orgOverrideID,
+											orgName:     orgOverrideName,
 										}
 										m.conns[instanceUID] = bridgeConn
+									} else {
+										bridgeConn.conn = conn
+										bridgeConn.originalUID = message.InstanceUid
+										if bridgeConn.orgID == 0 && orgOverrideID > 0 {
+											bridgeConn.orgID = orgOverrideID
+										}
+										if strings.TrimSpace(bridgeConn.orgName) == "" && strings.TrimSpace(orgOverrideName) != "" {
+											bridgeConn.orgName = orgOverrideName
+										}
 									}
 									// Update discovered collectors health (this will UPSERT collectors from EffectiveConfig)
-									m.updateDiscoveredCollectorsHealth(instanceUID, message, bridgeConn.conn)
+									m.updateDiscoveredCollectorsHealth(instanceUID, message, bridgeConn)
 								} else {
 									// This is a collector/agent - register in agents table
 									// Auto-register agent in database with current config

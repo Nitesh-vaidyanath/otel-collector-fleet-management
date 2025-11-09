@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -17,12 +18,14 @@ const (
 )
 
 type reqCtx struct {
-	OrgID    int64
-	OrgName  string
-	Role     Role
-	UserID   int64
-	UserName string
-	IsAdmin  bool
+	OrgID          int64
+	OrgName        string
+	GrafanaOrgID   int64
+	GrafanaOrgName string
+	Role           Role
+	UserID         int64
+	UserName       string
+	IsAdmin        bool
 }
 
 type grafanaContext struct {
@@ -87,7 +90,7 @@ func roleFromHeader(r *http.Request) Role {
 	}
 }
 
-func getUserFromRequest(r *http.Request) (int64, string) {
+func getUserFromRequest(r *http.Request, ctx *grafanaContext) (int64, string) {
 	// Try to get user from Grafana headers (X-Grafana-User-Id, X-Grafana-User-Name)
 	// Grafana passes these headers for authenticated requests through resource handlers
 	userID := int64(1)
@@ -117,7 +120,7 @@ func getUserFromRequest(r *http.Request) (int64, string) {
 
 	// Grafana context fallback
 	if userName == "unknown" || userName == "user" || userID == 1 {
-		if ctx := parseGrafanaContext(r); ctx != nil {
+		if ctx != nil {
 			if ctx.UserID > 0 {
 				userID = ctx.UserID
 			}
@@ -137,40 +140,105 @@ func getUserFromRequest(r *http.Request) (int64, string) {
 	return userID, userName
 }
 
-func resolveOrgContext(r *http.Request) (int64, string) {
+func splitTrailingNumericToken(value string) (string, int64, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", 0, false
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) < 2 {
+		return trimmed, 0, false
+	}
+	last := fields[len(fields)-1]
+	if id, err := strconv.ParseInt(last, 10, 64); err == nil {
+		name := strings.Join(fields[:len(fields)-1], " ")
+		return strings.TrimSpace(name), id, true
+	}
+	return trimmed, 0, false
+}
+
+func detectGrafanaOrg(r *http.Request, ctx *grafanaContext) (int64, string) {
+	numericHeaders := []string{
+		r.Header.Get("X-Scoper-Org-Id"),
+		r.Header.Get("X-Scoper-OrgID"),
+		r.Header.Get("X-Grafana-Org-Id"),
+		r.URL.Query().Get("org_id"),
+	}
+	for _, raw := range numericHeaders {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil && id > 0 {
+			name := strings.TrimSpace(r.Header.Get("X-Scoper-Org-Name"))
+			if name == "" && ctx != nil && strings.TrimSpace(ctx.OrgName) != "" {
+				name = ctx.OrgName
+			}
+			if name == "" {
+				name = fmt.Sprintf("Organization %d", id)
+			}
+			return id, name
+		}
+	}
+
+	if ctx != nil && ctx.OrgID > 0 {
+		name := ctx.OrgName
+		if name == "" {
+			name = fmt.Sprintf("Organization %d", ctx.OrgID)
+		}
+		return ctx.OrgID, name
+	}
+
+	tenantHeader := strings.TrimSpace(r.Header.Get("X-Scoper-Tenant"))
+	if tenantHeader == "" {
+		tenantHeader = strings.TrimSpace(r.Header.Get("X-Grafana-Org-Name"))
+	}
+	if tenantHeader != "" {
+		if name, id, ok := splitTrailingNumericToken(tenantHeader); ok {
+			return id, name
+		}
+		return 0, tenantHeader
+	}
+
+	return 0, ""
+}
+
+func resolveOrgContext(r *http.Request, ctx *grafanaContext) (int64, string, int64, string) {
+	grafanaOrgID, grafanaOrgName := detectGrafanaOrg(r, ctx)
+
 	name := strings.TrimSpace(r.Header.Get("X-Scoper-Tenant"))
 	if name == "" {
 		name = strings.TrimSpace(r.Header.Get("X-Grafana-Org-Name"))
 	}
-	ctx := parseGrafanaContext(r)
+	if name == "" && grafanaOrgName != "" {
+		name = grafanaOrgName
+	}
 	if name == "" && ctx != nil && strings.TrimSpace(ctx.OrgName) != "" {
 		name = ctx.OrgName
+	}
+	if parsedName, parsedID, ok := splitTrailingNumericToken(name); ok {
+		name = parsedName
+		if grafanaOrgID == 0 {
+			grafanaOrgID = parsedID
+			grafanaOrgName = parsedName
+		}
 	}
 	if name == "" {
 		name = "Default Organization"
 	}
+
+	orgID := int64(1)
 	if id, ok := ensureOrgIDByName(name); ok {
-		return id, name
+		orgID = id
 	}
-	if ctx != nil && ctx.OrgID > 0 {
-		return ctx.OrgID, name
+
+	if grafanaOrgName == "" {
+		grafanaOrgName = name
 	}
-	numericSources := []string{
-		r.Header.Get("X-Scoper-Org-Id"),
-		r.Header.Get("X-Scoper-OrgID"),
-		r.URL.Query().Get("org_id"),
-		r.Header.Get("X-Grafana-Org-Id"),
+	if grafanaOrgID == 0 {
+		grafanaOrgID = orgID
 	}
-	for _, raw := range numericSources {
-		if raw == "" {
-			continue
-		}
-		var orgID int64
-		if _, err := fmt.Sscanf(raw, "%d", &orgID); err == nil && orgID > 0 {
-			return orgID, lookupOrgNameByID(orgID)
-		}
-	}
-	return 1, "Default Organization"
+
+	return orgID, name, grafanaOrgID, grafanaOrgName
 }
 
 func lookupOrgNameByID(orgID int64) string {
@@ -201,21 +269,24 @@ func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFun
 			}
 		}()
 
-		role := roleFromHeader(r)
-		userID, userName := getUserFromRequest(r)
-		orgID, orgName := resolveOrgContext(r)
 		ctx := parseGrafanaContext(r)
+		role := roleFromHeader(r)
+		orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
+		userID, userName := getUserFromRequest(r, ctx)
+		userName = sanitizeDisplayName(userName, grafanaOrgID)
 		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
 		if ctx != nil && ctx.IsGrafanaAdmin {
 			isAdmin = true
 		}
 		next(w, r, reqCtx{
-			OrgID:    orgID,
-			OrgName:  orgName,
-			Role:     role,
-			UserID:   userID,
-			UserName: userName,
-			IsAdmin:  isAdmin,
+			OrgID:          orgID,
+			OrgName:        orgName,
+			GrafanaOrgID:   grafanaOrgID,
+			GrafanaOrgName: grafanaOrgName,
+			Role:           role,
+			UserID:         userID,
+			UserName:       userName,
+			IsAdmin:        isAdmin,
 		})
 	}
 }
@@ -236,25 +307,46 @@ func rbac(min Role, next func(http.ResponseWriter, *http.Request, reqCtx)) http.
 			}
 		}()
 
+		ctx := parseGrafanaContext(r)
 		role := roleFromHeader(r)
 		if !allow(role, min) {
 			writeJSONError(w, http.StatusForbidden, "forbidden: insufficient role")
 			return
 		}
-		userID, userName := getUserFromRequest(r)
-		orgID, orgName := resolveOrgContext(r)
-		ctx := parseGrafanaContext(r)
+		orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
+		userID, userName := getUserFromRequest(r, ctx)
+		userName = sanitizeDisplayName(userName, grafanaOrgID)
 		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
 		if ctx != nil && ctx.IsGrafanaAdmin {
 			isAdmin = true
 		}
 		next(w, r, reqCtx{
-			OrgID:    orgID,
-			OrgName:  orgName,
-			Role:     role,
-			UserID:   userID,
-			UserName: userName,
-			IsAdmin:  isAdmin,
+			OrgID:          orgID,
+			OrgName:        orgName,
+			GrafanaOrgID:   grafanaOrgID,
+			GrafanaOrgName: grafanaOrgName,
+			Role:           role,
+			UserID:         userID,
+			UserName:       userName,
+			IsAdmin:        isAdmin,
 		})
 	}
+}
+
+func sanitizeDisplayName(value string, trailingID int64) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return trimmed
+	}
+	if trailingID > 0 {
+		suffix := fmt.Sprintf(" %d", trailingID)
+		if strings.HasSuffix(trimmed, suffix) {
+			trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, suffix))
+			return trimmed
+		}
+	}
+	if cleaned, _, ok := splitTrailingNumericToken(trimmed); ok {
+		return cleaned
+	}
+	return trimmed
 }

@@ -67,11 +67,15 @@ func settingsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 
 func userRoleHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	jsonOK(w, map[string]any{
-		"role":     c.Role,
-		"isAdmin":  c.IsAdmin,
-		"userID":   c.UserID,
-		"userName": c.UserName,
-		"orgID":    c.OrgID,
+		"role":            c.Role,
+		"isAdmin":         c.IsAdmin,
+		"userID":          c.UserID,
+		"userName":        c.UserName,
+		"userDisplayName": c.UserName,
+		"orgID":           c.OrgID,
+		"orgName":         c.OrgName,
+		"grafanaOrgID":    c.GrafanaOrgID,
+		"grafanaOrgName":  c.GrafanaOrgName,
 	})
 }
 
@@ -231,11 +235,18 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		jsonOK(w, map[string]any{
 			"items": list,
 			"userRole": map[string]any{
-				"role":    c.Role,
-				"isAdmin": c.IsAdmin,
+				"role":            c.Role,
+				"isAdmin":         c.IsAdmin,
+				"userID":          c.UserID,
+				"userName":        c.UserName,
+				"userDisplayName": c.UserName,
+				"grafanaOrgID":    c.GrafanaOrgID,
+				"grafanaOrgName":  c.GrafanaOrgName,
 			},
-			"orgID":   orgID,
-			"orgName": responseOrgName,
+			"orgID":          orgID,
+			"orgName":        responseOrgName,
+			"grafanaOrgId":   c.GrafanaOrgID,
+			"grafanaOrgName": c.GrafanaOrgName,
 		})
 	case http.MethodPost:
 		var in struct{ AgentUID, Name string }
@@ -377,6 +388,9 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			// If capabilities_json is NULL or empty, initialize empty map
 			bridge.Capabilities = make(map[string]interface{})
 		}
+		if bridge.Labels == nil {
+			bridge.Labels = make(map[string]string)
+		}
 
 		// Get collectors managed by this bridge
 		// Use bracket notation for JSON keys with dots: $."key.with.dots"
@@ -437,6 +451,42 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		}
 		collectorRows.Close()
 
+		// Fallbacks for bridge metadata if bridge record lacks version or location labels
+		if len(collectors) > 0 {
+			first := collectors[0]
+			if bridge.Version == nil || *bridge.Version == "" || *bridge.Version == "unknown" {
+				if first.Version != nil && *first.Version != "" && *first.Version != "unknown" {
+					v := *first.Version
+					bridge.Version = &v
+				} else if first.Labels != nil {
+					if v := first.Labels["collector.version"]; v != "" {
+						vCopy := v
+						bridge.Version = &vCopy
+					} else if v := first.Labels["otelcol.version"]; v != "" {
+						vCopy := v
+						bridge.Version = &vCopy
+					}
+				}
+			}
+			if bridge.Namespace == "" && first.Labels != nil {
+				if ns := first.Labels["k8s.namespace"]; ns != "" {
+					bridge.Namespace = ns
+				}
+			}
+			if bridge.Cluster == "" && first.Labels != nil {
+				if cluster := first.Labels["k8s.cluster"]; cluster != "" {
+					bridge.Cluster = cluster
+				}
+			}
+		}
+
+		if bridge.Namespace != "" {
+			bridge.Labels["k8s.namespace"] = bridge.Namespace
+		}
+		if bridge.Cluster != "" {
+			bridge.Labels["k8s.cluster"] = bridge.Cluster
+		}
+
 		log.Printf("DEBUG: Bridge %s (%s) has %d collectors (scanned %d rows)", bridge.AgentUID[:8], bridge.Name, len(collectors), rowCount)
 
 		bridge.Collectors = collectors
@@ -451,11 +501,18 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 	jsonOK(w, map[string]any{
 		"bridges": bridges,
 		"userRole": map[string]any{
-			"role":    c.Role,
-			"isAdmin": c.IsAdmin,
+			"role":            c.Role,
+			"isAdmin":         c.IsAdmin,
+			"userID":          c.UserID,
+			"userName":        c.UserName,
+			"userDisplayName": c.UserName,
+			"grafanaOrgID":    c.GrafanaOrgID,
+			"grafanaOrgName":  c.GrafanaOrgName,
 		},
-		"orgID":   orgID,
-		"orgName": orgName,
+		"orgID":          orgID,
+		"orgName":        orgName,
+		"grafanaOrgId":   c.GrafanaOrgID,
+		"grafanaOrgName": c.GrafanaOrgName,
 	})
 }
 

@@ -398,6 +398,31 @@ export const App = () => {
     isAdmin: false,
   });
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
+  const displayUserName = useMemo(() => {
+    const raw = (userContext.name || '').trim();
+    if (!raw) {
+      return 'unknown';
+    }
+    if (selectedOrgId && raw.endsWith(` ${selectedOrgId}`)) {
+      const sliced = raw.slice(0, raw.length - (` ${selectedOrgId}`).length).trim();
+      if (sliced) {
+        return sliced;
+      }
+    }
+    return raw;
+  }, [userContext.name, selectedOrgId]);
+  const displayOrgBadge = useMemo(() => {
+    if (currentOrgName && selectedOrgId) {
+      return `${currentOrgName} (#${selectedOrgId})`;
+    }
+    if (currentOrgName) {
+      return currentOrgName;
+    }
+    if (selectedOrgId) {
+      return `Org #${selectedOrgId}`;
+    }
+    return 'Organization unknown';
+  }, [currentOrgName, selectedOrgId]);
 
   const handleDeleteBridge = async (bridgeUid: string, bridgeName: string) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?\n\nThis will remove the bridge from the UI. Collectors managed by this bridge will be cleaned up automatically if they remain offline for 24 hours.`)) {
@@ -444,16 +469,19 @@ export const App = () => {
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 2);
         setUserContext(prev => ({
-          name: response.userRole.userName || prev.name,
+          name: response.userRole.userDisplayName || response.userRole.userName || prev.name,
           role: response.userRole.role || prev.role,
           isAdmin: response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 'Admin' || response.userRole.role === 2,
         }));
       }
-      if (typeof response.orgId === 'number') {
-        setSelectedOrgId(response.orgId);
+      const effectiveOrgId = typeof response.grafanaOrgId === 'number'
+        ? response.grafanaOrgId
+        : (typeof response.orgId === 'number' ? response.orgId : undefined);
+      if (typeof effectiveOrgId === 'number') {
+        setSelectedOrgId(effectiveOrgId);
       }
-      if (response.orgName) {
-        setCurrentOrgName(response.orgName);
+      if (response.grafanaOrgName || response.orgName) {
+        setCurrentOrgName(response.grafanaOrgName || response.orgName);
       }
       // Also fetch bridges for hierarchical view
       await fetchBridges();
@@ -480,11 +508,18 @@ export const App = () => {
     try {
       const response = await backendSrv.get('/user-role');
       if (response) {
+        const displayName = response.userDisplayName || response.userName || 'unknown';
         setUserContext({
-          name: response.userName || 'unknown',
+          name: displayName,
           role: response.role || 'unknown',
           isAdmin: response.isAdmin === true || response.isAdmin === 'true',
         });
+        if (typeof response.grafanaOrgId === 'number') {
+          setSelectedOrgId(response.grafanaOrgId);
+        }
+        if (response.grafanaOrgName) {
+          setCurrentOrgName(response.grafanaOrgName);
+        }
         setIsAdmin(response.isAdmin === true || response.role === 'RoleAdmin' || response.role === 'Admin' || response.role === 2);
       }
     } catch (err) {
@@ -730,10 +765,13 @@ export const App = () => {
               border: '1px solid #E5E7EB'
             }}>
               <div style={{ fontSize: 12, color: '#4B5563' }}>
-                <strong>User:</strong> {userContext.name || 'unknown'}
+                <strong>User:</strong> {displayUserName}
               </div>
               <div style={{ fontSize: 12, color: userContext.isAdmin ? '#059669' : '#B45309', fontWeight: 600 }}>
                 {userContext.role || (userContext.isAdmin ? 'Admin' : 'Viewer')}
+              </div>
+              <div style={{ fontSize: 12, color: '#4B5563' }}>
+                <strong>Org:</strong> {displayOrgBadge}
               </div>
             </div>
           </div>
