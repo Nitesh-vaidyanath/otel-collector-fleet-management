@@ -66,6 +66,53 @@ services:
       - "5801:5801"
       - "4321:4321"
 
+  collector_tenant_alpha:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: collector_tenant_alpha
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      - fleet-backend
+    volumes:
+      - ./docker/demo/collectors/collector-tenant-alpha.yaml:/etc/otelcol/config.yaml:ro
+
+  collector_org_bravo:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: collector_org_bravo
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      - fleet-backend
+    volumes:
+      - ./docker/demo/collectors/collector-org-bravo.yaml:/etc/otelcol/config.yaml:ro
+
+  collector_tenant_delta:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: collector_tenant_delta
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      - fleet-backend
+    volumes:
+      - ./docker/demo/collectors/collector-tenant-delta.yaml:/etc/otelcol/config.yaml:ro
+
+  seed-demo-data:
+    image: mysql:8.0
+    container_name: fleet_seed_demo
+    profiles: ["seed"]
+    depends_on:
+      fleet-backend:
+        condition: service_started
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MYSQL_DATABASE: grafana_agents
+    volumes:
+      - ./docker/demo/seed:/seed:ro
+    entrypoint: ["/bin/bash", "/seed/wait-and-seed.sh"]
+    restart: "no"
+
 volumes:
   mysql_data:
   grafana_data:

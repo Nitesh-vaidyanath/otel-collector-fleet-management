@@ -352,12 +352,12 @@ export const App = () => {
   const [groupByDeploymentType, setGroupByDeploymentType] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null);
-  const [organizations, setOrganizations] = useState<any[]>([]);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
   const [opampConnectionUrl, setOpampConnectionUrl] = useState<string>(DEFAULT_OPAMP_WS);
 
   const [isAdmin, setIsAdmin] = useState(false);
+  const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
 
   const handleDeleteBridge = async (bridgeUid: string, bridgeName: string) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?\n\nThis will remove the bridge from the UI. Collectors managed by this bridge will be cleaned up automatically if they remain offline for 24 hours.`)) {
@@ -376,10 +376,7 @@ export const App = () => {
 
   const fetchBridges = async () => {
     try {
-      const url = selectedOrgId !== null 
-        ? `/api/plugins/otel-collector-agent-fleet-management/resources/bridges?org_id=${selectedOrgId}`
-        : '/api/plugins/otel-collector-agent-fleet-management/resources/bridges';
-      const response = await backendSrv.get(url);
+      const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/bridges');
       console.log('DEBUG: Fetched bridges response:', { bridges: response.bridges, count: response.bridges?.length || 0 });
       if (response.bridges && response.bridges.length > 0) {
         response.bridges.forEach((bridge: Bridge, idx: number) => {
@@ -401,16 +398,13 @@ export const App = () => {
   const fetchAgents = async () => {
     try {
       setError('');
-      const url = selectedOrgId !== null 
-        ? `/api/plugins/otel-collector-agent-fleet-management/resources/agents?org_id=${selectedOrgId}`
-        : '/api/plugins/otel-collector-agent-fleet-management/resources/agents';
-      const response = await backendSrv.get(url);
+      const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/agents');
       setAgents(response.items || []);
       // Update admin status from response (refresh on each fetch)
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 2);
       }
-      if (response.orgId !== undefined && response.orgId !== null) {
+      if (typeof response.orgId === 'number') {
         setSelectedOrgId(response.orgId);
       }
       if (response.orgName) {
@@ -438,47 +432,12 @@ export const App = () => {
   }, []);
 
   useEffect(() => {
-    loadOrganizations();
     fetchAgents();
     loadOpampSettings();
     // Poll every 10 seconds to quickly catch health status changes (degraded/unhealthy agents)
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
   }, [loadOpampSettings]);
-
-  useEffect(() => {
-    if (selectedOrgId !== null) {
-      fetchAgents();
-      // Poll every 1 minute when org is selected
-      const interval = setInterval(fetchAgents, 60000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedOrgId]);
-
-  useEffect(() => {
-    if (selectedOrgId === null) {
-      return;
-    }
-    const match = organizations.find((org: any) => org.id === selectedOrgId);
-    if (match && match.name) {
-      setCurrentOrgName(match.name);
-    } else if (!match) {
-      setCurrentOrgName('');
-    }
-  }, [selectedOrgId, organizations]);
-
-  const loadOrganizations = async () => {
-    try {
-      const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/organizations');
-      setOrganizations(response.items || []);
-      // Set default org if available
-      if (response.items && response.items.length > 0 && selectedOrgId === null) {
-        setSelectedOrgId(response.items[0].id || 1);
-      }
-    } catch (err: any) {
-      console.error('Failed to load organizations:', err);
-    }
-  };
 
   const handleRefresh = () => {
     setRefreshing(true);
@@ -664,50 +623,21 @@ export const App = () => {
             </h1>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
-            <span style={{ fontSize: 14, color: '#6B7280' }}>Organization:</span>
-            {organizations.length > 0 && (
-              <select
-                value={selectedOrgId || ''}
-                onChange={(e) => setSelectedOrgId(e.target.value ? parseInt(e.target.value) : null)}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 6,
-                  border: '2px solid #3B82F6',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  background: 'white',
-                  cursor: 'pointer',
-                  minWidth: 250,
-                  color: '#111827'
-                }}
-              >
-                {organizations.map((org: any) => (
-                  <option key={org.id} value={org.id}>
-                    {org.name || `Organization ${org.id}`} (ID: {org.id})
-                  </option>
-                ))}
-              </select>
-            )}
-            {selectedOrgId && (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '6px 12px',
-                background: '#EFF6FF',
-                borderRadius: 6,
-                border: '1px solid #BFDBFE'
-              }}>
-                <span style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
-                  Org ID: <span style={{ fontFamily: 'monospace', fontSize: 13 }}>{selectedOrgId}</span>
-                </span>
-                {currentOrgName && (
-                  <span style={{ fontSize: 12, color: '#6B7280' }}>
-                    • {currentOrgName}
-                  </span>
-                )}
-              </div>
-            )}
+            <span style={{ fontSize: 14, color: '#6B7280' }}>Tenant:</span>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 12px',
+              background: '#EFF6FF',
+              borderRadius: 6,
+              border: '1px solid #BFDBFE',
+              minWidth: 200
+            }}>
+              <span style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
+                {currentOrgName || `Organization ${selectedOrgId ?? ''}`}
+              </span>
+            </div>
           </div>
           <div style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>
             Manage your OpenTelemetry Collector agents • Viewing agents for selected organization
@@ -934,7 +864,7 @@ export const App = () => {
                   <div>
                     <span style={{ fontWeight: 600, color: '#EF4444' }}>{(agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0))}</span> Offline
                   </div>
-                  {agents.length > 0 && selectedOrgId && (
+                  {agents.length > 0 && (selectedOrgId || currentOrgName) && (
                     <div style={{ 
                       marginLeft: 16, 
                       paddingLeft: 16, 
@@ -943,11 +873,7 @@ export const App = () => {
                     }}>
                       <span style={{ color: '#6B7280' }}>Viewing:</span>{' '}
                       <span style={{ fontWeight: 600, color: '#3B82F6' }}>
-                        {currentOrgName || `Organization ${selectedOrgId}`}
-                      </span>
-                      <span style={{ color: '#9CA3AF' }}>
-                        {' '}
-                        (ID: {selectedOrgId})
+                        {currentOrgName || 'Tenant'}
                       </span>
                     </div>
                   )}
@@ -988,8 +914,8 @@ export const App = () => {
               }}>
                 <div style={{ fontSize: 48, marginBottom: 16 }}>📦</div>
                 <div style={{ fontSize: 18, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
-                  {selectedOrgId
-                    ? `No collectors found in ${currentOrgName ? `${currentOrgName} (ID: ${selectedOrgId})` : `Organization ${selectedOrgId}`}`
+                  {selectedOrgId || currentOrgName
+                    ? `No collectors found in ${currentOrgName || 'the selected tenant'}`
                     : 'No collectors found'}
                 </div>
                 <div style={{ fontSize: 14, color: '#6B7280', maxWidth: 500, margin: '0 auto' }}>
@@ -1013,7 +939,7 @@ export const App = () => {
                       <br />
                       <br />
                       <span style={{ fontSize: 12, color: '#9CA3AF' }}>
-                        💡 Tip: Set <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>org_id</code>, <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>organization.id</code>, or <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>tenant.id</code> in agent labels, or provide <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>tenant.name</code>/<code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>organization.name</code> that matches an existing organization.
+                        💡 Tip: Label your agents with <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>tenant.name</code> or <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>organization.name</code> so they automatically map to the right tenant, or fall back to numeric labels like <code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>org_id</code>/<code style={{ background: '#F3F4F6', padding: '2px 6px', borderRadius: 3 }}>tenant.id</code>.
                       </span>
                     </>
                   ) : (
@@ -1644,9 +1570,12 @@ export const App = () => {
                         borderRadius: 6,
                         border: '1px solid #BFDBFE'
                       }}>
-                        <div style={{ fontSize: 11, color: '#1E40AF', fontWeight: 600, marginBottom: 4 }}>ORGANIZATION</div>
-                        <div style={{ fontSize: 14, color: '#111827', fontWeight: 600 }}>
-                          Organization ID: <span style={{ fontFamily: 'monospace', color: '#3B82F6' }}>{selectedAgent.orgId}</span>
+                        <div style={{ fontSize: 11, color: '#1E40AF', fontWeight: 600, marginBottom: 4 }}>TENANT</div>
+                        <div style={{ fontSize: 14, color: '#111827', fontWeight: 600, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                          <span>{selectedAgentTenantName || 'Unknown tenant'}</span>
+                          <span style={{ fontSize: 12, color: '#1D4ED8', fontFamily: 'monospace' }}>
+                            (ID: {selectedAgent.orgId})
+                          </span>
                         </div>
                       </div>
                     )}

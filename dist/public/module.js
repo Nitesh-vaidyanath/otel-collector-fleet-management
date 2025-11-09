@@ -2641,6 +2641,73 @@ var RESOURCE_ROOT = `/api/plugins/${PLUGIN_ID}/resources`;
 var RESOURCE_PREFIX = `${RESOURCE_ROOT}/plugin-api`;
 var PROXY_PREFIX = `/api/plugin-proxy/${PLUGIN_ID}/plugin-api`;
 var STANDALONE_PREFIX = "/plugin-api";
+var DEFAULT_OPAMP_WS = "ws://localhost:4321/v1/opamp";
+var normalizeOpampPath = (pathname) => {
+  if (!pathname || pathname.trim() === "" || pathname === "/") {
+    return "/v1/opamp";
+  }
+  const trimmed = pathname.replace(/\/+$/, "");
+  if (trimmed.endsWith("/v1/opamp")) {
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+  const normalized = `${trimmed}/v1/opamp`;
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+};
+var coerceWebsocketUrlFromServer = (value) => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    let protocol = parsed.protocol;
+    if (protocol === "http:") {
+      protocol = "ws:";
+    } else if (protocol === "https:") {
+      protocol = "wss:";
+    } else if (protocol !== "ws:" && protocol !== "wss:") {
+      protocol = "ws:";
+    }
+    const path = normalizeOpampPath(parsed.pathname);
+    const search = parsed.search ?? "";
+    return `${protocol}//${parsed.host}${path}${search}`;
+  } catch {
+  }
+  if (trimmed.startsWith("ws://") || trimmed.startsWith("wss://")) {
+    const cleaned = trimmed.replace(/\/+$/, "");
+    if (/\/v1\/opamp$/i.test(cleaned)) {
+      return cleaned;
+    }
+    return `${cleaned}/v1/opamp`;
+  }
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return coerceWebsocketUrlFromServer(trimmed);
+  }
+  return null;
+};
+var coerceWebsocketUrlFromEndpoint = (value) => {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("ws://") || trimmed.startsWith("wss://") || trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return coerceWebsocketUrlFromServer(trimmed);
+  }
+  if (/^[\w\.\-]+:\d+$/.test(trimmed)) {
+    const sanitized = trimmed.replace(/^0\.0\.0\.0/, "localhost");
+    return `ws://${sanitized}/v1/opamp`;
+  }
+  return null;
+};
+var buildOpampConnectionUrl = (serverUrl, endpoint) => {
+  return coerceWebsocketUrlFromServer(serverUrl) ?? coerceWebsocketUrlFromEndpoint(endpoint) ?? DEFAULT_OPAMP_WS;
+};
 var detectRuntimeMode = () => {
   if (typeof window === "undefined") {
     return "grafana";
@@ -2814,10 +2881,11 @@ var App = () => {
   const [groupByDeploymentType, setGroupByDeploymentType] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
   const [selectedOrgId, setSelectedOrgId] = useState(null);
-  const [organizations, setOrganizations] = useState([]);
   const [currentOrgName, setCurrentOrgName] = useState("");
   const [agentActivityLog, setAgentActivityLog] = useState([]);
+  const [opampConnectionUrl, setOpampConnectionUrl] = useState(DEFAULT_OPAMP_WS);
   const [isAdmin, setIsAdmin] = useState(false);
+  const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
   const handleDeleteBridge = async (bridgeUid, bridgeName) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?
 
@@ -2835,8 +2903,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   };
   const fetchBridges = async () => {
     try {
-      const url = selectedOrgId !== null ? `/api/plugins/otel-collector-agent-fleet-management/resources/bridges?org_id=${selectedOrgId}` : "/api/plugins/otel-collector-agent-fleet-management/resources/bridges";
-      const response = await backendSrv.get(url);
+      const response = await backendSrv.get("/api/plugins/otel-collector-agent-fleet-management/resources/bridges");
       console.log("DEBUG: Fetched bridges response:", { bridges: response.bridges, count: response.bridges?.length || 0 });
       if (response.bridges && response.bridges.length > 0) {
         response.bridges.forEach((bridge, idx) => {
@@ -2856,13 +2923,12 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   const fetchAgents = async () => {
     try {
       setError("");
-      const url = selectedOrgId !== null ? `/api/plugins/otel-collector-agent-fleet-management/resources/agents?org_id=${selectedOrgId}` : "/api/plugins/otel-collector-agent-fleet-management/resources/agents";
-      const response = await backendSrv.get(url);
+      const response = await backendSrv.get("/api/plugins/otel-collector-agent-fleet-management/resources/agents");
       setAgents(response.items || []);
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === 2);
       }
-      if (response.orgId !== void 0 && response.orgId !== null) {
+      if (typeof response.orgId === "number") {
         setSelectedOrgId(response.orgId);
       }
       if (response.orgName) {
@@ -2877,30 +2943,21 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       setRefreshing(false);
     }
   };
-  useEffect(() => {
-    loadOrganizations();
-    fetchAgents();
-    const interval = setInterval(fetchAgents, 1e4);
-    return () => clearInterval(interval);
+  const loadOpampSettings = useCallback(async () => {
+    try {
+      const response = await backendSrv.get("/settings");
+      const derived = buildOpampConnectionUrl(response?.opampServerURL, response?.opampEndpoint);
+      setOpampConnectionUrl(derived);
+    } catch (err) {
+      console.error("Failed to load OpAMP settings:", err);
+    }
   }, []);
   useEffect(() => {
-    if (selectedOrgId !== null) {
-      fetchAgents();
-      const interval = setInterval(fetchAgents, 6e4);
-      return () => clearInterval(interval);
-    }
-  }, [selectedOrgId]);
-  const loadOrganizations = async () => {
-    try {
-      const response = await backendSrv.get("/api/plugins/otel-collector-agent-fleet-management/resources/organizations");
-      setOrganizations(response.items || []);
-      if (response.items && response.items.length > 0 && selectedOrgId === null) {
-        setSelectedOrgId(response.items[0].id || 1);
-      }
-    } catch (err) {
-      console.error("Failed to load organizations:", err);
-    }
-  };
+    fetchAgents();
+    loadOpampSettings();
+    const interval = setInterval(fetchAgents, 1e4);
+    return () => clearInterval(interval);
+  }, [loadOpampSettings]);
   const handleRefresh = () => {
     setRefreshing(true);
     fetchAgents();
@@ -3043,33 +3100,16 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     justifyContent: "space-between",
     alignItems: "center",
     boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("h1", { style: { margin: 0, fontSize: 24, fontWeight: 600, color: "#111827" } }, "OTel Collector Agent Fleet Management")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: "#6B7280" } }, "Organization:"), organizations.length > 0 && /* @__PURE__ */ React.createElement(
-    "select",
-    {
-      value: selectedOrgId || "",
-      onChange: (e) => setSelectedOrgId(e.target.value ? parseInt(e.target.value) : null),
-      style: {
-        padding: "8px 16px",
-        borderRadius: 6,
-        border: "2px solid #3B82F6",
-        fontSize: 14,
-        fontWeight: 600,
-        background: "white",
-        cursor: "pointer",
-        minWidth: 250,
-        color: "#111827"
-      }
-    },
-    organizations.map((org) => /* @__PURE__ */ React.createElement("option", { key: org.id, value: org.id }, org.name || `Organization ${org.id}`, " (ID: ", org.id, ")"))
-  ), selectedOrgId && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("h1", { style: { margin: 0, fontSize: 24, fontWeight: 600, color: "#111827" } }, "OTel Collector Agent Fleet Management")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: "#6B7280" } }, "Tenant:"), /* @__PURE__ */ React.createElement("div", { style: {
     display: "flex",
     alignItems: "center",
     gap: 8,
     padding: "6px 12px",
     background: "#EFF6FF",
     borderRadius: 6,
-    border: "1px solid #BFDBFE"
-  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#1E40AF", fontWeight: 600 } }, "Org ID: ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "monospace", fontSize: 13 } }, selectedOrgId)), currentOrgName && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#6B7280" } }, "\u2022 ", currentOrgName))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginTop: 4 } }, "Manage your OpenTelemetry Collector agents \u2022 Viewing agents for selected organization")), /* @__PURE__ */ React.createElement(
+    border: "1px solid #BFDBFE",
+    minWidth: 200
+  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#1E40AF", fontWeight: 600 } }, currentOrgName || `Organization ${selectedOrgId ?? ""}`))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginTop: 4 } }, "Manage your OpenTelemetry Collector agents \u2022 Viewing agents for selected organization")), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: handleRefresh,
@@ -3243,12 +3283,12 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     color: "#6B7280",
     alignItems: "center",
     justifyContent: "space-between"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)), " Total"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#10B981" } }, onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0)), " Online"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#EF4444" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0))), " Offline"), agents.length > 0 && selectedOrgId && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)), " Total"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#10B981" } }, onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0)), " Online"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#EF4444" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0))), " Offline"), agents.length > 0 && (selectedOrgId || currentOrgName) && /* @__PURE__ */ React.createElement("div", { style: {
     marginLeft: 16,
     paddingLeft: 16,
     borderLeft: "1px solid #E5E7EB",
     fontSize: 12
-  } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#6B7280" } }, "Viewing:"), " ", /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#3B82F6" } }, "Organization ", selectedOrgId), currentOrgName && /* @__PURE__ */ React.createElement("span", { style: { color: "#9CA3AF" } }, " (", currentOrgName, ")"))), filteredAgents.length > 0 && /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#6B7280" } }, "Viewing:"), " ", /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#3B82F6" } }, currentOrgName || "Tenant"))), filteredAgents.length > 0 && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: () => setGroupByDeploymentType(!groupByDeploymentType),
@@ -3270,19 +3310,19 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     border: "1px solid #E5E7EB",
     padding: 60,
     textAlign: "center"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 48, marginBottom: 16 } }, "\u{1F4E6}"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#111827", marginBottom: 8 } }, selectedOrgId ? `No collectors found in Organization ${selectedOrgId}` : "No collectors found"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#6B7280", maxWidth: 500, margin: "0 auto" } }, searchQuery ? /* @__PURE__ */ React.createElement(React.Fragment, null, "No collectors match your search. Try a different query.") : selectedOrgId ? /* @__PURE__ */ React.createElement(React.Fragment, null, "No agents are registered for this organization yet.", /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("br", null), "Connect your OpenTelemetry Collector agents via OpAMP to see them here.", /* @__PURE__ */ React.createElement("br", null), "Configure your agent to connect to: ", /* @__PURE__ */ React.createElement("code", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 48, marginBottom: 16 } }, "\u{1F4E6}"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#111827", marginBottom: 8 } }, selectedOrgId || currentOrgName ? `No collectors found in ${currentOrgName || "the selected tenant"}` : "No collectors found"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#6B7280", maxWidth: 500, margin: "0 auto" } }, searchQuery ? /* @__PURE__ */ React.createElement(React.Fragment, null, "No collectors match your search. Try a different query.") : selectedOrgId ? /* @__PURE__ */ React.createElement(React.Fragment, null, "No agents are registered for this organization yet.", /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("br", null), "Connect your OpenTelemetry Collector agents via OpAMP to see them here.", /* @__PURE__ */ React.createElement("br", null), "Configure your agent to connect to:", " ", /* @__PURE__ */ React.createElement("code", { style: {
     background: "#F3F4F6",
     padding: "2px 8px",
     borderRadius: 4,
     fontSize: 13,
     fontFamily: "monospace"
-  } }, "ws://localhost:4321/opamp"), /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#9CA3AF" } }, "\u{1F4A1} Tip: Set ", /* @__PURE__ */ React.createElement("code", { style: { background: "#F3F4F6", padding: "2px 6px", borderRadius: 3 } }, "org_id"), " or ", /* @__PURE__ */ React.createElement("code", { style: { background: "#F3F4F6", padding: "2px 6px", borderRadius: 3 } }, "organization.id"), " in agent labels to assign them to this organization.")) : /* @__PURE__ */ React.createElement(React.Fragment, null, "Please select an organization from the dropdown above to view agents.", /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("br", null), "Or connect your OpenTelemetry Collector agents via OpAMP to see them here.", /* @__PURE__ */ React.createElement("br", null), "Configure your agent to connect to: ", /* @__PURE__ */ React.createElement("code", { style: {
+  } }, opampConnectionUrl), /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#9CA3AF" } }, "\u{1F4A1} Tip: Label your agents with ", /* @__PURE__ */ React.createElement("code", { style: { background: "#F3F4F6", padding: "2px 6px", borderRadius: 3 } }, "tenant.name"), " or ", /* @__PURE__ */ React.createElement("code", { style: { background: "#F3F4F6", padding: "2px 6px", borderRadius: 3 } }, "organization.name"), " so they automatically map to the right tenant, or fall back to numeric labels like ", /* @__PURE__ */ React.createElement("code", { style: { background: "#F3F4F6", padding: "2px 6px", borderRadius: 3 } }, "org_id"), "/", /* @__PURE__ */ React.createElement("code", { style: { background: "#F3F4F6", padding: "2px 6px", borderRadius: 3 } }, "tenant.id"), ".")) : /* @__PURE__ */ React.createElement(React.Fragment, null, "Please select an organization from the dropdown above to view agents.", /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("br", null), "Or connect your OpenTelemetry Collector agents via OpAMP to see them here.", /* @__PURE__ */ React.createElement("br", null), "Configure your agent to connect to:", " ", /* @__PURE__ */ React.createElement("code", { style: {
     background: "#F3F4F6",
     padding: "2px 8px",
     borderRadius: 4,
     fontSize: 13,
     fontFamily: "monospace"
-  } }, "ws://localhost:4321/opamp")))) : /* @__PURE__ */ React.createElement("div", { style: {
+  } }, opampConnectionUrl)))) : /* @__PURE__ */ React.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     border: "1px solid #E5E7EB",
@@ -3679,7 +3719,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     background: "#EFF6FF",
     borderRadius: 6,
     border: "1px solid #BFDBFE"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#1E40AF", fontWeight: 600, marginBottom: 4 } }, "ORGANIZATION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#111827", fontWeight: 600 } }, "Organization ID: ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "monospace", color: "#3B82F6" } }, selectedAgent.orgId))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Name"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, selectedAgent.name || selectedAgent.agentUid)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Agent UID"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontFamily: "monospace", color: "#111827", background: "#F3F4F6", padding: 8, borderRadius: 4 } }, selectedAgent.agentUid)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Status"), /* @__PURE__ */ React.createElement("div", null, getStatusBadge(selectedAgent.status))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Version"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.version || "unknown")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.lastSeen ? new Date(selectedAgent.lastSeen).toLocaleString() : "Never")), selectedAgent.labels && Object.keys(selectedAgent.labels).length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 8, fontWeight: 600 } }, "Labels"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, Object.entries(selectedAgent.labels).map(([key, value]) => /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#1E40AF", fontWeight: 600, marginBottom: 4 } }, "TENANT"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#111827", fontWeight: 600, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", null, selectedAgentTenantName || "Unknown tenant"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#1D4ED8", fontFamily: "monospace" } }, "(ID: ", selectedAgent.orgId, ")"))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Name"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, selectedAgent.name || selectedAgent.agentUid)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Agent UID"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontFamily: "monospace", color: "#111827", background: "#F3F4F6", padding: 8, borderRadius: 4 } }, selectedAgent.agentUid)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Status"), /* @__PURE__ */ React.createElement("div", null, getStatusBadge(selectedAgent.status))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Version"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.version || "unknown")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.lastSeen ? new Date(selectedAgent.lastSeen).toLocaleString() : "Never")), selectedAgent.labels && Object.keys(selectedAgent.labels).length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 8, fontWeight: 600 } }, "Labels"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, Object.entries(selectedAgent.labels).map(([key, value]) => /* @__PURE__ */ React.createElement(
     "button",
     {
       key,
