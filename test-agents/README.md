@@ -47,6 +47,7 @@ docker compose -f docker-compose.test-agents.yml up -d
 - `SUPERVISOR_EXPLAINED.md` - Detailed explanation of what supervisor manages
 - `NETWORK_EXPLANATION.md` - Network communication explained
 - `kubernetes/README.md` - Kubernetes setup with OpAMP Bridge and Operator
+- `k8s/test_stack.sh` - Helper script that installs the OpenTelemetry Operator, OpAMP bridge, and sample collectors inside Kubernetes. Set `BRIDGE_ENDPOINT=ws://fleet-backend.grafana-fleet.svc.cluster.local:4321/v1/opamp` (default) or override to point at a different backend.
 
 ### Test Scripts
 - `test-supervisor-flow.sh` - Test official supervisor approach

@@ -1181,6 +1181,14 @@ func (m *OpampManager) cleanupStaleBridges() {
 	}
 }
 
+func updateBridgeHeartbeat(bridgeUID string) {
+	db := mustDB()
+	defer db.Close()
+
+	normalized := normalizeAgentUID(bridgeUID)
+	db.Exec(`UPDATE bridges SET last_seen_at=NOW(), status='online' WHERE bridge_uid=? OR bridge_uid=?`, bridgeUID, normalized)
+}
+
 // startCleanupWorker runs periodic cleanup of stale agents
 func (m *OpampManager) startCleanupWorker() {
 	ticker := time.NewTicker(30 * time.Second) // Run every 30 seconds
@@ -1387,6 +1395,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									originalUID: message.InstanceUid, // Store original bytes EXACTLY as received (critical for OpAMP spec)
 								}
 								log.Printf("DEBUG: Stored bridge connection - normalizedUID: %s, originalUID bytes length: %d", bridgeNormalizedUID, len(message.InstanceUid))
+								updateBridgeHeartbeat(bridgeInstanceUID)
 								// Start with bridge UID - will be replaced with stable UID if bridge pattern detected
 								instanceUID := bridgeNormalizedUID
 

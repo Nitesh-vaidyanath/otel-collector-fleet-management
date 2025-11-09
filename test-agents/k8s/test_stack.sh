@@ -7,6 +7,7 @@ NS_APP_B="telemetry-ns"
 OPERATOR_VERSION="0.138.0"
 BRIDGE_IMAGE="ghcr.io/open-telemetry/opentelemetry-operator/operator-opamp-bridge:${OPERATOR_VERSION}"
 CERT_MANAGER_VERSION="v1.15.3"
+# BRIDGE_ENDPOINT may be overridden to point at a remote backend
 
 usage() {
   cat <<USAGE
@@ -23,86 +24,64 @@ ensure_ns() {
   kubectl get ns "$1" >/dev/null 2>&1 || kubectl create ns "$1"
 }
 
+wait_for_namespace_gone() {
+  local namespace="$1"
+  local timeout="${2:-180}"
+  local elapsed=0
+  while kubectl get ns "${namespace}" >/dev/null 2>&1; do
+    if [ "${elapsed}" -ge "${timeout}" ]; then
+      echo "WARNING: namespace ${namespace} still exists after ${timeout}s"
+      return
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+}
+
+wait_for_cert_manager_ca() {
+  echo "   Waiting for cert-manager webhook CA bundle..."
+  local elapsed=0
+  while true; do
+    if kubectl get mutatingwebhookconfiguration cert-manager-webhook >/dev/null 2>&1; then
+      ca=$(kubectl get mutatingwebhookconfiguration cert-manager-webhook -o jsonpath='{.webhooks[0].clientConfig.caBundle}' 2>/dev/null || echo "")
+      if [ -n "${ca}" ]; then
+        echo "   cert-manager webhook CA bundle injected"
+        return
+      fi
+    fi
+    if [ "${elapsed}" -ge 180 ]; then
+      echo "WARNING: cert-manager webhook CA bundle still empty after 180s"
+      return
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+}
+
 install_cert_manager() {
   echo ">> Installing cert-manager (${CERT_MANAGER_VERSION})"
+  if kubectl get ns cert-manager >/dev/null 2>&1; then
+    phase=$(kubectl get ns cert-manager -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    if [ "${phase}" = "Terminating" ]; then
+      echo "   cert-manager namespace is terminating; cleaning up residual objects"
+      kubectl delete ns cert-manager --wait=false || true
+      wait_for_namespace_gone cert-manager 180
+    fi
+  fi
   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml
   echo "   Waiting for cert-manager pods..."
-  kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=120s
+  kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
+  wait_for_cert_manager_ca
 }
 
 install_operator() {
   echo ">> Installing OpenTelemetry Operator (${OPERATOR_VERSION}) into ${NS_OPERATOR}"
   ensure_ns "${NS_OPERATOR}"
 
-  # CRDs first (operator chart normally installs these; we do it explicitly to be deterministic)
-  kubectl apply -f https://raw.githubusercontent.com/open-telemetry/opentelemetry-operator/v${OPERATOR_VERSION}/config/crd/bases/opentelemetry.io_opentelemetrycollectors.yaml
+  kubectl apply -n ${NS_OPERATOR} -f https://github.com/open-telemetry/opentelemetry-operator/releases/download/v${OPERATOR_VERSION}/opentelemetry-operator.yaml
 
-  # Operator deployment (minimal manifest that mirrors the release bundle)
-  cat <<EOF | kubectl apply -n ${NS_OPERATOR} -f -
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: opentelemetry-operator
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: opentelemetry-operator
-rules:
-- apiGroups: [""]
-  resources: ["pods","services","endpoints","events","configmaps","secrets","serviceaccounts","namespaces"]
-  verbs: ["*"]
-- apiGroups: ["apps"]
-  resources: ["deployments","daemonsets","statefulsets","replicasets"]
-  verbs: ["*"]
-- apiGroups: ["policy"]
-  resources: ["poddisruptionbudgets"]
-  verbs: ["*"]
-- apiGroups: ["opentelemetry.io"]
-  resources: ["opentelemetrycollectors","opentelemetrycollectors/status","opentelemetrycollectors/finalizers"]
-  verbs: ["*"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["networkpolicies"]
-  verbs: ["*"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: opentelemetry-operator
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: opentelemetry-operator
-subjects:
-- kind: ServiceAccount
-  name: opentelemetry-operator
-  namespace: ${NS_OPERATOR}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: opentelemetry-operator
-spec:
-  replicas: 1
-  selector:
-    matchLabels: {app: opentelemetry-operator}
-  template:
-    metadata:
-      labels: {app: opentelemetry-operator}
-    spec:
-      serviceAccountName: opentelemetry-operator
-      containers:
-      - name: manager
-        image: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:${OPERATOR_VERSION}
-        args:
-          - "--zap-log-level=info"
-        env:
-          - name: WATCH_NAMESPACE
-            valueFrom:
-              fieldRef: {fieldPath: metadata.namespace}
-EOF
   echo "   Waiting for operator..."
-  kubectl -n ${NS_OPERATOR} rollout status deploy/opentelemetry-operator --timeout=180s
+  kubectl -n ${NS_OPERATOR} rollout status deploy/opentelemetry-operator-controller-manager --timeout=180s
 }
 
 deploy_bridge() {
@@ -156,28 +135,11 @@ EOF
   kubectl -n ${NS_OPERATOR} rollout status deploy/opamp-bridge --timeout=120s
 }
 
-detect_local_backend_gateway() {
-  if [ -n "${LOCAL_BACKEND_GATEWAY:-}" ]; then
-    echo "${LOCAL_BACKEND_GATEWAY}"
-    return
-  fi
-
-  if gateway=$(docker network inspect otel-collector-fleet-management_default --format '{{ (index .IPAM.Config 0).Gateway }}' 2>/dev/null); then
-    if [ -n "${gateway}" ] && [ "${gateway}" != "<no value>" ]; then
-      echo "${gateway}"
-      return
-    fi
-  fi
-
-  # Fallback for historical compose setups
-  echo "192.168.0.1"
-}
-
 ensure_bridge_config() {
-  local backend_gateway
-  backend_gateway=$(detect_local_backend_gateway)
+  local bridge_endpoint
+  bridge_endpoint="${BRIDGE_ENDPOINT:-ws://fleet-backend.grafana-fleet.svc.cluster.local:4321/v1/opamp}"
 
-  echo "   Using local backend gateway: ${backend_gateway}"
+  echo "   Using bridge endpoint: ${bridge_endpoint}"
 
   cat <<EOF | kubectl apply -n ${NS_OPERATOR} -f -
 apiVersion: v1
@@ -190,7 +152,7 @@ data:
       - manager:
           namespaces: ["default", "telemetry-ns"]
         opamp:
-          endpoint: "ws://${backend_gateway}:4321/v1/opamp" # auto-detected Docker network gateway
+          endpoint: "${bridge_endpoint}"
         labels:
           tenant.name: "test"
 EOF
@@ -213,7 +175,7 @@ metadata:
 spec:
   mode: daemonset
   image: otel/opentelemetry-collector-contrib:latest
-  config: |
+  config:
     receivers:
       otlp:
         protocols:
@@ -225,9 +187,18 @@ spec:
       debug: {}
     service:
       pipelines:
-        logs:    { receivers: [otlp], processors: [batch], exporters: [debug] }
-        metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }
-        traces:  { receivers: [otlp], processors: [batch], exporters: [debug] }
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
 EOF
 
   # 2) Deployment gateway (fully remote-manageable; label added)
@@ -243,7 +214,7 @@ spec:
   mode: deployment
   replicas: 1
   image: otel/opentelemetry-collector-contrib:latest
-  config: |
+  config:
     receivers:
       otlp:
         protocols:
@@ -255,9 +226,18 @@ spec:
       debug: {}
     service:
       pipelines:
-        logs:    { receivers: [otlp], processors: [batch], exporters: [debug] }
-        metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }
-        traces:  { receivers: [otlp], processors: [batch], exporters: [debug] }
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
 EOF
 
 
@@ -274,7 +254,7 @@ spec:
   mode: deployment
   replicas: 1
   image: otel/opentelemetry-collector-contrib:latest
-  config: |
+  config:
     receivers:
       otlp:
         protocols:
@@ -286,9 +266,18 @@ spec:
       debug: {}
     service:
       pipelines:
-        logs:    { receivers: [otlp], processors: [batch], exporters: [debug] }
-        metrics: { receivers: [otlp], processors: [batch], exporters: [debug] }
-        traces:  { receivers: [otlp], processors: [batch], exporters: [debug] }
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
 EOF
 
 
@@ -316,22 +305,19 @@ pf_bridge() {
 
 cleanup() {
   echo ">> Cleaning up collectors"
-  kubectl -n ${NS_APP_A} delete opentelemetrycollector test-collector --ignore-not-found
-  kubectl -n ${NS_APP_B} delete opentelemetrycollector test-collector --ignore-not-found
-  kubectl -n ${NS_APP_B} delete ns ${NS_APP_B} --ignore-not-found
+  kubectl -n ${NS_APP_A} delete opentelemetrycollector test-collector --ignore-not-found --wait=false
+  kubectl -n ${NS_APP_B} delete opentelemetrycollector test-collector --ignore-not-found --wait=false
+  kubectl -n ${NS_APP_B} delete ns ${NS_APP_B} --ignore-not-found --wait=false
 
   echo ">> Cleaning up bridge"
-  kubectl -n ${NS_OPERATOR} delete deploy/opamp-bridge svc/opamp-bridge --ignore-not-found
+  kubectl -n ${NS_OPERATOR} delete deploy/opamp-bridge svc/opamp-bridge configmap/opamp-bridge-config --ignore-not-found --wait=false
 
   echo ">> Cleaning up operator"
-  kubectl -n ${NS_OPERATOR} delete deploy/opentelemetry-operator --ignore-not-found
-  kubectl delete clusterrolebinding opentelemetry-operator --ignore-not-found
-  kubectl delete clusterrole opentelemetry-operator --ignore-not-found
-  kubectl -n ${NS_OPERATOR} delete sa opentelemetry-operator --ignore-not-found
-  kubectl -n ${NS_OPERATOR} delete ns ${NS_OPERATOR} --ignore-not-found
+  kubectl delete -n ${NS_OPERATOR} -f https://github.com/open-telemetry/opentelemetry-operator/releases/download/v${OPERATOR_VERSION}/opentelemetry-operator.yaml --ignore-not-found --wait=false
+  kubectl -n ${NS_OPERATOR} delete ns ${NS_OPERATOR} --ignore-not-found --wait=false
 
   echo ">> Removing cert-manager"
-  kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml --ignore-not-found
+  kubectl delete -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml --ignore-not-found --wait=false
 }
 
 case "${1:-}" in
