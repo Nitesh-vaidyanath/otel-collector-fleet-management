@@ -2916,6 +2916,11 @@ var App = () => {
   const [grafanaOrgName, setGrafanaOrgName] = useState("");
   const [opampConnectionUrl, setOpampConnectionUrl] = useState(DEFAULT_OPAMP_WS);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userContext, setUserContext] = useState({
+    name: "",
+    role: "",
+    isAdmin: false
+  });
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
   const handleDeleteBridge = async (bridgeUid, bridgeName) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?
@@ -2958,6 +2963,11 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       setAgents(response.items || []);
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === 2);
+        setUserContext((prev) => ({
+          name: response.userRole.userName || prev.name,
+          role: response.userRole.role || prev.role,
+          isAdmin: response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === "Admin" || response.userRole.role === 2
+        }));
       }
       if (typeof response.orgId === "number") {
         setSelectedOrgId(response.orgId);
@@ -2983,6 +2993,21 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       console.error("Failed to load OpAMP settings:", err);
     }
   }, []);
+  const loadUserContext = useCallback(async () => {
+    try {
+      const response = await backendSrv.get("/user-role");
+      if (response) {
+        setUserContext({
+          name: response.userName || "unknown",
+          role: response.role || "unknown",
+          isAdmin: response.isAdmin === true || response.isAdmin === "true"
+        });
+        setIsAdmin(response.isAdmin === true || response.role === "RoleAdmin" || response.role === "Admin" || response.role === 2);
+      }
+    } catch (err) {
+      console.error("Failed to load user context:", err);
+    }
+  }, []);
   const loadGrafanaOrgContext = useCallback(async () => {
     try {
       const org = await rawBackendSrv.get("/api/org");
@@ -2996,13 +3021,14 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   useEffect(() => {
     const init = async () => {
       await loadGrafanaOrgContext();
+      await loadUserContext();
       await fetchAgents();
     };
     init();
     loadOpampSettings();
     const interval = setInterval(fetchAgents, 1e4);
     return () => clearInterval(interval);
-  }, [loadGrafanaOrgContext, loadOpampSettings]);
+  }, [loadGrafanaOrgContext, loadUserContext, loadOpampSettings]);
   useEffect(() => {
     if (!currentOrgName && grafanaOrgName) {
       setCurrentOrgName(grafanaOrgName);
@@ -3159,7 +3185,15 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     borderRadius: 6,
     border: "1px solid #BFDBFE",
     minWidth: 200
-  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#1E40AF", fontWeight: 600 } }, currentOrgName || `Organization ${selectedOrgId ?? ""}`))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginTop: 4 } }, "Manage your OpenTelemetry Collector agents \u2022 Viewing agents for selected organization")), /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#1E40AF", fontWeight: 600 } }, currentOrgName || `Organization ${selectedOrgId ?? ""}`)), /* @__PURE__ */ React.createElement("div", { style: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 12px",
+    background: "#F3F4F6",
+    borderRadius: 6,
+    border: "1px solid #E5E7EB"
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, /* @__PURE__ */ React.createElement("strong", null, "User:"), " ", userContext.name || "unknown"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: userContext.isAdmin ? "#059669" : "#B45309", fontWeight: 600 } }, userContext.role || (userContext.isAdmin ? "Admin" : "Viewer")))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginTop: 4 } }, "Manage your OpenTelemetry Collector agents \u2022 Viewing agents for selected organization")), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: handleRefresh,

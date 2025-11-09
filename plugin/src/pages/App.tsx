@@ -392,6 +392,11 @@ export const App = () => {
   const [opampConnectionUrl, setOpampConnectionUrl] = useState<string>(DEFAULT_OPAMP_WS);
 
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userContext, setUserContext] = useState<{ name: string; role: string; isAdmin: boolean }>({
+    name: '',
+    role: '',
+    isAdmin: false,
+  });
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
 
   const handleDeleteBridge = async (bridgeUid: string, bridgeName: string) => {
@@ -438,6 +443,11 @@ export const App = () => {
       // Update admin status from response (refresh on each fetch)
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 2);
+        setUserContext(prev => ({
+          name: response.userRole.userName || prev.name,
+          role: response.userRole.role || prev.role,
+          isAdmin: response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 'Admin' || response.userRole.role === 2,
+        }));
       }
       if (typeof response.orgId === 'number') {
         setSelectedOrgId(response.orgId);
@@ -466,6 +476,22 @@ export const App = () => {
     }
   }, []);
 
+  const loadUserContext = useCallback(async () => {
+    try {
+      const response = await backendSrv.get('/user-role');
+      if (response) {
+        setUserContext({
+          name: response.userName || 'unknown',
+          role: response.role || 'unknown',
+          isAdmin: response.isAdmin === true || response.isAdmin === 'true',
+        });
+        setIsAdmin(response.isAdmin === true || response.role === 'RoleAdmin' || response.role === 'Admin' || response.role === 2);
+      }
+    } catch (err) {
+      console.error('Failed to load user context:', err);
+    }
+  }, []);
+
   const loadGrafanaOrgContext = useCallback(async () => {
     try {
       const org = await rawBackendSrv.get('/api/org');
@@ -480,13 +506,14 @@ export const App = () => {
   useEffect(() => {
     const init = async () => {
       await loadGrafanaOrgContext();
+      await loadUserContext();
       await fetchAgents();
     };
     init();
     loadOpampSettings();
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
-  }, [loadGrafanaOrgContext, loadOpampSettings]);
+  }, [loadGrafanaOrgContext, loadUserContext, loadOpampSettings]);
 
   useEffect(() => {
     if (!currentOrgName && grafanaOrgName) {
@@ -692,6 +719,22 @@ export const App = () => {
               <span style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
                 {currentOrgName || `Organization ${selectedOrgId ?? ''}`}
               </span>
+            </div>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 12px',
+              background: '#F3F4F6',
+              borderRadius: 6,
+              border: '1px solid #E5E7EB'
+            }}>
+              <div style={{ fontSize: 12, color: '#4B5563' }}>
+                <strong>User:</strong> {userContext.name || 'unknown'}
+              </div>
+              <div style={{ fontSize: 12, color: userContext.isAdmin ? '#059669' : '#B45309', fontWeight: 600 }}>
+                {userContext.role || (userContext.isAdmin ? 'Admin' : 'Viewer')}
+              </div>
             </div>
           </div>
           <div style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>
