@@ -142,7 +142,7 @@ Restart Grafana after updating these settings.
 #### Method 1: Docker Compose (Recommended)
 
 ```yaml
-# docker-compose.yml or docker-compose.standalone.yml
+# docker-compose.yml or tests/docker/docker-compose.standalone.yml
 grafana:
   environment:
     # Match these to plugin UI settings
@@ -367,7 +367,7 @@ grafana:
 ### Example 2: External Mode (Production)
 
 ```yaml
-# docker-compose.standalone.yml
+# tests/docker/docker-compose.standalone.yml
 grafana:
   environment:
     OPAMP_SERVER_MODE: "external"

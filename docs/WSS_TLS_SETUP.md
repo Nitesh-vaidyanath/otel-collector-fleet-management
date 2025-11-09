@@ -290,6 +290,6 @@ Both `OPAMP_TLS_CERT` and `OPAMP_TLS_KEY` must be set to enable WSS.
 ## Next Steps
 
 - **Production deployment:** See [STANDALONE_OPAMP_SETUP.md](./STANDALONE_OPAMP_SETUP.md)
-- **Kubernetes setup:** See [test-agents/kubernetes/README.md](../test-agents/kubernetes/README.md)
+- **Kubernetes setup:** See [k8s/README.md](../k8s/README.md)
 - **Troubleshooting:** See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)
 

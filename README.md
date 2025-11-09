@@ -82,9 +82,22 @@ grafana-agents-app/
 │   │   └── ...              # Other shared files
 │   └── pkg/migrations/      # Database migrations
 ├── docs/                     # Documentation
-├── docker-compose.yml        # Standard deployment
-└── docker-compose.standalone.yml # Standalone OpAMP deployment
+├── docker-compose.yml        # Standard development stack
+└── tests/
+    ├── docker/               # Test/standalone Docker assets
+    │   ├── Dockerfile.test
+    │   ├── docker-compose.test.yml
+    │   └── docker-compose.standalone.yml
+    └── e2e/                  # Playwright configuration & reports
+        ├── playwright/
+        ├── playwright-report/
+        └── playwright.config.ts
 ```
+## 🧪 Demo Environments
+
+- **Docker:** `docker/demo/` contains the compose-ready collectors and seed data shown in the testing walkthrough. Start everything with `docker compose up --build -d` and (optionally) seed orgs via `docker compose --profile seed up seed-demo-data`.
+- **Kubernetes:** `k8s/README.md` explains how to install the OpenTelemetry operator and create an `OpAMPBridge` CRD (`k8s/opamp-bridge.yaml`) that points at your OpAMP endpoint. No additional scripts are required.
+
 
 **Note**: All backend code is consolidated in `opamp-server/pkg/backend/`. Both plugin backend and standalone server use the same codebase via Go build tags.
 
@@ -156,7 +169,7 @@ For detailed architecture and data model, see [Data Model and Architecture](./do
 
 3. **Run database migrations**:
    ```bash
-   ./run-migrations.sh
+   ./scripts/run-migrations.sh
    ```
 
 4. **Access Grafana**:

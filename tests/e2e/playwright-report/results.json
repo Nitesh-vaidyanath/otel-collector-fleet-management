@@ -1,0 +1,712 @@
+{
+  "config": {
+    "configFile": "/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright.config.ts",
+    "rootDir": "/Users/NiteshBV/otel-collector-fleet-management/plugin/tests/e2e",
+    "forbidOnly": false,
+    "fullyParallel": true,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 5
+    },
+    "preserveOutput": "always",
+    "reporter": [
+      [
+        "html",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright-report/results.json"
+        }
+      ],
+      [
+        "junit",
+        {
+          "outputFile": "/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright-report/junit.xml"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "quiet": false,
+    "projects": [
+      {
+        "outputDir": "/Users/NiteshBV/otel-collector-fleet-management/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 5
+        },
+        "id": "setup",
+        "name": "setup",
+        "testDir": "/Users/NiteshBV/otel-collector-fleet-management/plugin/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/.*\\.setup\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/NiteshBV/otel-collector-fleet-management/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 5
+        },
+        "id": "chromium",
+        "name": "chromium",
+        "testDir": "/Users/NiteshBV/otel-collector-fleet-management/plugin/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "shard": null,
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.56.1",
+    "workers": 5,
+    "webServer": {
+      "command": "docker compose up -d grafana mysql",
+      "url": "http://localhost:3000/api/health",
+      "reuseExistingServer": true,
+      "timeout": 120000
+    }
+  },
+  "suites": [
+    {
+      "title": "auth.setup.ts",
+      "file": "auth.setup.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "authenticate",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "setup",
+              "projectName": "setup",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 3,
+                  "error": {
+                    "message": "Error: Error reading storage state from /Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json:\nENOENT: no such file or directory, open '/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json'",
+                    "stack": "Error: Error reading storage state from /Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json:\nENOENT: no such file or directory, open '/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json'"
+                  },
+                  "errors": [
+                    {
+                      "message": "Error: Error reading storage state from /Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json:\nENOENT: no such file or directory, open '/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json'"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2025-11-09T17:28:28.204Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "17e3fe6f4d9d8bd79c6b-60f085b113a677673906",
+          "file": "auth.setup.ts",
+          "line": 5,
+          "column": 6
+        }
+      ]
+    },
+    {
+      "title": "plugin.spec.ts",
+      "file": "plugin.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "OTel Collector Agent Fleet Management Plugin",
+          "file": "plugin.spec.ts",
+          "line": 6,
+          "column": 6,
+          "specs": [
+            {
+              "title": "should load the plugin page",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-b7d8736643ac6de559bc",
+              "file": "plugin.spec.ts",
+              "line": 14,
+              "column": 7
+            },
+            {
+              "title": "should display agents list",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-18d35e9ce649a6bce19c",
+              "file": "plugin.spec.ts",
+              "line": 20,
+              "column": 7
+            },
+            {
+              "title": "should display configuration management section",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-428eb3f115ec0762246d",
+              "file": "plugin.spec.ts",
+              "line": 29,
+              "column": 7
+            },
+            {
+              "title": "should display monitoring section",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-f6eec55cda9dbc937362",
+              "file": "plugin.spec.ts",
+              "line": 41,
+              "column": 7
+            },
+            {
+              "title": "should handle agent selection",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-97a225cf5ce6dd368048",
+              "file": "plugin.spec.ts",
+              "line": 50,
+              "column": 7
+            },
+            {
+              "title": "should display pipeline flow diagram",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-f50c9fa9a339f3ba975a",
+              "file": "plugin.spec.ts",
+              "line": 65,
+              "column": 7
+            },
+            {
+              "title": "should handle organization selection",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-c8d5a71d0082e1f77c03",
+              "file": "plugin.spec.ts",
+              "line": 74,
+              "column": 7
+            },
+            {
+              "title": "should display API endpoints correctly",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-58f5ef3cd69f8ed36980",
+              "file": "plugin.spec.ts",
+              "line": 90,
+              "column": 7
+            },
+            {
+              "title": "should handle error states gracefully",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-0623d99e36409aed657d",
+              "file": "plugin.spec.ts",
+              "line": 109,
+              "column": 7
+            },
+            {
+              "title": "should refresh metrics automatically",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-21e37aa58334ce02ccb2",
+              "file": "plugin.spec.ts",
+              "line": 128,
+              "column": 7
+            },
+            {
+              "title": "should handle configuration creation",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-fdfa896b0c45ae9cbbcd",
+              "file": "plugin.spec.ts",
+              "line": 140,
+              "column": 7
+            },
+            {
+              "title": "should display telemetry data",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-c572e724a22f8762637b",
+              "file": "plugin.spec.ts",
+              "line": 154,
+              "column": 7
+            },
+            {
+              "title": "should handle configuration approval workflow",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-e9366a15f7f2285b239e",
+              "file": "plugin.spec.ts",
+              "line": 163,
+              "column": 7
+            },
+            {
+              "title": "should handle configuration revert",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-07820a2297c529b40180",
+              "file": "plugin.spec.ts",
+              "line": 180,
+              "column": 7
+            },
+            {
+              "title": "should verify sync status",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-3febac715cbe8d169c09",
+              "file": "plugin.spec.ts",
+              "line": 193,
+              "column": 7
+            },
+            {
+              "title": "should display agent health status",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-d4675099bb7d8a630690",
+              "file": "plugin.spec.ts",
+              "line": 206,
+              "column": 7
+            },
+            {
+              "title": "should handle component type selection",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-7581bc0338bd1d44e5ef",
+              "file": "plugin.spec.ts",
+              "line": 217,
+              "column": 7
+            },
+            {
+              "title": "should handle YAML configuration editing",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-91aacb869eeb8d7e11ef",
+              "file": "plugin.spec.ts",
+              "line": 236,
+              "column": 7
+            },
+            {
+              "title": "should handle full-width pipeline diagram",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-527a7a5f9c937b97e7e9",
+              "file": "plugin.spec.ts",
+              "line": 253,
+              "column": 7
+            },
+            {
+              "title": "should display processor order correctly",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-61c3fa7cf2a9fcbb265e",
+              "file": "plugin.spec.ts",
+              "line": 269,
+              "column": 7
+            },
+            {
+              "title": "should display bandwidth metrics between processors",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-60597d5fc5d7b118ae8e",
+              "file": "plugin.spec.ts",
+              "line": 281,
+              "column": 7
+            },
+            {
+              "title": "should handle receiver to processor mapping",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-49f46b077442ebdd762c",
+              "file": "plugin.spec.ts",
+              "line": 293,
+              "column": 7
+            },
+            {
+              "title": "should handle multiple receiver display",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-a7e12ea4a2a9c7a55bc1",
+              "file": "plugin.spec.ts",
+              "line": 308,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "API Integration Tests",
+          "file": "plugin.spec.ts",
+          "line": 322,
+          "column": 6,
+          "specs": [
+            {
+              "title": "should fetch agents via API",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-845bb8b87bfc76ded801",
+              "file": "plugin.spec.ts",
+              "line": 323,
+              "column": 7
+            },
+            {
+              "title": "should fetch organizations via API",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-d6ca1554b3fa3137eb65",
+              "file": "plugin.spec.ts",
+              "line": 333,
+              "column": 7
+            },
+            {
+              "title": "should fetch health status via API",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-21268c438948f4098350",
+              "file": "plugin.spec.ts",
+              "line": 342,
+              "column": 7
+            },
+            {
+              "title": "should handle 404 for non-existent agent",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chromium",
+                  "projectName": "chromium",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "4dd859635662cea12a40-6283a1efaad5d7b5ec90",
+              "file": "plugin.spec.ts",
+              "line": 353,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2025-11-09T17:28:27.772Z",
+    "duration": 749.4870000000001,
+    "expected": 0,
+    "skipped": 27,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}

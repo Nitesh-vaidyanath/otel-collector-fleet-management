@@ -1,22 +1,28 @@
+import path from 'path';
 import { defineConfig, devices } from '@playwright/test';
 
+const ROOT = path.resolve(__dirname, '..', '..');
+const REPORT_DIR = path.join(__dirname, 'playwright-report');
+const STORAGE_STATE = path.join(__dirname, 'playwright', '.auth', 'user.json');
+const TEST_DIR = path.join(ROOT, 'plugin', 'tests', 'e2e');
+
 export default defineConfig({
-  testDir: './plugin/tests/e2e',
+  testDir: TEST_DIR,
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: [
     ['html'],
-    ['json', { outputFile: 'playwright-report/results.json' }],
-    ['junit', { outputFile: 'playwright-report/junit.xml' }],
+    ['json', { outputFile: path.join(REPORT_DIR, 'results.json') }],
+    ['junit', { outputFile: path.join(REPORT_DIR, 'junit.xml') }],
   ],
   use: {
     baseURL: process.env.GRAFANA_URL || 'http://localhost:3000',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Store authentication state for all tests
-    storageState: 'playwright/.auth/user.json',
+    storageState: STORAGE_STATE,
   },
 
   projects: [

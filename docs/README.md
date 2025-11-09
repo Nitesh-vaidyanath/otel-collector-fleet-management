@@ -47,9 +47,9 @@ Complete documentation for OTel Collector Agent Fleet Management plugin.
 - **[Kubernetes Deployment Guide](./KUBERNETES_DEPLOYMENT.md)**
   - Deploying Grafana + fleet-backend in Kubernetes
   - Persistent storage, services, and TLS notes
-- **[Kubernetes Stack (namespaced)](../k8s/stack/README.md)**
-  - End-to-end manifests for Grafana, MySQL, fleet-backend
-  - Requires pushing custom Grafana/fleet images
+- **[Kubernetes Demo Setup](../k8s/README.md)**
+  - Install operator + bridge with a single `OpAMPBridge` CRD
+  - Instructions for pointing the bridge at your OpAMP endpoint
 - **[Pending Requests Fix](./KUBERNETES_PENDING_REQUESTS_FIX.md)**
   - Historical context on request throttling and how we mitigated it
 - **[OpAMP Server Internals](./opamp-server/STRUCTURE.md)**

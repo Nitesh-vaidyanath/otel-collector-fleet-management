@@ -5,7 +5,7 @@
 The database host has been configured to use `mysql.platform.svc.cluster.local` in the following files:
 
 1. **`provisioning/plugins/otel-collector-agent-fleet-management-auto-enable.yaml`** - Updated with Kubernetes service DNS
-2. **`test-agents/kubernetes/grafana-deployment-example.yaml`** - Created example Kubernetes deployment
+2. **`k8s/fleet-backend.yaml`** - Example backend Deployment + Service manifest
 
 ## Configuration Methods
 
@@ -129,12 +129,12 @@ kubectl create secret generic grafana-secret \
 
 ### 4. Deploy to Kubernetes
 
-Use the example deployment file:
+Use the example backend manifest as a starting point:
 ```bash
-kubectl apply -f test-agents/kubernetes/grafana-deployment-example.yaml
+kubectl apply -f k8s/fleet-backend.yaml
 ```
 
-Or create your own deployment using the example as a template.
+Customize the image, Secrets, and environment variables to match your environment if you build/publish the backend elsewhere.
 
 ## Verification
 
@@ -261,7 +261,7 @@ kubectl port-forward -n platform deployment/grafana 3000:3000
 ## Files Modified
 
 - ✅ `provisioning/plugins/otel-collector-agent-fleet-management-auto-enable.yaml`
-- ✅ `test-agents/kubernetes/grafana-deployment-example.yaml` (created)
+- ✅ `k8s/fleet-backend.yaml` (example backend deployment)
 
 ## Files to Build
 

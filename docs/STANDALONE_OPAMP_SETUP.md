@@ -41,7 +41,7 @@ docker build -f Dockerfile.standalone -t opamp-server:latest .
 
 ```bash
 # Start MySQL, OpAMP server, and Grafana
-docker compose -f docker-compose.standalone.yml up -d
+docker compose -f tests/docker/docker-compose.standalone.yml up -d
 ```
 
 ### 3. Configure Grafana Plugin
@@ -65,7 +65,7 @@ curl http://localhost:4321/v1/opamp
 
 ## Docker Compose Configuration
 
-The `docker-compose.standalone.yml` file includes:
+The `tests/docker/docker-compose.standalone.yml` file includes:
 
 - **mysql**: MySQL database (shared between plugin and OpAMP server)
 - **opamp-server**: Standalone OpAMP server
@@ -139,7 +139,7 @@ openssl req -x509 -newkey rsa:4096 -keyout opamp-server/tls/key.pem \
   -subj "/CN=opamp-server"
 ```
 
-2. Update `docker-compose.standalone.yml`:
+2. Update `tests/docker/docker-compose.standalone.yml`:
 
 ```yaml
 opamp-server:
@@ -170,13 +170,13 @@ For production, use certificates from:
 ### From Embedded to Standalone
 
 1. Stop Grafana: `docker compose stop grafana`
-2. Start standalone services: `docker compose -f docker-compose.standalone.yml up -d`
+2. Start standalone services: `docker compose -f tests/docker/docker-compose.standalone.yml up -d`
 3. Update Grafana plugin configuration to use external mode
 4. Restart Grafana: `docker compose start grafana`
 
 ### From Standalone to Embedded
 
-1. Stop standalone OpAMP server: `docker compose -f docker-compose.standalone.yml stop opamp-server`
+1. Stop standalone OpAMP server: `docker compose -f tests/docker/docker-compose.standalone.yml stop opamp-server`
 2. Update Grafana plugin configuration to use embedded mode
 3. Set `OPAMP_SERVER_MODE=embedded` (or remove the env var)
 4. Restart Grafana: `docker compose restart grafana`
@@ -205,10 +205,10 @@ Response:
 
 ```bash
 # View OpAMP server logs
-docker compose -f docker-compose.standalone.yml logs -f opamp-server
+docker compose -f tests/docker/docker-compose.standalone.yml logs -f opamp-server
 
 # View Grafana logs
-docker compose -f docker-compose.standalone.yml logs -f grafana
+docker compose -f tests/docker/docker-compose.standalone.yml logs -f grafana
 ```
 
 ## Troubleshooting
@@ -217,12 +217,12 @@ docker compose -f docker-compose.standalone.yml logs -f grafana
 
 1. Check database connection:
    ```bash
-   docker compose -f docker-compose.standalone.yml exec opamp-server ./opamp-server -db-dsn="..." -endpoint=0.0.0.0:4321
+   docker compose -f tests/docker/docker-compose.standalone.yml exec opamp-server ./opamp-server -db-dsn="..." -endpoint=0.0.0.0:4321
    ```
 
 2. Verify database is accessible:
    ```bash
-   docker compose -f docker-compose.standalone.yml exec mysql mysql -u grafana -pgrafana123 grafana_agents -e "SELECT 1;"
+   docker compose -f tests/docker/docker-compose.standalone.yml exec mysql mysql -u grafana -pgrafana123 grafana_agents -e "SELECT 1;"
    ```
 
 ### Agents Cannot Connect
