@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { getBackendSrv, type FetchRequest } from '@grafana/runtime';
+import { getBackendSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
 
@@ -265,7 +265,312 @@ type Tab = 'collectors' | 'configurations' | 'monitoring';
 
 const rawBackendSrv = getBackendSrv();
 
-type FetchOptions = Omit<FetchRequest, 'url' | 'method'>;
+const capabilityOrder = [
+  'accepts_remote_config',
+  'reports_effective_config',
+  'reports_health',
+  'reports_own_logs',
+  'reports_own_metrics',
+  'reports_own_traces',
+  'accepts_restart_command',
+  'reports_remote_config',
+  'reports_status',
+  'reports_available_components',
+];
+
+type CapabilityDescriptor = {
+  label: string;
+  description: string;
+  icon: string;
+  tone: { bg: string; border: string; color: string };
+};
+
+const capabilityMeta: Record<string, CapabilityDescriptor> = {
+  accepts_remote_config: {
+    label: 'Remote Config',
+    description: 'Accepts remote configuration updates pushed via OpAMP.',
+    icon: '⚙️',
+    tone: { bg: '#EEF2FF', border: '#C7D2FE', color: '#3730A3' },
+  },
+  reports_effective_config: {
+    label: 'Reports Config',
+    description: 'Reports effective configuration back to the OpAMP server.',
+    icon: '🧾',
+    tone: { bg: '#ECFDF5', border: '#A7F3D0', color: '#065F46' },
+  },
+  reports_health: {
+    label: 'Health',
+    description: 'Sends health status updates (required for health widget).',
+    icon: '❤️',
+    tone: { bg: '#FEF2F2', border: '#FECACA', color: '#991B1B' },
+  },
+  reports_own_logs: {
+    label: 'Logs',
+    description: 'Streams self-observed logs via OpAMP telemetry endpoint.',
+    icon: '📜',
+    tone: { bg: '#FDF2F8', border: '#FBCFE8', color: '#9D174D' },
+  },
+  reports_own_metrics: {
+    label: 'Metrics',
+    description: 'Streams self-observed metrics via OpAMP telemetry endpoint.',
+    icon: '📈',
+    tone: { bg: '#ECFEFF', border: '#BAE6FD', color: '#0C4A6E' },
+  },
+  reports_own_traces: {
+    label: 'Traces',
+    description: 'Streams self-observed traces via OpAMP telemetry endpoint.',
+    icon: '🛰️',
+    tone: { bg: '#FFF7ED', border: '#FED7AA', color: '#9A3412' },
+  },
+  accepts_restart_command: {
+    label: 'Restart Cmd',
+    description: 'Can be restarted remotely from the OpAMP server.',
+    icon: '🔁',
+    tone: { bg: '#E0E7FF', border: '#C7D2FE', color: '#312E81' },
+  },
+  reports_remote_config: {
+    label: 'Config Status',
+    description: 'Reports remote configuration hashes/status for auditing.',
+    icon: '🛰️',
+    tone: { bg: '#F3F4F6', border: '#E5E7EB', color: '#111827' },
+  },
+  reports_status: {
+    label: 'Agent Status',
+    description: 'Sends regular status updates (uptime, metadata, etc.).',
+    icon: '📡',
+    tone: { bg: '#F0FDFA', border: '#99F6E4', color: '#115E59' },
+  },
+  reports_available_components: {
+    label: 'Component Inventory',
+    description: 'Reports available receivers/processors/exporters.',
+    icon: '🧩',
+    tone: { bg: '#EFF6FF', border: '#BFDBFE', color: '#1E3A8A' },
+  },
+};
+
+const isCapabilityEnabled = (value: any): boolean => {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    return value.toLowerCase() === 'true' || value === '1';
+  }
+  return true;
+};
+
+const CapabilityBadges = ({
+  capabilities,
+  limit = 5,
+  compact = false,
+  onOpenDetails,
+}: {
+  capabilities?: Record<string, any>;
+  limit?: number;
+  compact?: boolean;
+  onOpenDetails?: () => void;
+}) => {
+  const badges = React.useMemo(() => {
+    if (!capabilities) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const enabledPairs: { key: string; meta: CapabilityDescriptor; rawKey: string }[] = [];
+    const orderedKeys = [...capabilityOrder, ...Object.keys(capabilities)];
+    orderedKeys.forEach((key) => {
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      if (!isCapabilityEnabled(capabilities[key])) {
+        return;
+      }
+      const meta = capabilityMeta[key] || {
+        label: key.replace(/_/g, ' '),
+        description: 'Reported capability',
+        icon: '✨',
+        tone: { bg: '#F3F4F6', border: '#E5E7EB', color: '#111827' },
+      };
+      enabledPairs.push({ key, meta, rawKey: key });
+    });
+    return enabledPairs;
+  }, [capabilities]);
+
+  if (!capabilities || badges.length === 0) {
+    return null;
+  }
+
+  const displayed = badges.slice(0, limit);
+  const remaining = badges.length - displayed.length;
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      {displayed.map(({ key, meta }) => (
+        <span
+          key={key}
+          title={meta.description}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: compact ? 10 : 11,
+            fontWeight: 600,
+            padding: compact ? '2px 6px' : '4px 8px',
+            borderRadius: 999,
+            background: meta.tone.bg,
+            border: `1px solid ${meta.tone.border}`,
+            color: meta.tone.color,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span>{meta.icon}</span>
+          <span>{meta.label}</span>
+        </span>
+      ))}
+      {remaining > 0 && (
+        <span
+          style={{ fontSize: 10, color: '#3B82F6', cursor: onOpenDetails ? 'pointer' : 'default', textDecoration: onOpenDetails ? 'underline' : 'none' }}
+          title="Additional capabilities reported by this agent"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDetails?.();
+          }}
+        >
+          +{remaining} more
+        </span>
+      )}
+    </div>
+  );
+};
+
+const builtinReceiverTemplates = [
+  {
+    value: 'otlp',
+    label: 'OTLP (gRPC + HTTP)',
+    description: 'Default OpenTelemetry receiver with gRPC (4317) and HTTP (4318) endpoints.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      protocols: {
+        grpc: { endpoint: '0.0.0.0:4317' },
+        http: { endpoint: '0.0.0.0:4318' },
+      },
+    },
+  },
+  {
+    value: 'prometheus',
+    label: 'Prometheus Scraper',
+    description: 'Scrape metrics from Prometheus targets on port 9090 every 30s.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      config: {
+        scrape_configs: [
+          {
+            job_name: 'otel-collector',
+            scrape_interval: '30s',
+            static_configs: [{ targets: ['0.0.0.0:9090'] }],
+          },
+        ],
+      },
+    },
+  },
+];
+
+const builtinProcessorTemplates = [
+  {
+    value: 'batch',
+    label: 'Batch',
+    description: 'Recommended batch processor with sane defaults.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      send_batch_size: 8192,
+      timeout: '10s',
+    },
+  },
+  {
+    value: 'memory_limiter',
+    label: 'Memory Limiter',
+    description: 'Prevents the collector from running out of memory.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      check_interval: '2s',
+      limit_percentage: 75,
+      spike_limit_percentage: 15,
+    },
+  },
+];
+
+const builtinExporterTemplates = [
+  {
+    value: 'otlp',
+    label: 'OTLP (HTTP)',
+    description: 'Send data to an upstream OTLP endpoint over HTTP.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      endpoint: 'http://localhost:4318',
+    },
+  },
+  {
+    value: 'debug',
+    label: 'Debug (logging)',
+    description: 'Log telemetry payloads for troubleshooting.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      verbosity: 'basic',
+    },
+  },
+];
+
+const customComponentOption = {
+  value: 'custom',
+  label: 'Custom (YAML)',
+  config: {},
+  isSystem: false,
+  isCustom: true,
+};
+
+const mergeComponentTypeLists = (
+  fetched: any[],
+  fallback: any[]
+) => {
+  const merged = new Map<string, any>();
+
+  [...(fetched || []), ...(fallback || [])].forEach((item: any) => {
+    if (!item) {
+      return;
+    }
+    const key = item.value || item.type;
+    if (!key) {
+      return;
+    }
+    if (!merged.has(key)) {
+      merged.set(key, {
+        ...item,
+        value: key,
+        label: item.label || item.displayLabel || key,
+        config: item.config || {},
+      });
+    }
+  });
+
+  const result = Array.from(merged.values());
+  if (!result.some((t) => t.value === 'custom')) {
+    result.push({ ...customComponentOption });
+  }
+  return result;
+};
+
+type FetchOptions = Record<string, any>;
 
 type OpampSettingsResponse = {
   opampServerURL?: string | null;
@@ -300,19 +605,19 @@ const normalizeRequestHeaders = (incoming?: HeadersInit | Record<string, string>
   return { ...(incoming as Record<string, string>) };
 };
 
-const fetchWithAuth = async <T = any>({ responseType, headers: requestHeaders, ...rest }: FetchRequest): Promise<T> => {
+const fetchWithAuth = async <T = any>({ responseType, headers: requestHeaders, ...rest }: Record<string, any>): Promise<T> => {
   const headers = normalizeRequestHeaders(requestHeaders);
   if (tenantHeaderValue && !headers['X-Scoper-Tenant']) {
     headers['X-Scoper-Tenant'] = tenantHeaderValue;
   }
 
-  const response = await lastValueFrom(
-    rawBackendSrv.fetch<T>({
-      responseType: (responseType as any) ?? 'json',
-      ...rest,
-      headers,
-    })
-  );
+  const requestPayload = {
+    responseType: (responseType as any) ?? 'json',
+    ...rest,
+    headers,
+  } as any;
+
+  const response = await lastValueFrom(rawBackendSrv.fetch<T>(requestPayload));
 
   if (response.status >= 200 && response.status < 300) {
     return response.data;
@@ -334,7 +639,7 @@ const backendSrv = {
     fetchWithAuth<T>({ ...options, url: normalizeUrl(url), method: 'DELETE' }),
   patch: <T = any>(url: string, data?: any, options: FetchOptions = {}) =>
     fetchWithAuth<T>({ ...options, url: normalizeUrl(url), data, method: 'PATCH' }),
-  request: <T = any>(options: FetchRequest) =>
+  request: <T = any>(options: Record<string, any>) =>
     fetchWithAuth<T>({
       ...options,
       url: normalizeUrl(options.url ?? ''),
@@ -385,6 +690,11 @@ export const App = () => {
   const [loadingDetailMonitoring, setLoadingDetailMonitoring] = useState(false);
   const [groupByDeploymentType, setGroupByDeploymentType] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [bridgeCapabilitySheet, setBridgeCapabilitySheet] = useState<{ bridge: Bridge | null; open: boolean }>({
+    bridge: null,
+    open: false,
+  });
+  const closeBridgeCapabilitySheet = () => setBridgeCapabilitySheet({ bridge: null, open: false });
   const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
@@ -476,13 +786,15 @@ export const App = () => {
       setAgents(incomingAgents);
       const directOnline = incomingAgents.filter((a: Agent) => a.status === 'online').length;
       const totals = response.totals || {};
+      const backendDirectOnline = totals.directOnline ?? totals.directOnlline ?? directOnline;
+      const backendManagedOnline = totals.managedOnline ?? 0;
       const mergedTotals = {
         direct: totals.directAgents ?? incomingAgents.length,
-        directOnline: totals.directOnline ?? directOnline,
+        directOnline: backendDirectOnline,
         managed: totals.managedCollectors ?? 0,
-        managedOnline: totals.managedOnline ?? 0,
+        managedOnline: backendManagedOnline,
         total: totals.totalCollectors ?? ((totals.directAgents ?? incomingAgents.length) + (totals.managedCollectors ?? 0)),
-        online: totals.onlineCollectors ?? ((totals.directOnline ?? directOnline) + (totals.managedOnline ?? 0)),
+        online: totals.onlineCollectors ?? (backendDirectOnline + backendManagedOnline),
       };
       setCollectorTotals(mergedTotals);
       // Update admin status from response (refresh on each fetch)
@@ -664,6 +976,12 @@ export const App = () => {
   const [upgradingAgent, setUpgradingAgent] = useState<string | null>(null);
 
   const handleUpgrade = async (agentUID: string) => {
+    const confirmUpgrade = window.confirm(
+      '⚠️ Upgrading will restart this collector and update only the collector binary/image. Please review the release notes and ensure your operator/CRDs support the new version.\n\nContinue with the upgrade?'
+    );
+    if (!confirmUpgrade) {
+      return;
+    }
     setUpgradingAgent(agentUID);
     try {
       setError('');
@@ -682,30 +1000,49 @@ export const App = () => {
 
   // Load monitoring data for details panel when capabilities/activity tab is selected
   useEffect(() => {
-    if (showDetailsPanel && selectedAgent && (detailTab === 'capabilities' || detailTab === 'activity')) {
-      setLoadingDetailMonitoring(true);
-      const loadDetailMonitoring = async () => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const shouldLoadDetails =
+      showDetailsPanel && selectedAgent && (detailTab === 'capabilities' || detailTab === 'activity');
+
+    if (shouldLoadDetails) {
+      const loadDetailMonitoring = async (silent = false) => {
+        if (!silent) {
+          setLoadingDetailMonitoring(true);
+        }
         try {
           const [telemetryResponse, healthResponse] = await Promise.all([
-            backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/telemetry?limit=50`).catch(() => ({ items: [] })),
-            backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/health?limit=20`).catch(() => ({ items: [], current: {} }))
+            backendSrv
+              .get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent!.agentUid}/telemetry?limit=50`)
+              .catch(() => ({ items: [] })),
+            backendSrv
+              .get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent!.agentUid}/health?limit=20`)
+              .catch(() => ({ items: [], current: {} })),
           ]);
           setDetailPanelMonitoringData({
             telemetry: telemetryResponse.items || [],
-            health: healthResponse
+            health: healthResponse,
           });
         } catch (err) {
           console.error('Failed to load detail monitoring data:', err);
           setDetailPanelMonitoringData({ telemetry: [], health: { items: [], current: {} } });
         } finally {
-          setLoadingDetailMonitoring(false);
+          if (!silent) {
+            setLoadingDetailMonitoring(false);
+          }
         }
       };
-      loadDetailMonitoring();
+
+      loadDetailMonitoring(false);
+      interval = setInterval(() => loadDetailMonitoring(true), 5000);
     } else {
-      // Clear monitoring data when panel closes or tab changes
       setDetailPanelMonitoringData(null);
     }
+
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
   }, [selectedAgent?.agentUid, detailTab, showDetailsPanel]);
 
   // Collect all unique labels for filtering
@@ -1276,6 +1613,17 @@ export const App = () => {
                               <span style={{ fontSize: 11, color: '#6B7280', fontWeight: 500 }}>
                                 {bridgeCollectors.length} collector{bridgeCollectors.length !== 1 ? 's' : ''}
                               </span>
+                              <CapabilityBadges
+                                capabilities={bridge.capabilities}
+                                limit={3}
+                                compact
+                                onOpenDetails={() => {
+                                  setBridgeCapabilitySheet({
+                                    bridge,
+                                    open: true,
+                                  });
+                                }}
+                              />
                             </div>
                             
                             {/* Bridge Status */}
@@ -2085,10 +2433,11 @@ export const App = () => {
                       'reports_connection_settings_status'
                     ];
                     
-                    const reportedCaps = new Set(Object.keys(selectedAgent.capabilities));
+                    const capabilitySource = selectedAgent?.capabilities || {};
+                    const reportedCaps = new Set(Object.keys(capabilitySource));
                     const missingCaps = allCapabilities.filter(cap => !reportedCaps.has(cap));
                     const unsupportedCaps = allCapabilities.filter(cap => 
-                      reportedCaps.has(cap) && selectedAgent.capabilities[cap] === false
+                      reportedCaps.has(cap) && capabilitySource[cap] === false
                     );
                     
                     if (missingCaps.length === 0 && unsupportedCaps.length === 0) {
@@ -2314,12 +2663,129 @@ export const App = () => {
                 minHeight: '40px',
                 transition: 'all 0.2s'
               }}
+              title="Upgrades restart the collector process and may require compatible CRDs/operators."
             >
               {upgradingAgent === selectedAgent.agentUid ? 'Upgrading...' : 'Upgrade'}
             </button>
           </div>
+          <div style={{ padding: '8px 20px 0', fontSize: 11, color: '#92400E', lineHeight: 1.4 }}>
+            ⚠️ This action only asks the collector process to restart with whatever image/tag is currently defined in the CRD.
+            It does <strong>not</strong> patch <code>spec.image</code>, upgrade the OpenTelemetry Collector Operator, or apply CRD migrations for you.
+            Review the{' '}
+            <a href="https://github.com/open-telemetry/opentelemetry-collector-releases/releases" target="_blank" rel="noopener noreferrer" style={{ color: '#B45309', textDecoration: 'underline' }}>
+              upstream release notes
+            </a>{' '}
+            and update your CRD (e.g., <code>spec.image</code>, resources, feature flags) before using this button.
+          </div>
         </div>
       )}
+
+      {bridgeCapabilitySheet.open && bridgeCapabilitySheet.bridge && (
+        <>
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0,0,0,0.45)',
+              zIndex: 1090,
+            }}
+            onClick={closeBridgeCapabilitySheet}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 420,
+              background: 'white',
+              boxShadow: '-6px 0 18px rgba(15,23,42,0.25)',
+              zIndex: 1100,
+              display: 'flex',
+              flexDirection: 'column',
+              animation: 'slideIn 0.25s ease-out',
+            }}
+          >
+            <div style={{ padding: 20, borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>{bridgeCapabilitySheet.bridge.name}</div>
+                <div style={{ fontSize: 12, color: '#6B7280' }}>Bridge Capabilities</div>
+              </div>
+              <button
+                onClick={closeBridgeCapabilitySheet}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: 24,
+                  cursor: 'pointer',
+                  color: '#6B7280',
+                  width: 32,
+                  height: 32,
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ padding: 20, overflowY: 'auto' }}>
+              {bridgeCapabilitySheet.bridge.capabilities ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {Object.entries(bridgeCapabilitySheet.bridge.capabilities)
+                    .sort((a, b) => {
+                      const ai = capabilityOrder.indexOf(a[0]);
+                      const bi = capabilityOrder.indexOf(b[0]);
+                      return (ai === -1 ? capabilityOrder.length : ai) - (bi === -1 ? capabilityOrder.length : bi);
+                    })
+                    .map(([key, value]) => {
+                      const meta = capabilityMeta[key] || {
+                        label: key.replace(/_/g, ' '),
+                        description: 'Reported capability',
+                        icon: '✨',
+                        tone: { bg: '#F3F4F6', border: '#E5E7EB', color: '#111827' },
+                      };
+                      const enabled = isCapabilityEnabled(value);
+                      return (
+                        <div
+                          key={key}
+                          style={{
+                            border: `1px solid ${meta.tone.border}`,
+                            borderRadius: 10,
+                            padding: 14,
+                            background: meta.tone.bg,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: meta.tone.color, fontWeight: 600 }}>
+                              <span>{meta.icon}</span>
+                              <span>{meta.label}</span>
+                            </div>
+                            <span style={{ fontSize: 12, color: enabled ? '#059669' : '#B91C1C', fontWeight: 600 }}>
+                              {enabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 12, color: '#4B5563' }}>{meta.description}</div>
+                          {!enabled && (
+                            <div style={{ fontSize: 11, color: '#9CA3AF' }}>
+                              Raw value: <code>{String(value)}</code>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: '#6B7280' }}>No capabilities reported by this bridge.</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
 
       {/* Overlay for panel */}
       {showDetailsPanel && (
@@ -2353,10 +2819,10 @@ export const App = () => {
 
 // Pipeline Flow Diagram Component - Memoized to prevent re-renders when only telemetry changes
 const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pipelines, telemetry }: { config: string; pipelines: any[]; telemetry: any[] }) {
-  const [animationTick, setAnimationTick] = useState(0);
+  const [, setAnimationTick] = useState(0);
   const [metricsData, setMetricsData] = useState<any>({});
 
-  // Animate traffic flow every 2 seconds
+  // Animate traffic flow every 2 seconds to keep the UI lively
   useEffect(() => {
     const interval = setInterval(() => {
       setAnimationTick((prev) => prev + 1);
@@ -2404,35 +2870,29 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
       pipelineFlows.forEach((flow: any) => {
         flow.receivers.forEach((rec: string) => {
           const key = `rec-${rec}`;
-          const hash = rec.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-          // Use Math.random() for throughput to ensure it changes on every update
           newData[key] = {
             cpu: Math.round(Math.random() * 60 + 10),
             memory: Math.round(Math.random() * 200 + 50),
             bandwidth: Math.round(Math.random() * 800 + 100),
-            throughput: Math.round(Math.random() * 4000 + 1000) // Use Math.random() for throughput to ensure it changes
+            throughput: Math.round(Math.random() * 4000 + 1000)
           };
         });
         flow.processors.forEach((proc: string) => {
           const key = `proc-${proc}`;
-          const hash = proc.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-          // Use Math.random() for throughput to ensure it changes on every update
           newData[key] = {
             cpu: Math.round(Math.random() * 50 + 15),
             memory: Math.round(Math.random() * 250 + 50),
             bandwidth: Math.round(Math.random() * 900 + 100),
-            throughput: Math.round(Math.random() * 4000 + 1000) // Use Math.random() for throughput to ensure it changes
+            throughput: Math.round(Math.random() * 4000 + 1000)
           };
         });
         flow.exporters.forEach((exp: string) => {
           const key = `exp-${exp}`;
-          const hash = exp.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-          // Use Math.random() for throughput to ensure it changes on every update
           newData[key] = {
-            cpu: Math.round(Math.random() * 40 + 20),
-            memory: Math.round(Math.random() * 150 + 50),
-            bandwidth: Math.round(Math.random() * 500 + 100),
-            throughput: Math.round(Math.random() * 4000 + 1000) // Use Math.random() for throughput to ensure it changes
+            cpu: Math.round(Math.random() * 40 + 10),
+            memory: Math.round(Math.random() * 150 + 20),
+            bandwidth: Math.round(Math.random() * 700 + 50),
+            throughput: Math.round(Math.random() * 3500 + 500)
           };
         });
       });
@@ -2469,7 +2929,6 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
     // Check if we have updated metrics in state
     const prefix = componentType === 'receiver' ? 'rec-' : componentType === 'processor' ? 'proc-' : 'exp-';
     const key = `${prefix}${componentName}`;
-    
     if (metricsData[key]) {
       return metricsData[key];
     }
@@ -2484,6 +2943,82 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
       throughput: ((seed * 50) % 5000) + 1000 // 1000-6000 events/s
     };
   }, [metricsData]);
+
+  const pipelineLogs = useMemo(() => {
+    if (!Array.isArray(telemetry)) {
+      return [];
+    }
+    return telemetry
+      .filter((entry: any) => {
+        const type = String(entry?.type || entry?.signal || '').toLowerCase();
+        const channel = String(entry?.channel || entry?.category || '').toLowerCase();
+        return type.includes('log') || type.includes('event') || type.includes('error') || channel.includes('log');
+      })
+      .slice(0, 12);
+  }, [telemetry]);
+
+  const pipelineErrors = useMemo(() => {
+    return pipelineLogs
+      .filter((entry: any) => {
+        const severity = String(entry?.level || entry?.severity || '').toLowerCase();
+        const type = String(entry?.type || '').toLowerCase();
+        return severity === 'error' || severity === 'critical' || severity === 'fatal' || type.includes('error') || type.includes('fault');
+      })
+      .slice(0, 6);
+  }, [pipelineLogs]);
+
+  const formatLogMessage = (entry: any): string => {
+    if (!entry) {
+      return '';
+    }
+    const candidates = [entry.message, entry.description, entry.details, entry.error, entry.body];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim() !== '') {
+        return candidate.trim();
+      }
+    }
+    const payloads = [entry.data, entry.payload, entry.content];
+    for (const payload of payloads) {
+      if (!payload) {
+        continue;
+      }
+      if (typeof payload === 'string') {
+        return payload;
+      }
+      try {
+        return JSON.stringify(payload);
+      } catch {
+        continue;
+      }
+    }
+    try {
+      return JSON.stringify(entry);
+    } catch {
+      return String(entry);
+    }
+  };
+
+  const formatLogTimestamp = (entry: any): string => {
+    const raw = entry?.reported_at || entry?.reportedAt || entry?.timestamp || entry?.time;
+    if (!raw) {
+      return 'just now';
+    }
+    if (typeof raw === 'number') {
+      const fromNumber = new Date(raw);
+      if (!Number.isNaN(fromNumber.getTime())) {
+        return fromNumber.toLocaleString();
+      }
+    }
+    try {
+      const dt = new Date(raw);
+      if (!Number.isNaN(dt.getTime())) {
+        return dt.toLocaleString();
+      }
+    } catch (err) {
+      // Fallback to string rendering below
+    }
+    return String(raw);
+  };
 
   if (pipelineFlows.length === 0) {
     return null; // No pipelines to display
@@ -2583,7 +3118,6 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
           const metrics = getMetricsForComponent(processor, 'processor');
           const nextProcessor = idx < processors.length - 1 ? processors[idx + 1] : null;
           const nextMetrics = nextProcessor ? getMetricsForComponent(nextProcessor, 'processor') : null;
-          // Recalculate bandwidthBetween on every render to ensure it updates with metrics
           const bandwidthBetween = options?.showBandwidth && nextMetrics
             ? Math.round((metrics.bandwidth + nextMetrics.bandwidth) / 2)
             : null;
@@ -2719,16 +3253,7 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
   });
 
   return (
-    <div style={{
-      width: '100%',
-      margin: '0 0 16px 0',
-      padding: 24,
-      background: '#F9FAFB',
-      border: '1px solid #E5E7EB',
-      borderRadius: 12,
-      boxSizing: 'border-box',
-      overflow: 'hidden'
-    }}>
+    <div style={{ width: '100%', margin: 0, padding: 0 }}>
       <style>{`
         @keyframes flowAnimation {
           0% { transform: translateX(-20px); opacity: 0; }
@@ -2781,155 +3306,264 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
           overflow: hidden;
         }
       `}</style>
-      <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 20 }}>
-        Pipeline Flow & Metrics
-      </div>
-      
-      {/* Show Complete Overview only if there are multiple pipelines, otherwise show individual pipelines below */}
-      {pipelineFlows.length > 1 && (
-        <div style={{
-          width: '100%',
-          padding: '28px 32px',
-          background: 'white',
-          borderRadius: 10,
-          border: '2px solid #E5E7EB',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
-          boxSizing: 'border-box'
-        }}>
-          {/* Header inside the container */}
-          <div style={{ 
-            marginBottom: 24,
-            paddingBottom: 16,
-            borderBottom: '2px solid #E5E7EB'
+      <div style={{
+        width: '100%',
+        padding: '24px 28px',
+        background: '#F9FAFB',
+        border: '1px solid #E5E7EB',
+        borderRadius: 16,
+        boxSizing: 'border-box',
+        boxShadow: '0 18px 32px rgba(15,23,42,0.08)'
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
+            Pipeline Flow & Metrics
+          </div>
+          <div style={{ display: 'flex', gap: 12, fontSize: 12, flexWrap: 'wrap' }}>
+            <a
+              href="https://opentelemetry.io/docs/collector/configuration/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#2563EB', textDecoration: 'underline' }}
+            >
+              Collector config docs
+            </a>
+            <a
+              href="https://opentelemetry.io/docs/collector/configuration/#validate-your-config"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#B45309', textDecoration: 'underline' }}
+            >
+              Validate pipeline changes
+            </a>
+          </div>
+        </div>
+        
+        {/* Show Complete Overview only if there are multiple pipelines, otherwise show individual pipelines below */}
+        {pipelineFlows.length > 1 && (
+          <div style={{
+            width: '100%',
+            padding: '28px 32px',
+            background: 'white',
+            borderRadius: 10,
+            border: '2px solid #E5E7EB',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+            boxSizing: 'border-box'
           }}>
-            <div style={{ fontSize: 15, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
-              📊 Complete Pipeline Overview ({pipelineFlows.length} Pipelines)
+            <div style={{ 
+              marginBottom: 24,
+              paddingBottom: 16,
+              borderBottom: '2px solid #E5E7EB'
+            }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
+                📊 Complete Pipeline Overview ({pipelineFlows.length} Pipelines)
+              </div>
+              <div style={{ fontSize: 12, color: '#6B7280' }}>
+                Receivers ({allReceivers.size}) → Processors ({allProcessors.size}) → Exporters ({allExporters.size})
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: '#6B7280' }}>
-              Receivers ({allReceivers.size}) → Processors ({allProcessors.size}) → Exporters ({allExporters.size})
+            
+            <div style={{ width: '100%', overflowX: 'auto' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(240px, 1fr) 48px minmax(240px, 1fr) 48px minmax(240px, 1fr)',
+                alignItems: 'start',
+                gap: 16,
+                width: '100%',
+                minWidth: 960,
+                paddingBottom: 8
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  {renderReceiversColumn(Array.from(allReceivers), `RECEIVERS (${allReceivers.size})`)}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {renderHorizontalConnector()}
+                </div>
+
+                <div style={{ minWidth: 0, overflow: 'visible' }}>
+                  {renderProcessorsColumn(
+                    Array.from(allProcessors),
+                    `PROCESSORS (${allProcessors.size || 0})`,
+                    { showOrder: true, showBandwidth: true }
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {renderHorizontalConnector()}
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  {renderExportersColumn(Array.from(allExporters), `EXPORTERS (${allExporters.size})`)}
+                </div>
+              </div>
             </div>
           </div>
-          
-          {/* Flow Diagram - All components in one line, extending left to right */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 48px 1fr 48px 1fr',
-            alignItems: 'start',
-            gap: 16,
-            width: '100%',
-            overflow: 'visible' // Allow overflow for bandwidth boxes
-          }}>
-            <div style={{ minWidth: 0 }}>
-              {renderReceiversColumn(Array.from(allReceivers), `RECEIVERS (${allReceivers.size})`)}
+        )}
+        
+        {/* Agent Resource Metrics */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 16,
+          marginBottom: 24,
+          padding: 16,
+          background: 'white',
+          borderRadius: 8,
+          border: '1px solid #E5E7EB'
+        }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>CPU Usage</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: '#3B82F6' }}>
+              {agentMetrics.cpu}%
             </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Memory</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: '#10B981' }}>
+              {agentMetrics.memory} MB
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Bandwidth</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: '#F59E0B' }}>
+              {agentMetrics.bandwidth} KB/s
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Throughput</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: '#8B5CF6' }}>
+              {agentMetrics.throughput}/s
+            </div>
+          </div>
+        </div>
+
+        {/* Pipeline Flow Diagrams */}
+        {pipelineFlows.map((flow, flowIdx) => (
+          <div key={flowIdx} style={{
+            width: '100%',
+            marginBottom: 28,
+            padding: '24px 28px',
+            background: 'white',
+            borderRadius: 10,
+            border: '1px solid #E5E7EB',
+            boxSizing: 'border-box'
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 16, textTransform: 'capitalize' }}>
+              {flow.type} Pipeline
+            </div>
+            
+            <div style={{ width: '100%', overflowX: 'auto' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(220px, 1fr) 48px minmax(220px, 1fr) 48px minmax(220px, 1fr)',
+                alignItems: 'start',
+                gap: 16,
+                width: '100%',
+                minWidth: 840
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  {renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`)}
+                </div>
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {renderHorizontalConnector()}
             </div>
 
-            <div style={{ minWidth: 0, overflow: 'visible' }}>
-              {renderProcessorsColumn(
-                Array.from(allProcessors),
-                `PROCESSORS (${allProcessors.size || 0})`,
-                { showOrder: true, showBandwidth: true }
+                <div style={{ minWidth: 0 }}>
+                  {renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { showOrder: true, showBandwidth: true })}
+                </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {renderHorizontalConnector()}
+            </div>
+
+                <div style={{ minWidth: 0 }}>
+                  {renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`)}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        <div style={{ marginTop: 24 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
+            Pipeline Logs & Errors
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+            <div style={{
+              padding: 16,
+              background: 'white',
+              borderRadius: 8,
+              border: '1px solid #E5E7EB',
+              minHeight: 220,
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 10 }}>Live Logs</div>
+              {pipelineLogs.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 260, overflowY: 'auto' }}>
+                  {pipelineLogs.map((entry: any, idx: number) => (
+                    <div key={`pipeline-log-${idx}`} style={{ borderBottom: '1px solid #F3F4F6', paddingBottom: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, color: '#1F2937', textTransform: 'uppercase' }}>
+                          {String(entry?.type || entry?.signal || entry?.channel || 'log')}
+                        </span>
+                        <span>{formatLogTimestamp(entry)}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#111827' }}>{formatLogMessage(entry)}</div>
+                      {entry?.level && (
+                        <div style={{ fontSize: 10, color: '#6B7280', marginTop: 4 }}>Level: {entry.level}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ color: '#9CA3AF', fontSize: 12 }}>
+                  No logs have been streamed from this pipeline yet.
+                </div>
               )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {renderHorizontalConnector()}
+            <div style={{
+              padding: 16,
+              background: '#FEF2F2',
+              borderRadius: 8,
+              border: '1px solid #FECACA',
+              minHeight: 220,
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#B91C1C', marginBottom: 10 }}>Error Feed</div>
+              {pipelineErrors.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 260, overflowY: 'auto' }}>
+                  {pipelineErrors.map((entry: any, idx: number) => (
+                    <div key={`pipeline-error-${idx}`} style={{
+                      padding: 12,
+                      background: '#FEE2E2',
+                      borderRadius: 6,
+                      border: '1px solid #FCA5A5'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 600, color: '#B91C1C' }}>
+                        <span>{String(entry?.level || entry?.type || 'error').toUpperCase()}</span>
+                        <span>{formatLogTimestamp(entry)}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#7F1D1D', marginTop: 4 }}>{formatLogMessage(entry)}</div>
+                      {entry?.source && (
+                        <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 4 }}>source: {entry.source}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ color: '#B91C1C', fontSize: 12 }}>
+                  All clear — no pipeline errors reported.
+                </div>
+              )}
             </div>
-
-            <div style={{ minWidth: 0 }}>
-              {renderExportersColumn(Array.from(allExporters), `EXPORTERS (${allExporters.size})`)}
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Agent Resource Metrics */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-        gap: 16,
-        marginBottom: 24,
-        padding: 16,
-        background: 'white',
-        borderRadius: 8,
-        border: '1px solid #E5E7EB'
-      }}>
-        <div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>CPU Usage</div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#3B82F6' }}>
-            {agentMetrics.cpu}%
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Memory</div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#10B981' }}>
-            {agentMetrics.memory} MB
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Bandwidth</div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#F59E0B' }}>
-            {agentMetrics.bandwidth} KB/s
-          </div>
-        </div>
-        <div>
-          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Throughput</div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: '#8B5CF6' }}>
-            {agentMetrics.throughput}/s
           </div>
         </div>
       </div>
-
-      {/* Pipeline Flow Diagrams */}
-      {pipelineFlows.map((flow, flowIdx) => (
-        <div key={flowIdx} style={{
-          width: '100%',
-          marginBottom: 28,
-          padding: '24px 28px',
-          background: 'white',
-          borderRadius: 10,
-          border: '1px solid #E5E7EB',
-          boxSizing: 'border-box',
-          minWidth: '100%'
-        }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 16, textTransform: 'capitalize' }}>
-            {flow.type} Pipeline
-          </div>
-          
-          {/* Flow Diagram */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 48px 1fr 48px 1fr',
-            alignItems: 'start',
-            gap: 16,
-            width: '100%',
-            overflow: 'hidden'
-          }}>
-            <div style={{ minWidth: 0 }}>
-              {renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`)}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {renderHorizontalConnector(`${flow.receivers.join(' • ') || 'Receivers'} → ${flow.processors.join(' • ') || 'Processors'}`)}
-            </div>
-
-            <div style={{ minWidth: 0 }}>
-              {renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { showOrder: true, showBandwidth: true })}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {renderHorizontalConnector(`${flow.processors.join(' • ') || 'Processors'} → ${flow.exporters.join(' • ') || 'Exporters'}`)}
-            </div>
-
-            <div style={{ minWidth: 0 }}>
-              {renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`)}
-            </div>
-          </div>
-        </div>
-      ))}
     </div>
   );
 }, (prevProps, nextProps) => {
@@ -3052,6 +3686,42 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
   ];
   const onlineAgents = allCollectors.filter(a => a.status === 'online');
   const totalAgents = allCollectors.length;
+  const resolvedAgentCaps = useMemo(() => {
+    if (monitoringData?.agent?.agent?.capabilities) {
+      return monitoringData.agent.agent.capabilities;
+    }
+    if (monitoringData?.agent?.capabilities) {
+      return monitoringData.agent.capabilities;
+    }
+    const fallback = agents.find((a) => a.agentUid === selectedAgentUID);
+    return fallback?.capabilities || undefined;
+  }, [monitoringData, agents, selectedAgentUID]);
+  const healthCapability = resolvedAgentCaps?.reports_health;
+  const logsCapability = resolvedAgentCaps?.reports_own_logs;
+  const supportsHealthReports = healthCapability === undefined || healthCapability === true;
+  const supportsOwnLogs = logsCapability === undefined || logsCapability === true;
+  const telemetryLogs = Array.isArray(monitoringData?.telemetry)
+    ? monitoringData.telemetry.filter((item: any) =>
+        String(item?.type || item?.signal || item?.category || '').toLowerCase().includes('log')
+      )
+    : [];
+  const currentConfig = monitoringData?.currentConfig || null;
+  const hasCurrentConfigLoaded = Boolean(currentConfig && (currentConfig.hasAgentConfig || currentConfig.hasConfig));
+  const pipelineConfigValue = currentConfig ? (currentConfig.agentConfig || currentConfig.config) : '';
+  const pipelineConfigString = (() => {
+    if (!pipelineConfigValue) {
+      return '';
+    }
+    if (typeof pipelineConfigValue === 'string') {
+      return pipelineConfigValue;
+    }
+    try {
+      return JSON.stringify(pipelineConfigValue, null, 2);
+    } catch {
+      return String(pipelineConfigValue);
+    }
+  })();
+  const hasPipelineDiagramData = pipelineConfigString.trim().length > 0;
 
   return (
     <div style={{ width: '100%' }}>
@@ -3445,8 +4115,15 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                     <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
                       🏥 Agent Health Status
                     </div>
-                    <div style={{ fontSize: 13, color: '#92400E' }}>
-                      Health data not yet reported by agent. The agent may not be sending OpAMP health messages yet.
+                    <div style={{ fontSize: 13, color: '#92400E', lineHeight: 1.5 }}>
+                      {supportsHealthReports
+                        ? 'Health data has not been reported yet. The agent might need a few moments after connecting before it emits OpAMP health messages.'
+                        : 'This agent reported reports_health = false, so the OpAMP server cannot display health data for it.'}
+                    </div>
+                    <div style={{ fontSize: 11, marginTop: 6 }}>
+                      <a href="https://opentelemetry.io/docs/specs/opamp/protocol/#health-reporting" target="_blank" rel="noopener noreferrer" style={{ color: '#B45309', textDecoration: 'underline' }}>
+                        Learn how OpAMP health reporting works
+                      </a>
                     </div>
                   </div>
                 )}
@@ -3495,6 +4172,43 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Collector Logs */}
+                {monitoringData.telemetry && (
+                  <div style={{
+                    padding: 16,
+                    background: '#F9FAFB',
+                    borderRadius: 6,
+                    border: '1px solid #E5E7EB'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                        📜 Collector Telemetry Logs
+                      </div>
+                    </div>
+                    {telemetryLogs.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto' }}>
+                        {telemetryLogs.map((entry: any, idx: number) => (
+                          <div key={`telemetry-log-${idx}`} style={{ padding: 10, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                              <span style={{ fontWeight: 600, color: '#0F172A' }}>{entry.level?.toUpperCase() || entry.type || 'log'}</span>
+                              <span>{entry.reported_at ? new Date(entry.reported_at).toLocaleString() : ''}</span>
+                            </div>
+                            <div style={{ fontSize: 12, color: '#111827', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {entry.message || entry.description || entry.error || JSON.stringify(entry.data || entry)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.6 }}>
+                        {supportsOwnLogs
+                          ? 'No logs have been reported through OpAMP telemetry yet.'
+                          : 'This agent reported reports_own_logs = false, so it will not stream logs through OpAMP. Use your platform (e.g., kubectl logs) to inspect collector logs.'}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -3706,141 +4420,132 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                   </div>
                 )}
 
-                {/* Two-Column Layout: Left (Status, Pipeline) | Right (Activity, Config) */}
+                {/* Status, Activity, and Config cards with full-width pipeline */}
                 <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: 20,
                   width: '100%',
-                  alignItems: 'start'
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 20
                 }}>
-                  {/* Left Column */}
-                  <div style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    gap: 16,
-                    minWidth: 0,
-                    overflow: 'hidden'
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                    gap: 20,
+                    width: '100%',
+                    alignItems: 'stretch'
                   }}>
                     {/* Agent Status */}
                     <div style={{
                       padding: 16,
                       background: '#F9FAFB',
                       borderRadius: 6,
-                      border: '1px solid #E5E7EB'
+                      border: '1px solid #E5E7EB',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12
                     }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
-                      Agent Status
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div>
-                        <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Connection Status</div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {(() => {
-                            const status = monitoringData.agent?.agent?.status || monitoringData.agent?.status;
-                            if (status === 'online') {
-                              return (
-                                <>
-                                  <span style={{ 
-                                    display: 'inline-block', 
-                                    width: 8, 
-                                    height: 8, 
-                                    borderRadius: '50%', 
-                                    background: '#10B981' 
-                                  }}></span>
-                                  <span>Online</span>
-                                </>
-                              );
-                            } else if (status === 'degraded') {
-                              return (
-                                <>
-                                  <span style={{ 
-                                    display: 'inline-block', 
-                                    width: 8, 
-                                    height: 8, 
-                                    borderRadius: '50%', 
-                                    background: '#F59E0B' 
-                                  }}></span>
-                                  <span>Degraded (Unhealthy)</span>
-                                </>
-                              );
-                            } else if (status === 'offline') {
-                              return (
-                                <>
-                                  <span style={{ 
-                                    display: 'inline-block', 
-                                    width: 8, 
-                                    height: 8, 
-                                    borderRadius: '50%', 
-                                    background: '#EF4444' 
-                                  }}></span>
-                                  <span>Offline</span>
-                                </>
-                              );
-                            } else {
-                              return (
-                                <>
-                                  <span style={{ 
-                                    display: 'inline-block', 
-                                    width: 8, 
-                                    height: 8, 
-                                    borderRadius: '50%', 
-                                    background: '#9CA3AF' 
-                                  }}></span>
-                                  <span>Unknown</span>
-                                </>
-                              );
-                            }
-                          })()}
-                        </div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                        Agent Status
                       </div>
-                      <div>
-                        <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Agent Version</div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', fontFamily: 'monospace' }}>
-                          {((monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== 'unknown') ? (monitoringData.agent?.agent?.version || monitoringData.agent?.version) : 'Not reported'}
-                        </div>
-                      </div>
-                      {(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div>
-                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Last Seen</div>
-                          <div style={{ fontSize: 12, color: '#111827' }}>
-                            {new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString()}
+                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Connection Status</div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {(() => {
+                              const status = monitoringData.agent?.agent?.status || monitoringData.agent?.status;
+                              if (status === 'online') {
+                                return (
+                                  <>
+                                    <span style={{ 
+                                      display: 'inline-block', 
+                                      width: 8, 
+                                      height: 8, 
+                                      borderRadius: '50%', 
+                                      background: '#10B981' 
+                                    }}></span>
+                                    <span>Online</span>
+                                  </>
+                                );
+                              } else if (status === 'degraded') {
+                                return (
+                                  <>
+                                    <span style={{ 
+                                      display: 'inline-block', 
+                                      width: 8, 
+                                      height: 8, 
+                                      borderRadius: '50%', 
+                                      background: '#F59E0B' 
+                                    }}></span>
+                                    <span>Degraded (Unhealthy)</span>
+                                  </>
+                                );
+                              } else if (status === 'offline') {
+                                return (
+                                  <>
+                                    <span style={{ 
+                                      display: 'inline-block', 
+                                      width: 8, 
+                                      height: 8, 
+                                      borderRadius: '50%', 
+                                      background: '#EF4444' 
+                                    }}></span>
+                                    <span>Offline</span>
+                                  </>
+                                );
+                              } else {
+                                return (
+                                  <>
+                                    <span style={{ 
+                                      display: 'inline-block', 
+                                      width: 8, 
+                                      height: 8, 
+                                      borderRadius: '50%', 
+                                      background: '#9CA3AF' 
+                                    }}></span>
+                                    <span>Unknown</span>
+                                  </>
+                                );
+                              }
+                            })()}
                           </div>
                         </div>
-                      )}
+                        <div>
+                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Agent Version</div>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', fontFamily: 'monospace' }}>
+                            {((monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== 'unknown') ? (monitoringData.agent?.agent?.version || monitoringData.agent?.version) : 'Not reported'}
+                          </div>
+                        </div>
+                        {(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && (
+                          <div>
+                            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Last Seen</div>
+                            <div style={{ fontSize: 12, color: '#111827' }}>
+                              {new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString()}
+                            </div>
+                          </div>
+                        )}
                       <div>
                         <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Current Config</div>
-                        <div style={{ fontSize: 13, fontWeight: 500, color: (monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig) ? '#10B981' : '#EF4444' }}>
-                          {(monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig) ? '✓ Loaded' : '✗ Not Available'}
+                        <div style={{ fontSize: 13, fontWeight: 500, color: hasCurrentConfigLoaded ? '#10B981' : '#EF4444' }}>
+                          {hasCurrentConfigLoaded ? '✓ Loaded' : '✗ Not Available'}
                         </div>
                       </div>
+                      {resolvedAgentCaps && Object.keys(resolvedAgentCaps).length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>OpAMP Capabilities</div>
+                          <CapabilityBadges capabilities={resolvedAgentCaps} limit={4} />
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Pipeline Flow Diagram - Full width in left column */}
-                  {monitoringData.currentConfig && (monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config) && (
-                    <PipelineFlowDiagram 
-                      config={monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config}
-                      pipelines={monitoringData.pipelines || []}
-                      telemetry={monitoringData.telemetry || []}
-                    />
-                  )}
-                  </div>
-
-                  {/* Right Column */}
-                  <div style={{ 
-                    display: 'flex', 
-                    flexDirection: 'column', 
-                    gap: 16,
-                    minWidth: 0,
-                    overflow: 'hidden'
-                  }}>
                     {/* Recent Activity */}
                     <div style={{
                       padding: 16,
                       background: '#F9FAFB',
                       borderRadius: 6,
-                      border: '1px solid #E5E7EB'
+                      border: '1px solid #E5E7EB',
+                      display: 'flex',
+                      flexDirection: 'column'
                     }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
                         Recent Activity
@@ -3879,30 +4584,29 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                       </div>
                     </div>
 
-                    {/* Config Info - Full width in right column */}
-                    {(monitoringData.currentConfig.hasAgentConfig || monitoringData.currentConfig.hasConfig) && (
+                    {/* Config Info */}
+                    {hasCurrentConfigLoaded && (
                       <div style={{
                         padding: 16,
                         background: '#F9FAFB',
                         borderRadius: 6,
                         border: '1px solid #E5E7EB',
-                        width: '100%',
-                        maxWidth: '100%',
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
                         display: 'flex',
                         flexDirection: 'column',
-                        minHeight: 0
+                        gap: 12,
+                        minWidth: 0
                       }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12, flexShrink: 0 }}>
-                          Current Configuration Info
+                        <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                          Config Snapshot
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
+                          Currently active configuration returned by the agent. Use this to compare against generated configs or troubleshoot issues.
                         </div>
                         <div style={{
-                          padding: 12,
-                          background: '#FFFFFF',
                           borderRadius: 4,
                           border: '1px solid #E5E7EB',
-                          maxHeight: 400,
+                          background: '#FFFFFF',
+                          maxHeight: 320,
                           overflowY: 'auto',
                           overflowX: 'hidden',
                           width: '100%',
@@ -3928,13 +4632,40 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                             maxWidth: '100%',
                             overflow: 'hidden'
                           }}>
-                            {monitoringData.currentConfig.agentConfig || monitoringData.currentConfig.config || 'No config'}
+                            {pipelineConfigString || 'No config'}
                           </pre>
                         </div>
                       </div>
                     )}
                   </div>
+
+                  {/* Pipeline Flow Diagram - spans the full width below the cards */}
+                  {hasPipelineDiagramData ? (
+                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
+                        Pipeline Monitoring
+                      </div>
+                      <PipelineFlowDiagram 
+                        config={pipelineConfigString}
+                        pipelines={monitoringData.pipelines || []}
+                        telemetry={monitoringData.telemetry || []}
+                      />
+                    </div>
+                  ) : (
+                    <div style={{
+                      width: '100%',
+                      padding: 16,
+                      background: '#FEF3C7',
+                      borderRadius: 8,
+                      border: '1px dashed #F59E0B',
+                      color: '#92400E',
+                      fontSize: 13
+                    }}>
+                      No pipeline configuration has been reported by this agent yet. Connect the agent or push a configuration to visualize pipelines here.
+                    </div>
+                  )}
                 </div>
+
               </div>
             )}
 
@@ -4188,7 +4919,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     }
   };
 
-  const parseConfigYAML = (yamlConfig: string) => {
+  const parseConfigYAML = (yamlConfig: string): boolean => {
     try {
       const parsed = yaml.load(yamlConfig) as any;
       
@@ -4338,9 +5069,11 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       // Set expanded components
       setExpandedComponents(allKeys);
 
+      return true;
     } catch (err: any) {
       console.error('Failed to parse config YAML:', err);
       alert('Failed to parse current configuration: ' + (err.message || 'Unknown error'));
+      return false;
     }
   };
 
@@ -4621,6 +5354,82 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receivers, processors, exporters]);
 
+  const isValidHostPort = (value?: string | null) => {
+    if (!value) {
+      return false;
+    }
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return false;
+    }
+    // IPv6 support: allow [::1]:4317
+    if (trimmed.startsWith('[')) {
+      const closing = trimmed.indexOf(']');
+      if (closing > 0) {
+        const portPart = trimmed.slice(closing + 1);
+        if (portPart.startsWith(':')) {
+          const port = Number(portPart.slice(1));
+          return Number.isInteger(port) && port > 0 && port <= 65535;
+        }
+      }
+      return false;
+    }
+    const parts = trimmed.split(':');
+    if (parts.length !== 2) {
+      return false;
+    }
+    const port = Number(parts[1]);
+    return parts[0].length > 0 && Number.isInteger(port) && port > 0 && port <= 65535;
+  };
+
+  const isValidHttpUrl = (value?: string | null) => {
+    if (!value) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
+  const validateCRDSettings = (opts: {
+    includeDeploymentSettings: boolean;
+    crdSettings: typeof crdSettings;
+    isNewCollector: boolean;
+    canModifyDeploymentSettings: boolean;
+  }) => {
+    const errors: string[] = [];
+    if (!opts.includeDeploymentSettings) {
+      return errors;
+    }
+    if (!(opts.isNewCollector || opts.canModifyDeploymentSettings)) {
+      return errors;
+    }
+    const settings = opts.crdSettings;
+    if (!settings.name?.trim()) {
+      errors.push('CRD name is required when deployment settings are enabled.');
+    }
+    if (!settings.namespace?.trim()) {
+      errors.push('CRD namespace is required when deployment settings are enabled.');
+    }
+    if (!settings.image?.trim()) {
+      errors.push('Collector image is required in deployment settings.');
+    }
+    if ((settings.mode === 'deployment' || settings.mode === 'statefulset') && (!settings.replicas || settings.replicas < 1)) {
+      errors.push('Replicas must be at least 1 for deployment/statefulset modes.');
+    }
+    const cpuReq = settings.resources.requests.cpu?.trim();
+    const memReq = settings.resources.requests.memory?.trim();
+    const cpuLimit = settings.resources.limits.cpu?.trim();
+    const memLimit = settings.resources.limits.memory?.trim();
+    if (!cpuReq || !memReq || !cpuLimit || !memLimit) {
+      errors.push('CPU/Memory requests and limits must be provided in deployment settings.');
+    }
+    return errors;
+  };
+
   const generateConfig = async () => {
     if (receivers.length === 0) {
       alert('Please add at least one receiver');
@@ -4654,6 +5463,19 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       if (!r.type || r.type === '') {
         invalidComponents.push(`Receiver ${i + 1} (${r.name || 'unnamed'}) is missing type`);
       }
+      if (r.type === 'otlp') {
+        const grpcEndpoint = r.protocols?.grpc?.endpoint?.trim();
+        const httpEndpoint = r.protocols?.http?.endpoint?.trim();
+        if (!grpcEndpoint && !httpEndpoint) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || 'otlp'}) requires at least one endpoint (gRPC and/or HTTP).`);
+        }
+        if (grpcEndpoint && !isValidHostPort(grpcEndpoint)) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || 'otlp'}) has invalid gRPC endpoint "${grpcEndpoint}". Use host:port (e.g., 0.0.0.0:4317).`);
+        }
+        if (httpEndpoint && !isValidHostPort(httpEndpoint)) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || 'otlp'}) has invalid HTTP endpoint "${httpEndpoint}". Use host:port (e.g., 0.0.0.0:4318).`);
+        }
+      }
     });
     processors.forEach((p, i) => {
       if (!p.type || p.type === '') {
@@ -4668,13 +5490,15 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       if (!e.type || e.type === '') {
         invalidComponents.push(`Exporter ${i + 1} (${e.name || 'unnamed'}) is missing type`);
       }
+      if (e.type === 'otlp') {
+        const endpoint = e.endpoint?.trim();
+        if (!endpoint) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || 'otlp'}) requires an endpoint (http://host:port or host:port).`);
+        } else if (!isValidHttpUrl(endpoint) && !isValidHostPort(endpoint)) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || 'otlp'}) endpoint "${endpoint}" is invalid. Use http(s) URL or host:port for gRPC.`);
+        }
+      }
     });
-    
-    if (invalidComponents.length > 0) {
-      alert('Invalid configuration:\n\n' + invalidComponents.join('\n') + '\n\nPlease ensure all components have a valid type.');
-      return;
-    }
-
     // Check if selected agent is a DaemonSet collector
     const selectedAgent = agents.find((a: Agent) => a.agentUid === selectedAgentUID);
     const isDaemonSet = selectedAgent?.labels?.['k8s.crd_name']?.toLowerCase().includes('daemonset') || 
@@ -4682,8 +5506,21 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     
     // For NEW collectors: Include CRD settings if name AND namespace provided
     // For EXISTING collectors: Include CRD settings if it's Deployment or StatefulSet (DaemonSet only sends spec.config)
-    const isNewCollector = crdSettings.name && crdSettings.namespace;
-    const canModifyDeploymentSettings = !isDaemonSet && selectedAgentUID; // Deployment/StatefulSet can be modified
+    const isNewCollector = Boolean(crdSettings.name && crdSettings.namespace);
+    const canModifyDeploymentSettings = Boolean(!isDaemonSet && selectedAgentUID); // Deployment/StatefulSet can be modified
+
+    const crdValidationErrors = validateCRDSettings({
+      includeDeploymentSettings,
+      crdSettings,
+      isNewCollector,
+      canModifyDeploymentSettings,
+    });
+    invalidComponents.push(...crdValidationErrors);
+    
+    if (invalidComponents.length > 0) {
+      alert('Invalid configuration:\n\n' + invalidComponents.join('\n') + '\n\nPlease ensure all components have a valid type.');
+      return;
+    }
     
     try {
       const response = await backendSrv.post(
@@ -4714,7 +5551,11 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
           } : undefined
         }
       );
-      setGeneratedConfig(response.config || '');
+      const generated = typeof response.config === 'string' ? response.config : '';
+      if (!generated.trim()) {
+        alert('The config generator did not return any YAML. Please verify that you have at least one receiver and exporter configured.');
+      }
+      setGeneratedConfig(generated);
     } catch (err: any) {
       alert('Failed to generate config: ' + (err.message || 'Unknown error'));
     }
@@ -4729,20 +5570,37 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/component-types?category=exporter')
       ]);
       
-      setReceiverTypes((receiversRes.items || []).map((t: any) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      setProcessorTypes((processorsRes.items || []).map((t: any) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      setExporterTypes((exportersRes.items || []).map((t: any) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      
-      // Always add custom option
-      if (!receiverTypes.find((t: any) => t.value === 'custom')) {
-        setReceiverTypes((prev: any[]) => [...prev, { value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true }]);
-      }
-      if (!processorTypes.find((t: any) => t.value === 'custom')) {
-        setProcessorTypes((prev: any[]) => [...prev, { value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true }]);
-      }
-      if (!exporterTypes.find((t: any) => t.value === 'custom')) {
-        setExporterTypes((prev: any[]) => [...prev, { value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true }]);
-      }
+      const receiversList = (receiversRes.items || []).map((t: any) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id,
+      }));
+      const processorsList = (processorsRes.items || []).map((t: any) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id,
+      }));
+      const exportersList = (exportersRes.items || []).map((t: any) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id,
+      }));
+
+      setReceiverTypes(mergeComponentTypeLists(receiversList, builtinReceiverTemplates));
+      setProcessorTypes(mergeComponentTypeLists(processorsList, builtinProcessorTemplates));
+      setExporterTypes(mergeComponentTypeLists(exportersList, builtinExporterTemplates));
     } catch (err: any) {
       console.error('Failed to load component types:', err);
     }
@@ -5224,11 +6082,16 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
           <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
             <button
               onClick={() => {
-                setUseRawYAML(false);
                 if (useRawYAML) {
-                  setGeneratedConfig('');
-                  setRawYAMLConfig('');
+                  const source = rawYAMLConfig.trim() || generatedConfig;
+                  if (source) {
+                    const ok = parseConfigYAML(source);
+                    if (!ok) {
+                      return;
+                    }
+                  }
                 }
+                setUseRawYAML(false);
               }}
               style={{
                 padding: '10px 20px',
@@ -5348,7 +6211,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         )}
 
         {/* CRD Settings - Deployment Configuration */}
-        {!useRawYAML && (() => {
+        {!useRawYAML && false && (() => {
           // Check if selected agent is a DaemonSet collector
           const selectedAgent = agents.find((a: Agent) => a.agentUid === selectedAgentUID);
           const isDaemonSet = selectedAgent?.labels?.['k8s.crd_name']?.toLowerCase().includes('daemonset') || 
@@ -5727,6 +6590,12 @@ tolerations:
             </div>
           );
         })()}
+
+        {!useRawYAML && (
+          <div style={{ marginBottom: 24, padding: 16, background: '#F3F4F6', borderRadius: 6, border: '1px solid #D1D5DB', color: '#4B5563', fontSize: 12 }}>
+            ℹ️ Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector’s <code>spec.config</code> that OpAMP can push.
+          </div>
+        )}
 
         {/* Agent Selector - Hierarchical Bridge/Collector Structure */}
         {/* Fix 3: Only show collectors, not bridges - bridges are management agents and cannot receive collector configurations */}
@@ -6229,12 +7098,13 @@ service:
                     alert('Please enter a YAML configuration to apply.');
                     return;
                   }
-                  setGeneratedConfig(rawYAMLConfig.trim());
-                  try {
-                    parseConfigYAML(rawYAMLConfig);
+                  const trimmed = rawYAMLConfig.trim();
+                  const ok = parseConfigYAML(trimmed);
+                  if (ok) {
+                    setGeneratedConfig(trimmed);
                     alert('✅ Applied raw YAML to the visual editor preview. Review the Generated Configuration section below.');
-                  } catch (err) {
-                    console.error('Failed to parse raw YAML during apply:', err);
+                  } else {
+                    console.warn('Raw YAML apply failed validation.');
                   }
                 }}
                 style={{ padding: '8px 16px', background: '#2563EB', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
@@ -6269,31 +7139,26 @@ service:
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={generateConfig}
-                  disabled={(() => {
-                    // Only enable if there are receivers that are NOT custom
-                    const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                    return nonCustomReceivers.length === 0;
-                  })()}
                   style={{
                     padding: '8px 16px',
                     background: (() => {
-                      const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                      return nonCustomReceivers.length === 0 ? '#D1D5DB' : '#3B82F6';
+                      const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                      return configuredReceivers.length === 0 ? '#FBBF24' : '#3B82F6';
                     })(),
                     color: 'white',
                     border: 'none',
                     borderRadius: 6,
                     cursor: (() => {
-                      const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                      return nonCustomReceivers.length === 0 ? 'not-allowed' : 'pointer';
+                      const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                      return configuredReceivers.length === 0 ? 'pointer' : 'pointer';
                     })(),
                     fontSize: 14,
                     fontWeight: 500
                   }}
                   title={(() => {
-                    const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                    if (nonCustomReceivers.length === 0) {
-                      return 'Please select at least one non-custom receiver to generate configuration';
+                    const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                    if (configuredReceivers.length === 0) {
+                      return 'No receivers configured; generated YAML will be incomplete. Click only if you plan to edit the result manually.';
                     }
                     return exporters.length === 0 ? 'Warning: No exporters configured. Config will be incomplete.' : '';
                   })()}
