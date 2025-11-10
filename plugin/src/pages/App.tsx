@@ -646,7 +646,6 @@ const backendSrv = {
       method: options.method,
     }),
 };
-
 // Shared status badge function for all components
 const getStatusBadge = (status: string) => {
   const styles = {
@@ -673,7 +672,6 @@ const getStatusBadge = (status: string) => {
     </span>
   );
 };
-
 export const App = () => {
   const [activeTab, setActiveTab] = useState<Tab>('collectors');
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -1007,7 +1005,7 @@ export const App = () => {
     if (shouldLoadDetails) {
       const loadDetailMonitoring = async (silent = false) => {
         if (!silent) {
-          setLoadingDetailMonitoring(true);
+      setLoadingDetailMonitoring(true);
         }
         try {
           const [telemetryResponse, healthResponse] = await Promise.all([
@@ -1027,7 +1025,7 @@ export const App = () => {
           setDetailPanelMonitoringData({ telemetry: [], health: { items: [], current: {} } });
         } finally {
           if (!silent) {
-            setLoadingDetailMonitoring(false);
+          setLoadingDetailMonitoring(false);
           }
         }
       };
@@ -1104,13 +1102,11 @@ export const App = () => {
     });
     return groups;
   })() : null;
-
   const derivedBridgeCount = bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0);
   const derivedBridgeOnline = bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0);
   const totalCollectorsDisplay = collectorTotals.total || (agents.length + derivedBridgeCount);
   const totalOnlineDisplay = collectorTotals.online || ((collectorTotals.directOnline || agents.filter(a => a.status === 'online').length) + (collectorTotals.managedOnline || derivedBridgeOnline));
   const totalOfflineDisplay = Math.max(totalCollectorsDisplay - totalOnlineDisplay, 0);
-
   return (
     <div style={{ 
       minHeight: '100vh', 
@@ -1135,20 +1131,20 @@ export const App = () => {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
             <span style={{ fontSize: 14, color: '#6B7280' }}>Tenant:</span>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '6px 12px',
-              background: '#EFF6FF',
-              borderRadius: 6,
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 12px',
+                background: '#EFF6FF',
+                borderRadius: 6,
               border: '1px solid #BFDBFE',
               minWidth: 200
-            }}>
-              <span style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
+              }}>
+                <span style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
                 {currentOrgName || `Organization ${selectedOrgId ?? ''}`}
-              </span>
-            </div>
+                </span>
+              </div>
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -2028,9 +2024,7 @@ export const App = () => {
         {activeTab === 'monitoring' && (
           <MonitoringSection agents={agents} bridges={bridges} />
         )}
-
       </div>
-
       {/* Details Panel (Slide-in) */}
       {showDetailsPanel && selectedAgent && (
         <div style={{
@@ -2679,7 +2673,6 @@ export const App = () => {
           </div>
         </div>
       )}
-
       {bridgeCapabilitySheet.open && bridgeCapabilitySheet.bridge && (
         <>
           <div
@@ -2816,34 +2809,31 @@ export const App = () => {
     </div>
   );
 };
-
 // Pipeline Flow Diagram Component - Memoized to prevent re-renders when only telemetry changes
-const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pipelines, telemetry }: { config: string; pipelines: any[]; telemetry: any[] }) {
-  const [, setAnimationTick] = useState(0);
-  const [metricsData, setMetricsData] = useState<any>({});
-
-  // Animate traffic flow every 2 seconds to keep the UI lively
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setAnimationTick((prev) => prev + 1);
-    }, 2000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Parse config to extract pipeline structure - use useMemo to avoid re-parsing
+const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
+  config,
+  pipelines,
+  telemetry,
+}: {
+  config: string;
+  pipelines: any[];
+  telemetry: any[];
+}) {
   const pipelineFlows = useMemo(() => {
-    let parsedConfig: any = null;
-    const flows: any[] = [];
-    
+    const flows: Array<{ type: string; receivers: string[]; processors: string[]; exporters: string[] }> = [];
+    if (!config) {
+      return flows;
+    }
     try {
-      parsedConfig = yaml.load(config);
-      if (parsedConfig && parsedConfig.service && parsedConfig.service.pipelines) {
-        Object.entries(parsedConfig.service.pipelines).forEach(([pipelineType, pipelineConfig]: [string, any]) => {
+      const parsed = yaml.load(config) as any;
+      const servicePipelines = parsed?.service?.pipelines;
+      if (servicePipelines && typeof servicePipelines === 'object') {
+        Object.entries(servicePipelines).forEach(([pipelineType, pipelineConfig]) => {
           flows.push({
             type: pipelineType,
-            receivers: pipelineConfig.receivers || [],
-            processors: pipelineConfig.processors || [],
-            exporters: pipelineConfig.exporters || []
+            receivers: (pipelineConfig as any)?.receivers || [],
+            processors: (pipelineConfig as any)?.processors || [],
+            exporters: (pipelineConfig as any)?.exporters || [],
           });
         });
       }
@@ -2853,729 +2843,149 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
     return flows;
   }, [config]);
 
-  // Update metrics values every 5 seconds - force re-render by updating state
-  useEffect(() => {
-    const updateMetrics = () => {
-      const newData: any = {};
-      
-      // Update agent metrics
-      newData.agent = {
-        cpu: Math.round(Math.random() * 40 + 20),
-        memory: Math.round(Math.random() * 300 + 200),
-        bandwidth: Math.round(Math.random() * 500 + 200),
-        throughput: Math.round(Math.random() * 3000 + 1000)
-      };
-      
-      // Update component metrics (preserve structure, only update values)
-      pipelineFlows.forEach((flow: any) => {
-        flow.receivers.forEach((rec: string) => {
-          const key = `rec-${rec}`;
-          newData[key] = {
-            cpu: Math.round(Math.random() * 60 + 10),
-            memory: Math.round(Math.random() * 200 + 50),
-            bandwidth: Math.round(Math.random() * 800 + 100),
-            throughput: Math.round(Math.random() * 4000 + 1000)
-          };
-        });
-        flow.processors.forEach((proc: string) => {
-          const key = `proc-${proc}`;
-          newData[key] = {
-            cpu: Math.round(Math.random() * 50 + 15),
-            memory: Math.round(Math.random() * 250 + 50),
-            bandwidth: Math.round(Math.random() * 900 + 100),
-            throughput: Math.round(Math.random() * 4000 + 1000)
-          };
-        });
-        flow.exporters.forEach((exp: string) => {
-          const key = `exp-${exp}`;
-          newData[key] = {
-            cpu: Math.round(Math.random() * 40 + 10),
-            memory: Math.round(Math.random() * 150 + 20),
-            bandwidth: Math.round(Math.random() * 700 + 50),
-            throughput: Math.round(Math.random() * 3500 + 500)
-          };
-        });
-      });
-      
-      // Force state update to trigger re-render
-      setMetricsData(newData);
-    };
-    
-    // Initial update
-    updateMetrics();
-    
-    // Update every 5 seconds
-    const interval = setInterval(updateMetrics, 5000);
-    return () => clearInterval(interval);
-  }, [pipelineFlows]);
+  const flows = pipelineFlows.length > 0 ? pipelineFlows : Array.isArray(pipelines) ? pipelines : [];
 
-  // Use state for metrics - updates trigger re-renders
-  const agentMetrics = metricsData.agent || {
-    cpu: Math.round(Math.random() * 40 + 20),
-    memory: Math.round(Math.random() * 300 + 200),
-    bandwidth: Math.round(Math.random() * 500 + 200),
-    throughput: Math.round(Math.random() * 3000 + 1000)
-  };
-
-  // Extract metrics from telemetry (mock data for now - would come from Prometheus in real implementation)
-  type ComponentMetrics = {
-    cpu: number;
-    memory: number;
-    bandwidth: number;
-    throughput: number;
-  };
-
-  const getMetricsForComponent = useCallback((componentName: string, componentType: string): ComponentMetrics => {
-    // Check if we have updated metrics in state
-    const prefix = componentType === 'receiver' ? 'rec-' : componentType === 'processor' ? 'proc-' : 'exp-';
-    const key = `${prefix}${componentName}`;
-    if (metricsData[key]) {
-      return metricsData[key];
-    }
-    
-    // Fallback to static hash-based data (for initial render)
-    const hash = componentName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const seed = hash % 100;
-    return {
-      cpu: (seed % 50) + 10, // 10-60% CPU
-      memory: ((seed * 2) % 200) + 50, // 50-250 MB
-      bandwidth: ((seed * 10) % 1000) + 100, // 100-1100 KB/s
-      throughput: ((seed * 50) % 5000) + 1000 // 1000-6000 events/s
-    };
-  }, [metricsData]);
-
-  const pipelineLogs = useMemo(() => {
-    if (!Array.isArray(telemetry)) {
-      return [];
-    }
-    return telemetry
-      .filter((entry: any) => {
-        const type = String(entry?.type || entry?.signal || '').toLowerCase();
-        const channel = String(entry?.channel || entry?.category || '').toLowerCase();
-        return type.includes('log') || type.includes('event') || type.includes('error') || channel.includes('log');
-      })
-      .slice(0, 12);
-  }, [telemetry]);
-
-  const pipelineErrors = useMemo(() => {
-    return pipelineLogs
-      .filter((entry: any) => {
-        const severity = String(entry?.level || entry?.severity || '').toLowerCase();
-        const type = String(entry?.type || '').toLowerCase();
-        return severity === 'error' || severity === 'critical' || severity === 'fatal' || type.includes('error') || type.includes('fault');
-      })
-      .slice(0, 6);
-  }, [pipelineLogs]);
-
-  const formatLogMessage = (entry: any): string => {
-    if (!entry) {
-      return '';
-    }
-    const candidates = [entry.message, entry.description, entry.details, entry.error, entry.body];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim() !== '') {
-        return candidate.trim();
-      }
-    }
-    const payloads = [entry.data, entry.payload, entry.content];
-    for (const payload of payloads) {
-      if (!payload) {
-        continue;
-      }
-      if (typeof payload === 'string') {
-        return payload;
-      }
-      try {
-        return JSON.stringify(payload);
-      } catch {
-        continue;
-      }
-    }
-    try {
-      return JSON.stringify(entry);
-    } catch {
-      return String(entry);
-    }
-  };
-
-  const formatLogTimestamp = (entry: any): string => {
-    const raw = entry?.reported_at || entry?.reportedAt || entry?.timestamp || entry?.time;
-    if (!raw) {
-      return 'just now';
-    }
-    if (typeof raw === 'number') {
-      const fromNumber = new Date(raw);
-      if (!Number.isNaN(fromNumber.getTime())) {
-        return fromNumber.toLocaleString();
-      }
-    }
-    try {
-      const dt = new Date(raw);
-      if (!Number.isNaN(dt.getTime())) {
-        return dt.toLocaleString();
-      }
-    } catch (err) {
-      // Fallback to string rendering below
-    }
-    return String(raw);
-  };
-
-  if (pipelineFlows.length === 0) {
-    return null; // No pipelines to display
-  }
-
-  const renderHorizontalConnector = (label?: string) => (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      width: '100%'
-    }}>
-      <div style={{ fontSize: 28, color: '#9CA3AF', position: 'relative' }}>
-        →
-        <div className="flow-particle" style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}></div>
-        <div className="flow-particle" style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}></div>
-        <div className="flow-particle" style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}></div>
-      </div>
-      {label && (
-        <div style={{ fontSize: 10, color: '#6B7280', textAlign: 'center', maxWidth: 120 }}>{label}</div>
-      )}
-    </div>
-  );
-
-  const renderReceiversColumn = (receivers: string[], header: string, options?: { width?: number }) => (
-    <div style={{
-      flex: '1 1 0',
-      minWidth: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12,
-      flexShrink: 1
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#065F46', textAlign: 'center', marginBottom: 4 }}>{header}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {receivers.length > 0 ? receivers.map((receiver, idx) => {
-          const metrics = getMetricsForComponent(receiver, 'receiver');
-          return (
-            <div key={receiver + idx} style={{
-              padding: 12,
-              background: '#D1FAE5',
-              borderRadius: 6,
-              border: '2px solid #10B981',
-              textAlign: 'center',
-              width: '100%',
-              boxSizing: 'border-box'
-            }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#065F46', marginBottom: 6 }}>{receiver}</div>
-              <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>CPU: {metrics.cpu.toFixed(1)}%</div>
-              <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Mem: {metrics.memory.toFixed(0)} MB</div>
-              <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>BW (In): {metrics.bandwidth.toFixed(0)} KB/s</div>
-              <div style={{ fontSize: 10, color: '#10B981', fontWeight: 600 }}>{metrics.throughput.toFixed(0)}/s</div>
-            </div>
-          );
-        }) : (
-          <div style={{
-            padding: 12,
-            background: '#F3F4F6',
-            borderRadius: 6,
-            border: '2px dashed #9CA3AF',
-            textAlign: 'center',
-            color: '#9CA3AF',
-            fontSize: 11,
-            width: '100%',
-            boxSizing: 'border-box'
-          }}>
-            No Receivers
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderProcessorsColumn = (
-    processors: string[],
-    header: string,
-    options?: {
-      width?: number;
-      showOrder?: boolean;
-      showBandwidth?: boolean;
-    }
-  ) => (
-    <div style={{
-      flex: '1 1 0',
-      minWidth: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 0,
-      flexShrink: 1
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#991B1B', textAlign: 'center', marginBottom: 8 }}>{header}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0, overflow: 'visible', minWidth: 0 }}>
-        {processors.length > 0 ? processors.map((processor, idx) => {
-          const metrics = getMetricsForComponent(processor, 'processor');
-          const nextProcessor = idx < processors.length - 1 ? processors[idx + 1] : null;
-          const nextMetrics = nextProcessor ? getMetricsForComponent(nextProcessor, 'processor') : null;
-          const bandwidthBetween = options?.showBandwidth && nextMetrics
-            ? Math.round((metrics.bandwidth + nextMetrics.bandwidth) / 2)
-            : null;
-
-          return (
-            <React.Fragment key={processor + idx}>
-              <div style={{
-                padding: 16,
-                background: '#FEE2E2',
-                borderRadius: 8,
-                border: '2px solid #EF4444',
-                textAlign: 'center',
-                width: '100%',
-                maxWidth: '100%'
-              }}>
-                {options?.showOrder && (
-                  <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>#{idx + 1}</div>
-                )}
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#991B1B', marginBottom: 6 }}>{processor}</div>
-                <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>CPU: {metrics.cpu.toFixed(1)}%</div>
-                <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Mem: {metrics.memory.toFixed(0)} MB</div>
-                <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>BW (In): {metrics.bandwidth.toFixed(0)} KB/s</div>
-                <div style={{ fontSize: 10, color: '#10B981', fontWeight: 600 }}>{metrics.throughput.toFixed(0)}/s</div>
-              </div>
-
-              {idx < processors.length - 1 && (
-                <div className="flow-arrow-vertical" style={{ width: '100%', margin: '16px 0', position: 'relative', minHeight: '60px', overflow: 'visible' }}>
-                  <div style={{ fontSize: 22, color: '#9CA3AF', position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', overflow: 'visible' }}>
-                    <div style={{ position: 'relative', zIndex: 1 }}>
-                      ↓
-                      <div className="flow-particle-vertical" style={{ top: '20%', left: '50%', transform: 'translate(-50%, -50%)' }}></div>
-                      <div className="flow-particle-vertical" style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}></div>
-                      <div className="flow-particle-vertical" style={{ top: '80%', left: '50%', transform: 'translate(-50%, -50%)' }}></div>
-                    </div>
-                    {bandwidthBetween && (
-                      <div style={{
-                        fontSize: 9,
-                        color: '#10B981',
-                        fontWeight: 600,
-                        marginTop: 8,
-                        padding: '4px 10px',
-                        background: '#D1FAE5',
-                        borderRadius: 4,
-                        border: '1px solid #10B981',
-                        position: 'relative',
-                        zIndex: 2,
-                        whiteSpace: 'nowrap',
-                        width: 'fit-content',
-                        minWidth: 'max-content',
-                        boxSizing: 'border-box'
-                      }}>
-                        {bandwidthBetween} KB/s
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </React.Fragment>
-          );
-        }) : (
-          <div style={{
-            padding: 12,
-            background: '#F3F4F6',
-            borderRadius: 6,
-            border: '2px dashed #9CA3AF',
-            textAlign: 'center',
-            color: '#9CA3AF',
-            fontSize: 11,
-            width: '100%',
-            maxWidth: '220px'
-          }}>
-            No Processors
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderExportersColumn = (exporters: string[], header: string, options?: { width?: number }) => (
-    <div style={{
-      flex: '1 1 0',
-      minWidth: 0,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12,
-      flexShrink: 1
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#1E40AF', textAlign: 'center' }}>{header}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {exporters.length > 0 ? exporters.map((exporter, idx) => {
-          const metrics = getMetricsForComponent(exporter, 'exporter');
-          return (
-            <div key={exporter + idx} style={{
-              padding: 16,
-              background: '#DBEAFE',
-              borderRadius: 8,
-              border: '2px solid #2563EB',
-              textAlign: 'center',
-              width: '100%'
-            }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#1E40AF', marginBottom: 6 }}>{exporter}</div>
-              <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>CPU: {metrics.cpu.toFixed(1)}%</div>
-              <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>Mem: {metrics.memory.toFixed(0)} MB</div>
-              <div style={{ fontSize: 10, color: '#6B7280', marginBottom: 2 }}>BW (Out): {metrics.bandwidth.toFixed(0)} KB/s</div>
-              <div style={{ fontSize: 10, color: '#10B981', fontWeight: 600 }}>{metrics.throughput.toFixed(0)}/s</div>
-            </div>
-          );
-        }) : (
-          <div style={{
-            padding: 12,
-            background: '#F3F4F6',
-            borderRadius: 6,
-            border: '2px dashed #9CA3AF',
-            textAlign: 'center',
-            color: '#9CA3AF',
-            fontSize: 11
-          }}>
-            No Exporters
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  // Collect all unique components for the big picture
-  const allReceivers = new Set<string>();
-  const allProcessors = new Set<string>();
-  const allExporters = new Set<string>();
-  pipelineFlows.forEach(flow => {
-    flow.receivers.forEach((r: string) => allReceivers.add(r));
-    flow.processors.forEach((p: string) => allProcessors.add(p));
-    flow.exporters.forEach((e: string) => allExporters.add(e));
+  const hasTelemetryUsage = Array.isArray(telemetry) && telemetry.some((item: any) => {
+    const type = String(item?.type || item?.signal || '').toLowerCase();
+    return type.includes('metric') || type.includes('usage');
   });
+
+  const renderColumn = (
+    items: string[],
+    header: string,
+    palette: { background: string; border: string; color: string }
+  ) => (
+    <div style={{ flex: 1, minWidth: 200 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: palette.color, textAlign: 'center', marginBottom: 8 }}>{header}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {items.length > 0 ? (
+          items.map((name) => (
+            <div
+              key={name}
+              style={{
+                padding: 12,
+                background: palette.background,
+                border: `1px solid ${palette.border}`,
+                borderRadius: 6,
+                textAlign: 'center',
+                fontSize: 12,
+                color: palette.color,
+              }}
+            >
+              {name}
+            </div>
+          ))
+        ) : (
+          <div
+            style={{
+              padding: 12,
+              background: '#F3F4F6',
+              border: '1px dashed #D1D5DB',
+              borderRadius: 6,
+              textAlign: 'center',
+              fontSize: 11,
+              color: '#9CA3AF',
+            }}
+          >
+            None
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (flows.length === 0) {
+    return null;
+  }
 
   return (
     <div style={{ width: '100%', margin: 0, padding: 0 }}>
-      <style>{`
-        @keyframes flowAnimation {
-          0% { transform: translateX(-20px); opacity: 0; }
-          50% { opacity: 1; }
-          100% { transform: translateX(20px); opacity: 0; }
-        }
-        @keyframes flowAnimationVertical {
-          0% { transform: translateY(-20px); opacity: 0; }
-          50% { opacity: 1; }
-          100% { transform: translateY(20px); opacity: 0; }
-        }
-        .flow-particle {
-          position: absolute;
-          width: 8px;
-          height: 8px;
-          background: #10B981;
-          border-radius: 50%;
-          animation: flowAnimation 2s infinite;
-        }
-        .flow-particle-vertical {
-          position: absolute;
-          width: 8px;
-          height: 8px;
-          background: #10B981;
-          border-radius: 50%;
-          animation: flowAnimationVertical 2s infinite;
-        }
-        .flow-particle:nth-child(1) { animation-delay: 0s; }
-        .flow-particle:nth-child(2) { animation-delay: 0.4s; }
-        .flow-particle:nth-child(3) { animation-delay: 0.8s; }
-        .flow-particle-vertical:nth-child(1) { animation-delay: 0s; }
-        .flow-particle-vertical:nth-child(2) { animation-delay: 0.4s; }
-        .flow-particle-vertical:nth-child(3) { animation-delay: 0.8s; }
-        .flow-arrow {
-          position: relative;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 40px;
-          height: 60px;
-          overflow: hidden;
-        }
-        .flow-arrow-vertical {
-          position: relative;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 100%;
-          height: 40px;
-          overflow: hidden;
-        }
-      `}</style>
-      <div style={{
-        width: '100%',
-        padding: '24px 28px',
-        background: '#F9FAFB',
-        border: '1px solid #E5E7EB',
-        borderRadius: 16,
-        boxSizing: 'border-box',
-        boxShadow: '0 18px 32px rgba(15,23,42,0.08)'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
-            Pipeline Flow & Metrics
-          </div>
-          <div style={{ display: 'flex', gap: 12, fontSize: 12, flexWrap: 'wrap' }}>
-            <a
-              href="https://opentelemetry.io/docs/collector/configuration/"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: '#2563EB', textDecoration: 'underline' }}
-            >
-              Collector config docs
-            </a>
-            <a
-              href="https://opentelemetry.io/docs/collector/configuration/#validate-your-config"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: '#B45309', textDecoration: 'underline' }}
-            >
-              Validate pipeline changes
-            </a>
-          </div>
-        </div>
-        
-        {/* Show Complete Overview only if there are multiple pipelines, otherwise show individual pipelines below */}
-        {pipelineFlows.length > 1 && (
-          <div style={{
-            width: '100%',
-            padding: '28px 32px',
-            background: 'white',
-            borderRadius: 10,
-            border: '2px solid #E5E7EB',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
-            boxSizing: 'border-box'
-          }}>
-            <div style={{ 
-              marginBottom: 24,
-              paddingBottom: 16,
-              borderBottom: '2px solid #E5E7EB'
-            }}>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
-                📊 Complete Pipeline Overview ({pipelineFlows.length} Pipelines)
-              </div>
-              <div style={{ fontSize: 12, color: '#6B7280' }}>
-                Receivers ({allReceivers.size}) → Processors ({allProcessors.size}) → Exporters ({allExporters.size})
-              </div>
-            </div>
-            
-            <div style={{ width: '100%', overflowX: 'auto' }}>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(240px, 1fr) 48px minmax(240px, 1fr) 48px minmax(240px, 1fr)',
-                alignItems: 'start',
-                gap: 16,
-                width: '100%',
-                minWidth: 960,
-                paddingBottom: 8
-              }}>
-                <div style={{ minWidth: 0 }}>
-                  {renderReceiversColumn(Array.from(allReceivers), `RECEIVERS (${allReceivers.size})`)}
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {renderHorizontalConnector()}
-                </div>
-
-                <div style={{ minWidth: 0, overflow: 'visible' }}>
-                  {renderProcessorsColumn(
-                    Array.from(allProcessors),
-                    `PROCESSORS (${allProcessors.size || 0})`,
-                    { showOrder: true, showBandwidth: true }
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {renderHorizontalConnector()}
-                </div>
-
-                <div style={{ minWidth: 0 }}>
-                  {renderExportersColumn(Array.from(allExporters), `EXPORTERS (${allExporters.size})`)}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-        
-        {/* Agent Resource Metrics */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: 16,
-          marginBottom: 24,
-          padding: 16,
-          background: 'white',
-          borderRadius: 8,
-          border: '1px solid #E5E7EB'
-        }}>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>CPU Usage</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: '#3B82F6' }}>
-              {agentMetrics.cpu}%
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Memory</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: '#10B981' }}>
-              {agentMetrics.memory} MB
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Bandwidth</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: '#F59E0B' }}>
-              {agentMetrics.bandwidth} KB/s
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Throughput</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: '#8B5CF6' }}>
-              {agentMetrics.throughput}/s
-            </div>
-          </div>
+      <div
+        style={{
+          width: '100%',
+          padding: '24px 28px',
+          background: '#F9FAFB',
+          border: '1px solid #E5E7EB',
+          borderRadius: 16,
+          boxSizing: 'border-box',
+          boxShadow: '0 12px 24px rgba(15,23,42,0.08)',
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 12 }}>Pipeline Flow</div>
+        <div
+          style={{
+            marginBottom: 20,
+            padding: 16,
+            background: '#F3F4F6',
+            borderRadius: 8,
+            border: '1px dashed #D1D5DB',
+            fontSize: 12,
+            color: '#4B5563',
+            lineHeight: 1.6,
+          }}
+        >
+          {hasTelemetryUsage
+            ? 'Usage telemetry has started to arrive from this collector. Detailed CPU/memory charts will appear here once they are wired into the UI.'
+            : 'The collector has not reported usage telemetry via OpAMP yet. Configure the agent to report own metrics or scrape it with your preferred monitoring stack to visualise CPU, memory, and throughput.'}
         </div>
 
-        {/* Pipeline Flow Diagrams */}
-        {pipelineFlows.map((flow, flowIdx) => (
-          <div key={flowIdx} style={{
-            width: '100%',
-            marginBottom: 28,
-            padding: '24px 28px',
-            background: 'white',
-            borderRadius: 10,
-            border: '1px solid #E5E7EB',
-            boxSizing: 'border-box'
-          }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 16, textTransform: 'capitalize' }}>
-              {flow.type} Pipeline
+        {flows.map((flow) => (
+          <div
+            key={flow.type}
+            style={{
+              width: '100%',
+              marginBottom: 20,
+              padding: '20px 24px',
+              background: 'white',
+              borderRadius: 10,
+              border: '1px solid #E5E7EB',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 14, textTransform: 'capitalize' }}>
+              {flow.type} pipeline
             </div>
-            
-            <div style={{ width: '100%', overflowX: 'auto' }}>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(220px, 1fr) 48px minmax(220px, 1fr) 48px minmax(220px, 1fr)',
-                alignItems: 'start',
-                gap: 16,
-                width: '100%',
-                minWidth: 840
-              }}>
-                <div style={{ minWidth: 0 }}>
-                  {renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`)}
-                </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {renderHorizontalConnector()}
-            </div>
-
-                <div style={{ minWidth: 0 }}>
-                  {renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { showOrder: true, showBandwidth: true })}
-                </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {renderHorizontalConnector()}
-            </div>
-
-                <div style={{ minWidth: 0 }}>
-                  {renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`)}
-                </div>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, overflowX: 'auto' }}>
+              {renderColumn(flow.receivers, `Receivers (${flow.receivers.length})`, {
+                background: '#ECFDF5',
+                border: '#6EE7B7',
+                color: '#047857',
+              })}
+              <div style={{ fontSize: 24, color: '#9CA3AF' }}>→</div>
+              {renderColumn(flow.processors, `Processors (${flow.processors.length})`, {
+                background: '#FEF2F2',
+                border: '#FECACA',
+                color: '#B91C1C',
+              })}
+              <div style={{ fontSize: 24, color: '#9CA3AF' }}>→</div>
+              {renderColumn(flow.exporters, `Exporters (${flow.exporters.length})`, {
+                background: '#EFF6FF',
+                border: '#BFDBFE',
+                color: '#1D4ED8',
+              })}
             </div>
           </div>
         ))}
 
-        <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
-            Pipeline Logs & Errors
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-            <div style={{
-              padding: 16,
-              background: 'white',
-              borderRadius: 8,
-              border: '1px solid #E5E7EB',
-              minHeight: 220,
-              display: 'flex',
-              flexDirection: 'column'
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#111827', marginBottom: 10 }}>Live Logs</div>
-              {pipelineLogs.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 260, overflowY: 'auto' }}>
-                  {pipelineLogs.map((entry: any, idx: number) => (
-                    <div key={`pipeline-log-${idx}`} style={{ borderBottom: '1px solid #F3F4F6', paddingBottom: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
-                        <span style={{ fontWeight: 600, color: '#1F2937', textTransform: 'uppercase' }}>
-                          {String(entry?.type || entry?.signal || entry?.channel || 'log')}
-                        </span>
-                        <span>{formatLogTimestamp(entry)}</span>
-                      </div>
-                      <div style={{ fontSize: 12, color: '#111827' }}>{formatLogMessage(entry)}</div>
-                      {entry?.level && (
-                        <div style={{ fontSize: 10, color: '#6B7280', marginTop: 4 }}>Level: {entry.level}</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ color: '#9CA3AF', fontSize: 12 }}>
-                  No logs have been streamed from this pipeline yet.
-                </div>
-              )}
-            </div>
-
-            <div style={{
-              padding: 16,
-              background: '#FEF2F2',
-              borderRadius: 8,
-              border: '1px solid #FECACA',
-              minHeight: 220,
-              display: 'flex',
-              flexDirection: 'column'
-            }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#B91C1C', marginBottom: 10 }}>Error Feed</div>
-              {pipelineErrors.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 260, overflowY: 'auto' }}>
-                  {pipelineErrors.map((entry: any, idx: number) => (
-                    <div key={`pipeline-error-${idx}`} style={{
-                      padding: 12,
-                      background: '#FEE2E2',
-                      borderRadius: 6,
-                      border: '1px solid #FCA5A5'
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 600, color: '#B91C1C' }}>
-                        <span>{String(entry?.level || entry?.type || 'error').toUpperCase()}</span>
-                        <span>{formatLogTimestamp(entry)}</span>
-                      </div>
-                      <div style={{ fontSize: 12, color: '#7F1D1D', marginTop: 4 }}>{formatLogMessage(entry)}</div>
-                      {entry?.source && (
-                        <div style={{ fontSize: 10, color: '#9CA3AF', marginTop: 4 }}>source: {entry.source}</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ color: '#B91C1C', fontSize: 12 }}>
-                  All clear — no pipeline errors reported.
-                </div>
-              )}
-            </div>
-          </div>
+        <div
+          style={{
+            marginTop: 12,
+            padding: 16,
+            background: '#F9FAFB',
+            borderRadius: 8,
+            border: '1px solid #E5E7EB',
+            fontSize: 12,
+            color: '#6B7280',
+          }}
+        >
+          Collector logs and error feeds are not streamed through OpAMP yet. Use your existing logging/observability tooling (for example,
+          <code>kubectl logs</code> or a centralised log store) to review collector output.
         </div>
       </div>
     </div>
   );
-}, (prevProps, nextProps) => {
-  // Re-render if config or pipelines change
-  // Allow re-renders for telemetry updates (metrics refresh)
-  const configSame = prevProps.config === nextProps.config;
-  const pipelinesSame = JSON.stringify(prevProps.pipelines) === JSON.stringify(nextProps.pipelines);
-  const telemetrySame = JSON.stringify(prevProps.telemetry) === JSON.stringify(nextProps.telemetry);
-  
-  // Only skip re-render if ALL are the same (prevents unnecessary renders but allows metrics updates)
-  return configSame && pipelinesSame && telemetrySame;
 });
+ // Monitoring Section Component
 
 // Monitoring Section Component
 function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Bridge[] }) {
@@ -4057,7 +3467,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
             Loading monitoring data...
           </div>
         )}
-
             {!loading && selectedAgentUID && monitoringData && (
               <div style={{
                 width: '100%',
@@ -4423,8 +3832,8 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                 {/* Status, Activity, and Config cards with full-width pipeline */}
                 <div style={{
                   width: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
+                    display: 'flex', 
+                    flexDirection: 'column', 
                   gap: 20
                 }}>
                   <div style={{
@@ -4445,84 +3854,84 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                       gap: 12
                     }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
-                        Agent Status
+                      Agent Status
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Connection Status</div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {(() => {
+                            const status = monitoringData.agent?.agent?.status || monitoringData.agent?.status;
+                            if (status === 'online') {
+                              return (
+                                <>
+                                  <span style={{ 
+                                    display: 'inline-block', 
+                                    width: 8, 
+                                    height: 8, 
+                                    borderRadius: '50%', 
+                                    background: '#10B981' 
+                                  }}></span>
+                                  <span>Online</span>
+                                </>
+                              );
+                            } else if (status === 'degraded') {
+                              return (
+                                <>
+                                  <span style={{ 
+                                    display: 'inline-block', 
+                                    width: 8, 
+                                    height: 8, 
+                                    borderRadius: '50%', 
+                                    background: '#F59E0B' 
+                                  }}></span>
+                                  <span>Degraded (Unhealthy)</span>
+                                </>
+                              );
+                            } else if (status === 'offline') {
+                              return (
+                                <>
+                                  <span style={{ 
+                                    display: 'inline-block', 
+                                    width: 8, 
+                                    height: 8, 
+                                    borderRadius: '50%', 
+                                    background: '#EF4444' 
+                                  }}></span>
+                                  <span>Offline</span>
+                                </>
+                              );
+                            } else {
+                              return (
+                                <>
+                                  <span style={{ 
+                                    display: 'inline-block', 
+                                    width: 8, 
+                                    height: 8, 
+                                    borderRadius: '50%', 
+                                    background: '#9CA3AF' 
+                                  }}></span>
+                                  <span>Unknown</span>
+                                </>
+                              );
+                            }
+                          })()}
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Agent Version</div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', fontFamily: 'monospace' }}>
+                          {((monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== 'unknown') ? (monitoringData.agent?.agent?.version || monitoringData.agent?.version) : 'Not reported'}
+                        </div>
+                      </div>
+                      {(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && (
                         <div>
-                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Connection Status</div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {(() => {
-                              const status = monitoringData.agent?.agent?.status || monitoringData.agent?.status;
-                              if (status === 'online') {
-                                return (
-                                  <>
-                                    <span style={{ 
-                                      display: 'inline-block', 
-                                      width: 8, 
-                                      height: 8, 
-                                      borderRadius: '50%', 
-                                      background: '#10B981' 
-                                    }}></span>
-                                    <span>Online</span>
-                                  </>
-                                );
-                              } else if (status === 'degraded') {
-                                return (
-                                  <>
-                                    <span style={{ 
-                                      display: 'inline-block', 
-                                      width: 8, 
-                                      height: 8, 
-                                      borderRadius: '50%', 
-                                      background: '#F59E0B' 
-                                    }}></span>
-                                    <span>Degraded (Unhealthy)</span>
-                                  </>
-                                );
-                              } else if (status === 'offline') {
-                                return (
-                                  <>
-                                    <span style={{ 
-                                      display: 'inline-block', 
-                                      width: 8, 
-                                      height: 8, 
-                                      borderRadius: '50%', 
-                                      background: '#EF4444' 
-                                    }}></span>
-                                    <span>Offline</span>
-                                  </>
-                                );
-                              } else {
-                                return (
-                                  <>
-                                    <span style={{ 
-                                      display: 'inline-block', 
-                                      width: 8, 
-                                      height: 8, 
-                                      borderRadius: '50%', 
-                                      background: '#9CA3AF' 
-                                    }}></span>
-                                    <span>Unknown</span>
-                                  </>
-                                );
-                              }
-                            })()}
+                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Last Seen</div>
+                          <div style={{ fontSize: 12, color: '#111827' }}>
+                            {new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString()}
                           </div>
                         </div>
-                        <div>
-                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Agent Version</div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', fontFamily: 'monospace' }}>
-                            {((monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== 'unknown') ? (monitoringData.agent?.agent?.version || monitoringData.agent?.version) : 'Not reported'}
-                          </div>
-                        </div>
-                        {(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && (
-                          <div>
-                            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Last Seen</div>
-                            <div style={{ fontSize: 12, color: '#111827' }}>
-                              {new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString()}
-                            </div>
-                          </div>
-                        )}
+                      )}
                       <div>
                         <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Current Config</div>
                         <div style={{ fontSize: 13, fontWeight: 500, color: hasCurrentConfigLoaded ? '#10B981' : '#EF4444' }}>
@@ -4533,7 +3942,7 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                         <div>
                           <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>OpAMP Capabilities</div>
                           <CapabilityBadges capabilities={resolvedAgentCaps} limit={4} />
-                        </div>
+                    </div>
                       )}
                     </div>
                   </div>
@@ -4644,7 +4053,7 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
                         Pipeline Monitoring
-                      </div>
+                </div>
                       <PipelineFlowDiagram 
                         config={pipelineConfigString}
                         pipelines={monitoringData.pipelines || []}
@@ -4688,7 +4097,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
     </div>
   );
 }
-
 // Config Generator Component (BindPlane-style)
 function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; bridges: Bridge[]; onPushConfig: (uid: string, config: string) => void }) {
   const [receivers, setReceivers] = useState<any[]>([]);
@@ -4802,7 +4210,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
           console.log('User role from agents endpoint:', { isAdmin: isAdminValue, role: response.userRole.role });
         } else {
           // For testing: default to admin if role not found
-          console.warn('User role not found in response, defaulting to admin for testing');
+          console.warn('User role not found in response, defaulting to admin for testing purposes');
           setIsAdmin(true);
         }
       }
@@ -5304,7 +4712,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
 
     return ['logs', 'metrics', 'traces'];
   };
-
   // Compute available signals based on selected components
   const getAvailableSignals = (): { logs: boolean; metrics: boolean; traces: boolean } => {
     if (receivers.length === 0 && processors.length === 0 && exporters.length === 0) {
@@ -5429,7 +4836,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     }
     return errors;
   };
-
   const generateConfig = async () => {
     if (receivers.length === 0) {
       alert('Please add at least one receiver');
@@ -5730,7 +5136,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       }
     }
   };
-
   const renderComponentEditor = (comp: any, type: 'receiver' | 'processor' | 'exporter', index: number) => {
     const key = `${type}-${index}`;
     const isExpanded = expandedComponents.has(key);
@@ -6008,7 +5413,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       </div>
     );
   };
-
   return (
     <div>
       <div style={{
@@ -6209,7 +5613,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
             </div>
           </div>
         )}
-
         {/* CRD Settings - Deployment Configuration */}
         {!useRawYAML && false && (() => {
           // Check if selected agent is a DaemonSet collector
@@ -6556,10 +5959,8 @@ volumeMounts:
 env:
   - name: MY_ENV_VAR
     value: "my-value"
-
 # Example: ServiceAccount
 serviceAccount: my-service-account
-
 # Example: Tolerations
 tolerations:
   - key: node.kubernetes.io/disk-pressure
@@ -6593,7 +5994,7 @@ tolerations:
 
         {!useRawYAML && (
           <div style={{ marginBottom: 24, padding: 16, background: '#F3F4F6', borderRadius: 6, border: '1px solid #D1D5DB', color: '#4B5563', fontSize: 12 }}>
-            ℹ️ Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector’s <code>spec.config</code> that OpAMP can push.
+            ℹ️ Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector's <code>spec.config</code> that OpAMP can push.
           </div>
         )}
 
@@ -7319,7 +6720,6 @@ service:
             );
           })()
         )}
-
         {/* Version History Section */}
         {selectedAgentUID && configVersions.length > 0 && (
           <div style={{ marginTop: 24 }}>
@@ -7438,6 +6838,7 @@ service:
                             const syncStatus = configSyncStatus[version.id];
                             if (syncStatus && version.pushedAt) {
                               const remoteStatus = syncStatus.remoteConfigStatus || '';
+                              const hashMatch = syncStatus.hashMatch;
                               const hasError = syncStatus.remoteConfigError;
                               if (remoteStatus.includes('FAILED') || hasError) {
                                 const errorMsg = syncStatus.remoteConfigError || 'Configuration failed to apply';
@@ -7955,7 +7356,6 @@ service:
             </div>
           </div>
         )}
-
         {/* Diff Modal */}
         {showDiff && diffData && (
           <div style={{

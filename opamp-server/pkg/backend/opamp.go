@@ -56,8 +56,59 @@ func pruneAgentTelemetry(db *sql.DB) {
 	}
 	cutoff := time.Now().Add(-agentTelemetryRetention)
 	if _, err := db.Exec(`DELETE FROM agent_telemetry WHERE reported_at < ?`, cutoff); err != nil {
-		log.Printf("WARN: failed to prune agent telemetry older than %v: %v", agentTelemetryRetention, err)
+		if appLogger != nil {
+			appLogger.Warn("Failed to prune agent telemetry", map[string]interface{}{"retention": agentTelemetryRetention.String(), "error": err.Error()})
+		} else {
+			log.Printf("WARN: failed to prune agent telemetry older than %v: %v", agentTelemetryRetention, err)
+		}
 	}
+}
+
+func logAgentToServerDebug(instanceUID string, message *protobufs.AgentToServer) {
+	if appLogger == nil || !IsDebugLoggingEnabled() {
+		return
+	}
+	fields := map[string]interface{}{
+		"instanceUid":            instanceUID,
+		"capabilities":           fmt.Sprintf("0x%x", message.Capabilities),
+		"hasAgentDescription":    message.AgentDescription != nil,
+		"hasHealth":              message.Health != nil,
+		"hasRemoteConfigStatus":  message.RemoteConfigStatus != nil,
+		"hasEffectiveConfig":     message.EffectiveConfig != nil,
+		"telemetryItems":         len(message.Telemetry),
+		"connectionSettingsReq":  message.ConnectionSettingsRequest != nil,
+		"packagesAvailableCount": len(message.PackagesAvailable),
+	}
+
+	if message.AgentDescription != nil {
+		fields["agentDescription"] = map[string]interface{}{
+			"identifyingAttributes":    len(message.AgentDescription.IdentifyingAttributes),
+			"nonIdentifyingAttributes": len(message.AgentDescription.NonIdentifyingAttributes),
+		}
+	}
+
+	if message.Health != nil {
+		componentCount := 0
+		if message.Health.ComponentHealthMap != nil {
+			componentCount = len(message.Health.ComponentHealthMap)
+		}
+		fields["health"] = map[string]interface{}{
+			"healthy":         message.Health.Healthy,
+			"lastError":       message.Health.LastError,
+			"componentCounts": componentCount,
+		}
+	}
+
+	if message.RemoteConfigStatus != nil {
+		fields["remoteConfigStatus"] = map[string]interface{}{
+			"status":      message.RemoteConfigStatus.Status.String(),
+			"error":       message.RemoteConfigStatus.ErrorMessage,
+			"hashLength":  len(message.RemoteConfigStatus.LastRemoteConfigHash),
+			"hashPreview": hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash),
+		}
+	}
+
+	appLogger.Debug("AgentToServer message", fields)
 }
 
 func resolveOrgIDFromLabels(labels map[string]string) (int64, string) {
@@ -920,6 +971,13 @@ func getCollectorMode(namespace, crdName string) string {
 // OpAMP is for agent management and reports: Health, RemoteConfigStatus, PipelineStatuses (via Health), etc.
 func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobufs.AgentToServer) {
 	instanceUID = normalizeAgentUID(instanceUID)
+	if appLogger != nil && IsDebugLoggingEnabled() {
+		appLogger.Debug("Storing agent telemetry", map[string]interface{}{
+			"instanceUid": instanceUID,
+			"items":       len(message.Telemetry),
+			"hasHealth":   message.Health != nil,
+		})
+	}
 	db := mustDB()
 	defer db.Close()
 
@@ -1372,142 +1430,12 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								log.Printf("OPAMP agent connected")
 							},
 							OnMessage: func(ctx context.Context, conn types.Connection, message *protobufs.AgentToServer) *protobufs.ServerToAgent {
-								// DEBUG: Log all AgentToServer message fields (except metrics)
-								log.Printf("========== AgentToServer Message DEBUG ==========")
-								log.Printf("InstanceUid: length=%d, hex=%s", len(message.InstanceUid), hex.EncodeToString(message.InstanceUid))
-								log.Printf("Capabilities: 0x%x (decimal: %d)", message.Capabilities, message.Capabilities)
-
-								// AgentDescription
-								if message.AgentDescription != nil {
-									log.Printf("AgentDescription:")
-									if message.AgentDescription.IdentifyingAttributes != nil {
-										log.Printf("  IdentifyingAttributes (%d):", len(message.AgentDescription.IdentifyingAttributes))
-										for i, attr := range message.AgentDescription.IdentifyingAttributes {
-											val := ""
-											if attr.Value != nil {
-												val = attr.Value.GetStringValue()
-											}
-											log.Printf("    [%d] %s = %q", i, attr.Key, val)
-										}
-									} else {
-										log.Printf("  IdentifyingAttributes: nil")
-									}
-									if message.AgentDescription.NonIdentifyingAttributes != nil {
-										log.Printf("  NonIdentifyingAttributes (%d):", len(message.AgentDescription.NonIdentifyingAttributes))
-										for i, attr := range message.AgentDescription.NonIdentifyingAttributes {
-											if i < 50 { // Limit to first 50 to avoid log spam
-												val := ""
-												if attr.Value != nil {
-													val = attr.Value.GetStringValue()
-												}
-												log.Printf("    [%d] %s = %q", i, attr.Key, val)
-											}
-										}
-										if len(message.AgentDescription.NonIdentifyingAttributes) > 50 {
-											log.Printf("    ... (%d more attributes)", len(message.AgentDescription.NonIdentifyingAttributes)-50)
-										}
-									} else {
-										log.Printf("  NonIdentifyingAttributes: nil")
-									}
-								} else {
-									log.Printf("AgentDescription: nil")
-								}
-
-								// Health
-								if message.Health != nil {
-									log.Printf("Health:")
-									log.Printf("  Healthy: %v", message.Health.Healthy)
-									log.Printf("  StartTimeUnixNano: %d", message.Health.StartTimeUnixNano)
-									log.Printf("  StatusTimeUnixNano: %d", message.Health.StatusTimeUnixNano)
-									log.Printf("  LastError: %q", message.Health.LastError)
-									log.Printf("  Status: %q", message.Health.Status)
-									if message.Health.ComponentHealthMap != nil {
-										log.Printf("  ComponentHealthMap (%d entries):", len(message.Health.ComponentHealthMap))
-										for key, health := range message.Health.ComponentHealthMap {
-											log.Printf("    [%s] healthy=%v, startTime=%d, statusTime=%d, lastError=%q, status=%q",
-												key, health.Healthy, health.StartTimeUnixNano, health.StatusTimeUnixNano, health.LastError, health.Status)
-											if len(health.ComponentHealthMap) > 0 {
-												log.Printf("      Sub-components (%d):", len(health.ComponentHealthMap))
-												for subKey, subHealth := range health.ComponentHealthMap {
-													log.Printf("        [%s] healthy=%v, lastError=%q", subKey, subHealth.Healthy, subHealth.LastError)
-												}
-											}
-										}
-									} else {
-										log.Printf("  ComponentHealthMap: nil")
-									}
-								} else {
-									log.Printf("Health: nil")
-								}
-
-								// RemoteConfigStatus
-								if message.RemoteConfigStatus != nil {
-									log.Printf("RemoteConfigStatus:")
-									log.Printf("  Status: %s", message.RemoteConfigStatus.Status.String())
-									log.Printf("  LastRemoteConfigHash: length=%d, hex=%s",
-										len(message.RemoteConfigStatus.LastRemoteConfigHash),
-										hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash))
-									log.Printf("  ErrorMessage: %q", message.RemoteConfigStatus.ErrorMessage)
-								} else {
-									log.Printf("RemoteConfigStatus: nil")
-								}
-
-								// EffectiveConfig
-								if message.EffectiveConfig != nil {
-									log.Printf("EffectiveConfig:")
-									if message.EffectiveConfig.ConfigMap != nil && message.EffectiveConfig.ConfigMap.ConfigMap != nil {
-										log.Printf("  ConfigMap (%d entries):", len(message.EffectiveConfig.ConfigMap.ConfigMap))
-										for key, cfgFile := range message.EffectiveConfig.ConfigMap.ConfigMap {
-											if cfgFile != nil {
-												log.Printf("    [%s] contentType=%q, body_length=%d",
-													key, cfgFile.ContentType, len(cfgFile.Body))
-												// Log first 200 chars of body for debugging
-												if len(cfgFile.Body) > 0 {
-													previewLen := 200
-													if len(cfgFile.Body) < previewLen {
-														previewLen = len(cfgFile.Body)
-													}
-													log.Printf("      body_preview: %q", string(cfgFile.Body[:previewLen]))
-												}
-											} else {
-												log.Printf("    [%s] nil", key)
-											}
-										}
-									} else {
-										log.Printf("  ConfigMap: nil")
-									}
-								} else {
-									log.Printf("EffectiveConfig: nil")
-								}
-
-								// AgentIdentification (if server wants to change agent's InstanceUid)
-								// Note: This field may not exist in all versions of the protobuf
-								// if message.AgentIdentification != nil {
-								// 	log.Printf("AgentIdentification: present")
-								// } else {
-								// 	log.Printf("AgentIdentification: nil")
-								// }
-
-								// ConnectionSettingsRequest
-								if message.ConnectionSettingsRequest != nil {
-									log.Printf("ConnectionSettingsRequest: present (not logging details)")
-								} else {
-									log.Printf("ConnectionSettingsRequest: nil")
-								}
-
-								// Note: PackagesAvailable, PackageStatuses, ServerErrorResponse may not be in AgentToServer
-								// These are typically in ServerToAgent messages
-
-								// Note: OwnMetrics, OwnTraces, OwnLogs are intentionally skipped (as requested)
-								log.Printf("================================================")
-
-								// Debug: Log incoming InstanceUid bytes
-								log.Printf("DEBUG: Received AgentToServer - InstanceUid bytes length: %d, hex: %s, raw: %q",
-									len(message.InstanceUid), hex.EncodeToString(message.InstanceUid), string(message.InstanceUid))
+								instanceUIDHex := hex.EncodeToString(message.InstanceUid)
+								logAgentToServerDebug(instanceUIDHex, message)
 
 								// Convert instance UID bytes to string for reliable MySQL storage
 								// This ensures we can store it even if it contains binary data
-								bridgeInstanceUID := hex.EncodeToString(message.InstanceUid)
+								bridgeInstanceUID := instanceUIDHex
 								// If it looks like a UUID (36 bytes = 36 chars with hyphens), try to extract it
 								if len(message.InstanceUid) == 36 {
 									if decoded := string(message.InstanceUid); isPrintable(decoded) {

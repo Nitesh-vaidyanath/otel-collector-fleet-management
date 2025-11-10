@@ -270,6 +270,16 @@ func newAPIMux() *http.ServeMux {
 	})
 	mux.HandleFunc("/stats", wrap(statsHandler))
 	mux.HandleFunc("/component-types", wrap(componentTypesHandler))
+	mux.HandleFunc("/logging", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			wrap(loggingConfigGetHandler)(w, r)
+		case http.MethodPost:
+			rbac(RoleAdmin, loggingConfigUpdateHandler)(w, r)
+		default:
+			methodNotAllowed(w)
+		}
+	})
 
 	return mux
 }
