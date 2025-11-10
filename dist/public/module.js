@@ -3007,11 +3007,28 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       };
       setCollectorTotals(mergedTotals);
       if (response.userRole) {
-        setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === 2);
+        const rawRole = response.userRole.role;
+        const normalizedRole = (() => {
+          if (typeof rawRole === "string") {
+            const lower = rawRole.toLowerCase();
+            if (lower.includes("admin")) return "Admin";
+            if (lower.includes("editor")) return "Editor";
+            if (lower.includes("viewer")) return "Viewer";
+            return rawRole;
+          }
+          if (typeof rawRole === "number") {
+            if (rawRole === 2) return "Admin";
+            if (rawRole === 1) return "Editor";
+            return "Viewer";
+          }
+          return response.userRole.isAdmin ? "Admin" : "Viewer";
+        })();
+        const inferredIsAdmin = response.userRole.isAdmin === true || normalizedRole === "Admin";
+        setIsAdmin(inferredIsAdmin);
         setUserContext((prev) => ({
           name: response.userRole.userDisplayName || response.userRole.userName || prev.name,
-          role: response.userRole.role || prev.role,
-          isAdmin: response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === "Admin" || response.userRole.role === 2
+          role: normalizedRole || prev.role,
+          isAdmin: inferredIsAdmin
         }));
       }
       const effectiveOrgId = typeof response.grafanaOrgId === "number" ? response.grafanaOrgId : typeof response.orgId === "number" ? response.orgId : void 0;
@@ -3044,10 +3061,26 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       const response = await backendSrv.get("/user-role");
       if (response) {
         const displayName = response.userDisplayName || response.userName || "unknown";
+        const rawRole = response.role;
+        const normalizedRole = (() => {
+          if (typeof rawRole === "string") {
+            const lower = rawRole.toLowerCase();
+            if (lower.includes("admin")) return "Admin";
+            if (lower.includes("editor")) return "Editor";
+            if (lower.includes("viewer")) return "Viewer";
+            return rawRole;
+          }
+          if (typeof rawRole === "number") {
+            if (rawRole === 2) return "Admin";
+            if (rawRole === 1) return "Editor";
+            return "Viewer";
+          }
+          return response.isAdmin ? "Admin" : "Viewer";
+        })();
         setUserContext({
           name: displayName,
-          role: response.role || "unknown",
-          isAdmin: response.isAdmin === true || response.isAdmin === "true"
+          role: normalizedRole,
+          isAdmin: response.isAdmin === true || response.isAdmin === "true" || normalizedRole === "Admin"
         });
         if (typeof response.grafanaOrgId === "number") {
           setSelectedOrgId(response.grafanaOrgId);
@@ -3055,7 +3088,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         if (response.grafanaOrgName) {
           setCurrentOrgName(response.grafanaOrgName);
         }
-        setIsAdmin(response.isAdmin === true || response.role === "RoleAdmin" || response.role === "Admin" || response.role === 2);
+        setIsAdmin(response.isAdmin === true || normalizedRole === "Admin");
       }
     } catch (err) {
       console.error("Failed to load user context:", err);
@@ -3311,7 +3344,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       fontSize: 11,
       fontWeight: 600,
       marginLeft: 4
-    } }, agents.length)
+    } }, totalCollectorsDisplay)
   ))), /* @__PURE__ */ React.createElement("div", { style: { padding: 24, width: "100%", margin: "0", boxSizing: "border-box" } }, error && /* @__PURE__ */ React.createElement("div", { style: {
     padding: 12,
     marginBottom: 16,
@@ -5028,6 +5061,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
   const [exporterTypes, setExporterTypes] = useState([]);
   const [useRawYAML, setUseRawYAML] = useState(false);
   const [rawYAMLConfig, setRawYAMLConfig] = useState("");
+  const [includeDeploymentSettings, setIncludeDeploymentSettings] = useState(false);
   const [selectedSignals, setSelectedSignals] = useState({
     logs: true,
     metrics: true,
@@ -5057,6 +5091,9 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
     advancedYaml: ""
     // For custom fields: targetAllocator, volumes, serviceAccount, etc.
   });
+  useEffect(() => {
+    setIncludeDeploymentSettings(false);
+  }, [selectedAgentUID]);
   useEffect(() => {
     loadTemplates();
     fetchUserRole();
@@ -5600,11 +5637,11 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
           service: {
             selectedSignals: Object.entries(selectedSignals).filter(([_, selected]) => selected).map(([signal, _]) => signal)
           },
-          // Include CRD settings for:
+          // Include CRD settings only when the user opts-in AND it's permitted for this collector
           // 1. NEW collectors (name + namespace provided)
           // 2. EXISTING Deployment/StatefulSet collectors (deployment settings can be modified)
           // Do NOT include for DaemonSet collectors (only spec.config is updated)
-          crdSettings: isNewCollector || canModifyDeploymentSettings ? {
+          crdSettings: includeDeploymentSettings && (isNewCollector || canModifyDeploymentSettings) ? {
             name: crdSettings.name,
             namespace: crdSettings.namespace,
             mode: crdSettings.mode,
@@ -6100,7 +6137,10 @@ headers:
   })())), !useRawYAML && (() => {
     const selectedAgent = agents.find((a) => a.agentUid === selectedAgentUID);
     const isDaemonSet = selectedAgent?.labels?.["k8s.crd_name"]?.toLowerCase().includes("daemonset") || selectedAgent?.name?.toLowerCase().includes("daemonset");
-    if (isDaemonSet && selectedAgentUID) {
+    if (selectedAgentUID) {
+      return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F3F4F6", borderRadius: 6, border: "1px solid #D1D5DB", color: "#4B5563", fontSize: 12 } }, "\u2139\uFE0F Deployment (CRD) settings are managed directly in Kubernetes. This UI only manages ", /* @__PURE__ */ React.createElement("code", null, "spec.config"), " pushed over OpAMP. To change replicas, resources, images, or autoscaler settings, update the `OpenTelemetryCollector` CRD manually.");
+    }
+    if (isDaemonSet) {
       return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#FEE2E2", borderRadius: 6, border: "1px solid #FCA5A5" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#991B1B", marginBottom: 8 } }, "\u26A0\uFE0F Deployment Settings Not Available"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#7F1D1D" } }, "This collector is in ", /* @__PURE__ */ React.createElement("strong", null, "DaemonSet mode"), ", which does not support remote configuration updates via OpAMP. Only the pipeline configuration (receivers, processors, exporters) can be modified. Deployment settings (mode, replicas, resources) cannot be changed remotely."));
     }
     return /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#FEF3C7", borderRadius: 6, border: "1px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { fontSize: 13, fontWeight: 600, color: "#92400E" } }, "\u2699\uFE0F Deployment Settings (OpenTelemetryCollector CRD)"), /* @__PURE__ */ React.createElement(

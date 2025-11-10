@@ -1,6 +1,8 @@
+import path from 'path';
+import fs from 'fs';
 import { test as setup, expect } from '@playwright/test';
 
-const authFile = 'playwright/.auth/user.json';
+const authFile = path.resolve(__dirname, '../../..', 'tests', 'e2e', 'playwright', '.auth', 'user.json');
 
 setup('authenticate', async ({ page, request }) => {
   // Login via UI
@@ -14,6 +16,9 @@ setup('authenticate', async ({ page, request }) => {
     // If redirect doesn't happen, check if already logged in
   });
   
+  // Ensure storage directory exists
+  fs.mkdirSync(path.dirname(authFile), { recursive: true });
+
   // Save authentication state
   await page.context().storageState({ path: authFile });
   
