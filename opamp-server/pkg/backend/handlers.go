@@ -1231,6 +1231,9 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 func buildComponentMap(components []map[string]any) map[string]any {
 	result := make(map[string]any)
 	for _, comp := range components {
+		if isExt, ok := comp["_isExtension"].(bool); ok && isExt {
+			continue
+		}
 		if name, ok := comp["name"].(string); ok {
 			compType, _ := comp["type"].(string)
 
@@ -1406,6 +1409,9 @@ func buildService(service map[string]any, receivers, processors, exporters []map
 func extractNames(components []map[string]any) []string {
 	names := []string{}
 	for _, comp := range components {
+		if isExt, ok := comp["_isExtension"].(bool); ok && isExt {
+			continue
+		}
 		if name, ok := comp["name"].(string); ok {
 			names = append(names, name)
 		}
