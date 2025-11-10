@@ -4796,7 +4796,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     }
   };
 
-  const parseConfigYAML = (yamlConfig: string) => {
+  const parseConfigYAML = (yamlConfig: string): boolean => {
     try {
       const parsed = yaml.load(yamlConfig) as any;
       
@@ -4946,9 +4946,11 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       // Set expanded components
       setExpandedComponents(allKeys);
 
+      return true;
     } catch (err: any) {
       console.error('Failed to parse config YAML:', err);
       alert('Failed to parse current configuration: ' + (err.message || 'Unknown error'));
+      return false;
     }
   };
 
@@ -5936,11 +5938,16 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
           <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
             <button
               onClick={() => {
-                setUseRawYAML(false);
                 if (useRawYAML) {
-                  setGeneratedConfig('');
-                  setRawYAMLConfig('');
+                  const source = rawYAMLConfig.trim() || generatedConfig;
+                  if (source) {
+                    const ok = parseConfigYAML(source);
+                    if (!ok) {
+                      return;
+                    }
+                  }
                 }
+                setUseRawYAML(false);
               }}
               style={{
                 padding: '10px 20px',
@@ -6947,12 +6954,13 @@ service:
                     alert('Please enter a YAML configuration to apply.');
                     return;
                   }
-                  setGeneratedConfig(rawYAMLConfig.trim());
-                  try {
-                    parseConfigYAML(rawYAMLConfig);
+                  const trimmed = rawYAMLConfig.trim();
+                  const ok = parseConfigYAML(trimmed);
+                  if (ok) {
+                    setGeneratedConfig(trimmed);
                     alert('✅ Applied raw YAML to the visual editor preview. Review the Generated Configuration section below.');
-                  } catch (err) {
-                    console.error('Failed to parse raw YAML during apply:', err);
+                  } else {
+                    console.warn('Raw YAML apply failed validation.');
                   }
                 }}
                 style={{ padding: '8px 16px', background: '#2563EB', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
@@ -6987,22 +6995,18 @@ service:
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={generateConfig}
-                  disabled={(() => {
-                    const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
-                    return configuredReceivers.length === 0;
-                  })()}
                   style={{
                     padding: '8px 16px',
                     background: (() => {
                       const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
-                      return configuredReceivers.length === 0 ? '#D1D5DB' : '#3B82F6';
+                      return configuredReceivers.length === 0 ? '#FBBF24' : '#3B82F6';
                     })(),
                     color: 'white',
                     border: 'none',
                     borderRadius: 6,
                     cursor: (() => {
                       const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
-                      return configuredReceivers.length === 0 ? 'not-allowed' : 'pointer';
+                      return configuredReceivers.length === 0 ? 'pointer' : 'pointer';
                     })(),
                     fontSize: 14,
                     fontWeight: 500
@@ -7010,7 +7014,7 @@ service:
                   title={(() => {
                     const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
                     if (configuredReceivers.length === 0) {
-                      return 'Please configure at least one receiver (with a name) to generate a configuration';
+                      return 'No receivers configured; generated YAML will be incomplete. Click only if you plan to edit the result manually.';
                     }
                     return exporters.length === 0 ? 'Warning: No exporters configured. Config will be incomplete.' : '';
                   })()}
