@@ -5443,20 +5443,47 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/component-types?category=exporter')
       ]);
       
-      setReceiverTypes((receiversRes.items || []).map((t: any) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      setProcessorTypes((processorsRes.items || []).map((t: any) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      setExporterTypes((exportersRes.items || []).map((t: any) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      
-      // Always add custom option
-      if (!receiverTypes.find((t: any) => t.value === 'custom')) {
-        setReceiverTypes((prev: any[]) => [...prev, { value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true }]);
+      const receiversList = (receiversRes.items || []).map((t: any) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id,
+      }));
+      if (!receiversList.some((t: any) => t.value === 'custom')) {
+        receiversList.push({ value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true });
       }
-      if (!processorTypes.find((t: any) => t.value === 'custom')) {
-        setProcessorTypes((prev: any[]) => [...prev, { value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true }]);
+      setReceiverTypes(receiversList);
+
+      const processorsList = (processorsRes.items || []).map((t: any) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id,
+      }));
+      if (!processorsList.some((t: any) => t.value === 'custom')) {
+        processorsList.push({ value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true });
       }
-      if (!exporterTypes.find((t: any) => t.value === 'custom')) {
-        setExporterTypes((prev: any[]) => [...prev, { value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true }]);
+      setProcessorTypes(processorsList);
+
+      const exportersList = (exportersRes.items || []).map((t: any) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id,
+      }));
+      if (!exportersList.some((t: any) => t.value === 'custom')) {
+        exportersList.push({ value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true });
       }
+      setExporterTypes(exportersList);
     } catch (err: any) {
       console.error('Failed to load component types:', err);
     }
