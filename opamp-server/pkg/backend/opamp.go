@@ -69,15 +69,13 @@ func logAgentToServerDebug(instanceUID string, message *protobufs.AgentToServer)
 		return
 	}
 	fields := map[string]interface{}{
-		"instanceUid":            instanceUID,
-		"capabilities":           fmt.Sprintf("0x%x", message.Capabilities),
-		"hasAgentDescription":    message.AgentDescription != nil,
-		"hasHealth":              message.Health != nil,
-		"hasRemoteConfigStatus":  message.RemoteConfigStatus != nil,
-		"hasEffectiveConfig":     message.EffectiveConfig != nil,
-		"telemetryItems":         len(message.Telemetry),
-		"connectionSettingsReq":  message.ConnectionSettingsRequest != nil,
-		"packagesAvailableCount": len(message.PackagesAvailable),
+		"instanceUid":           instanceUID,
+		"capabilities":          fmt.Sprintf("0x%x", message.Capabilities),
+		"hasAgentDescription":   message.AgentDescription != nil,
+		"hasHealth":             message.Health != nil,
+		"hasRemoteConfigStatus": message.RemoteConfigStatus != nil,
+		"hasEffectiveConfig":    message.EffectiveConfig != nil,
+		"connectionSettingsReq": message.ConnectionSettingsRequest != nil,
 	}
 
 	if message.AgentDescription != nil {
@@ -974,7 +972,6 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 	if appLogger != nil && IsDebugLoggingEnabled() {
 		appLogger.Debug("Storing agent telemetry", map[string]interface{}{
 			"instanceUid": instanceUID,
-			"items":       len(message.Telemetry),
 			"hasHealth":   message.Health != nil,
 		})
 	}
