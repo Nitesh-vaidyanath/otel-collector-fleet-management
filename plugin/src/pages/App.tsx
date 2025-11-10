@@ -368,10 +368,12 @@ const CapabilityBadges = ({
   capabilities,
   limit = 5,
   compact = false,
+  onOpenDetails,
 }: {
   capabilities?: Record<string, any>;
   limit?: number;
   compact?: boolean;
+  onOpenDetails?: () => void;
 }) => {
   const badges = React.useMemo(() => {
     if (!capabilities) {
@@ -431,7 +433,14 @@ const CapabilityBadges = ({
         </span>
       ))}
       {remaining > 0 && (
-        <span style={{ fontSize: 10, color: '#6B7280' }} title="Additional capabilities reported by this agent">
+        <span
+          style={{ fontSize: 10, color: '#3B82F6', cursor: onOpenDetails ? 'pointer' : 'default', textDecoration: onOpenDetails ? 'underline' : 'none' }}
+          title="Additional capabilities reported by this agent"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDetails?.();
+          }}
+        >
           +{remaining} more
         </span>
       )}
@@ -559,6 +568,11 @@ export const App = () => {
   const [loadingDetailMonitoring, setLoadingDetailMonitoring] = useState(false);
   const [groupByDeploymentType, setGroupByDeploymentType] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [bridgeCapabilitySheet, setBridgeCapabilitySheet] = useState<{ bridge: Bridge | null; open: boolean }>({
+    bridge: null,
+    open: false,
+  });
+  const closeBridgeCapabilitySheet = () => setBridgeCapabilitySheet({ bridge: null, open: false });
   const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null);
   const [currentOrgName, setCurrentOrgName] = useState<string>('');
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
@@ -864,30 +878,49 @@ export const App = () => {
 
   // Load monitoring data for details panel when capabilities/activity tab is selected
   useEffect(() => {
-    if (showDetailsPanel && selectedAgent && (detailTab === 'capabilities' || detailTab === 'activity')) {
-      setLoadingDetailMonitoring(true);
-      const loadDetailMonitoring = async () => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const shouldLoadDetails =
+      showDetailsPanel && selectedAgent && (detailTab === 'capabilities' || detailTab === 'activity');
+
+    if (shouldLoadDetails) {
+      const loadDetailMonitoring = async (silent = false) => {
+        if (!silent) {
+          setLoadingDetailMonitoring(true);
+        }
         try {
           const [telemetryResponse, healthResponse] = await Promise.all([
-            backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/telemetry?limit=50`).catch(() => ({ items: [] })),
-            backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/health?limit=20`).catch(() => ({ items: [], current: {} }))
+            backendSrv
+              .get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent!.agentUid}/telemetry?limit=50`)
+              .catch(() => ({ items: [] })),
+            backendSrv
+              .get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent!.agentUid}/health?limit=20`)
+              .catch(() => ({ items: [], current: {} })),
           ]);
           setDetailPanelMonitoringData({
             telemetry: telemetryResponse.items || [],
-            health: healthResponse
+            health: healthResponse,
           });
         } catch (err) {
           console.error('Failed to load detail monitoring data:', err);
           setDetailPanelMonitoringData({ telemetry: [], health: { items: [], current: {} } });
         } finally {
-          setLoadingDetailMonitoring(false);
+          if (!silent) {
+            setLoadingDetailMonitoring(false);
+          }
         }
       };
-      loadDetailMonitoring();
+
+      loadDetailMonitoring(false);
+      interval = setInterval(() => loadDetailMonitoring(true), 5000);
     } else {
-      // Clear monitoring data when panel closes or tab changes
       setDetailPanelMonitoringData(null);
     }
+
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
   }, [selectedAgent?.agentUid, detailTab, showDetailsPanel]);
 
   // Collect all unique labels for filtering
@@ -1458,7 +1491,17 @@ export const App = () => {
                               <span style={{ fontSize: 11, color: '#6B7280', fontWeight: 500 }}>
                                 {bridgeCollectors.length} collector{bridgeCollectors.length !== 1 ? 's' : ''}
                               </span>
-                              <CapabilityBadges capabilities={bridge.capabilities} limit={3} compact />
+                              <CapabilityBadges
+                                capabilities={bridge.capabilities}
+                                limit={3}
+                                compact
+                                onOpenDetails={() => {
+                                  setBridgeCapabilitySheet({
+                                    bridge,
+                                    open: true,
+                                  });
+                                }}
+                              />
                             </div>
                             
                             {/* Bridge Status */}
@@ -2503,15 +2546,123 @@ export const App = () => {
             </button>
           </div>
           <div style={{ padding: '8px 20px 0', fontSize: 11, color: '#92400E', lineHeight: 1.4 }}>
-            ⚠️ Upgrading only replaces the collector binary/image. It does not upgrade the OpenTelemetry Collector Operator or its CRDs.
+            ⚠️ This action only asks the collector process to restart with whatever image/tag is currently defined in the CRD.
+            It does <strong>not</strong> patch <code>spec.image</code>, upgrade the OpenTelemetry Collector Operator, or apply CRD migrations for you.
             Review the{' '}
             <a href="https://github.com/open-telemetry/opentelemetry-collector-releases/releases" target="_blank" rel="noopener noreferrer" style={{ color: '#B45309', textDecoration: 'underline' }}>
               upstream release notes
             </a>{' '}
-            before proceeding.
+            and update your CRD (e.g., <code>spec.image</code>, resources, feature flags) before using this button.
           </div>
         </div>
       )}
+
+      {bridgeCapabilitySheet.open && bridgeCapabilitySheet.bridge && (
+        <>
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0,0,0,0.45)',
+              zIndex: 1090,
+            }}
+            onClick={closeBridgeCapabilitySheet}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: 420,
+              background: 'white',
+              boxShadow: '-6px 0 18px rgba(15,23,42,0.25)',
+              zIndex: 1100,
+              display: 'flex',
+              flexDirection: 'column',
+              animation: 'slideIn 0.25s ease-out',
+            }}
+          >
+            <div style={{ padding: 20, borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>{bridgeCapabilitySheet.bridge.name}</div>
+                <div style={{ fontSize: 12, color: '#6B7280' }}>Bridge Capabilities</div>
+              </div>
+              <button
+                onClick={closeBridgeCapabilitySheet}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: 24,
+                  cursor: 'pointer',
+                  color: '#6B7280',
+                  width: 32,
+                  height: 32,
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ padding: 20, overflowY: 'auto' }}>
+              {bridgeCapabilitySheet.bridge.capabilities ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {Object.entries(bridgeCapabilitySheet.bridge.capabilities)
+                    .sort((a, b) => {
+                      const ai = capabilityOrder.indexOf(a[0]);
+                      const bi = capabilityOrder.indexOf(b[0]);
+                      return (ai === -1 ? capabilityOrder.length : ai) - (bi === -1 ? capabilityOrder.length : bi);
+                    })
+                    .map(([key, value]) => {
+                      const meta = capabilityMeta[key] || {
+                        label: key.replace(/_/g, ' '),
+                        description: 'Reported capability',
+                        icon: '✨',
+                        tone: { bg: '#F3F4F6', border: '#E5E7EB', color: '#111827' },
+                      };
+                      const enabled = isCapabilityEnabled(value);
+                      return (
+                        <div
+                          key={key}
+                          style={{
+                            border: `1px solid ${meta.tone.border}`,
+                            borderRadius: 10,
+                            padding: 14,
+                            background: meta.tone.bg,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: meta.tone.color, fontWeight: 600 }}>
+                              <span>{meta.icon}</span>
+                              <span>{meta.label}</span>
+                            </div>
+                            <span style={{ fontSize: 12, color: enabled ? '#059669' : '#B91C1C', fontWeight: 600 }}>
+                              {enabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 12, color: '#4B5563' }}>{meta.description}</div>
+                          {!enabled && (
+                            <div style={{ fontSize: 11, color: '#9CA3AF' }}>
+                              Raw value: <code>{String(value)}</code>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: '#6B7280' }}>No capabilities reported by this bridge.</div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
 
       {/* Overlay for panel */}
       {showDetailsPanel && (
@@ -3192,17 +3343,17 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
                   {renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`)}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {renderHorizontalConnector(`${flow.receivers.join(' • ') || 'Receivers'} → ${flow.processors.join(' • ') || 'Processors'}`)}
-                </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {renderHorizontalConnector()}
+            </div>
 
                 <div style={{ minWidth: 0 }}>
                   {renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { showOrder: true, showBandwidth: true })}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {renderHorizontalConnector(`${flow.processors.join(' • ') || 'Processors'} → ${flow.exporters.join(' • ') || 'Exporters'}`)}
-                </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {renderHorizontalConnector()}
+            </div>
 
                 <div style={{ minWidth: 0 }}>
                   {renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`)}
@@ -3913,16 +4064,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
                         📜 Collector Telemetry Logs
                       </div>
-                      {selectedAgentUID && (
-                        <a
-                          href={`/api/plugins/${PLUGIN_ID}/resources/agents/${selectedAgentUID}/telemetry?limit=200`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: 11, color: '#3B82F6', textDecoration: 'underline' }}
-                        >
-                          Open raw feed
-                        </a>
-                      )}
                     </div>
                     {telemetryLogs.length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto' }}>
