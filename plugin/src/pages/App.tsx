@@ -265,6 +265,180 @@ type Tab = 'collectors' | 'configurations' | 'monitoring';
 
 const rawBackendSrv = getBackendSrv();
 
+const capabilityOrder = [
+  'accepts_remote_config',
+  'reports_effective_config',
+  'reports_health',
+  'reports_own_logs',
+  'reports_own_metrics',
+  'reports_own_traces',
+  'accepts_restart_command',
+  'reports_remote_config',
+  'reports_status',
+  'reports_available_components',
+];
+
+type CapabilityDescriptor = {
+  label: string;
+  description: string;
+  icon: string;
+  tone: { bg: string; border: string; color: string };
+};
+
+const capabilityMeta: Record<string, CapabilityDescriptor> = {
+  accepts_remote_config: {
+    label: 'Remote Config',
+    description: 'Accepts remote configuration updates pushed via OpAMP.',
+    icon: '⚙️',
+    tone: { bg: '#EEF2FF', border: '#C7D2FE', color: '#3730A3' },
+  },
+  reports_effective_config: {
+    label: 'Reports Config',
+    description: 'Reports effective configuration back to the OpAMP server.',
+    icon: '🧾',
+    tone: { bg: '#ECFDF5', border: '#A7F3D0', color: '#065F46' },
+  },
+  reports_health: {
+    label: 'Health',
+    description: 'Sends health status updates (required for health widget).',
+    icon: '❤️',
+    tone: { bg: '#FEF2F2', border: '#FECACA', color: '#991B1B' },
+  },
+  reports_own_logs: {
+    label: 'Logs',
+    description: 'Streams self-observed logs via OpAMP telemetry endpoint.',
+    icon: '📜',
+    tone: { bg: '#FDF2F8', border: '#FBCFE8', color: '#9D174D' },
+  },
+  reports_own_metrics: {
+    label: 'Metrics',
+    description: 'Streams self-observed metrics via OpAMP telemetry endpoint.',
+    icon: '📈',
+    tone: { bg: '#ECFEFF', border: '#BAE6FD', color: '#0C4A6E' },
+  },
+  reports_own_traces: {
+    label: 'Traces',
+    description: 'Streams self-observed traces via OpAMP telemetry endpoint.',
+    icon: '🛰️',
+    tone: { bg: '#FFF7ED', border: '#FED7AA', color: '#9A3412' },
+  },
+  accepts_restart_command: {
+    label: 'Restart Cmd',
+    description: 'Can be restarted remotely from the OpAMP server.',
+    icon: '🔁',
+    tone: { bg: '#E0E7FF', border: '#C7D2FE', color: '#312E81' },
+  },
+  reports_remote_config: {
+    label: 'Config Status',
+    description: 'Reports remote configuration hashes/status for auditing.',
+    icon: '🛰️',
+    tone: { bg: '#F3F4F6', border: '#E5E7EB', color: '#111827' },
+  },
+  reports_status: {
+    label: 'Agent Status',
+    description: 'Sends regular status updates (uptime, metadata, etc.).',
+    icon: '📡',
+    tone: { bg: '#F0FDFA', border: '#99F6E4', color: '#115E59' },
+  },
+  reports_available_components: {
+    label: 'Component Inventory',
+    description: 'Reports available receivers/processors/exporters.',
+    icon: '🧩',
+    tone: { bg: '#EFF6FF', border: '#BFDBFE', color: '#1E3A8A' },
+  },
+};
+
+const isCapabilityEnabled = (value: any): boolean => {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    return value.toLowerCase() === 'true' || value === '1';
+  }
+  return true;
+};
+
+const CapabilityBadges = ({
+  capabilities,
+  limit = 5,
+  compact = false,
+}: {
+  capabilities?: Record<string, any>;
+  limit?: number;
+  compact?: boolean;
+}) => {
+  const badges = React.useMemo(() => {
+    if (!capabilities) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const enabledPairs: { key: string; meta: CapabilityDescriptor; rawKey: string }[] = [];
+    const orderedKeys = [...capabilityOrder, ...Object.keys(capabilities)];
+    orderedKeys.forEach((key) => {
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      if (!isCapabilityEnabled(capabilities[key])) {
+        return;
+      }
+      const meta = capabilityMeta[key] || {
+        label: key.replace(/_/g, ' '),
+        description: 'Reported capability',
+        icon: '✨',
+        tone: { bg: '#F3F4F6', border: '#E5E7EB', color: '#111827' },
+      };
+      enabledPairs.push({ key, meta, rawKey: key });
+    });
+    return enabledPairs;
+  }, [capabilities]);
+
+  if (!capabilities || badges.length === 0) {
+    return null;
+  }
+
+  const displayed = badges.slice(0, limit);
+  const remaining = badges.length - displayed.length;
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      {displayed.map(({ key, meta }) => (
+        <span
+          key={key}
+          title={meta.description}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: compact ? 10 : 11,
+            fontWeight: 600,
+            padding: compact ? '2px 6px' : '4px 8px',
+            borderRadius: 999,
+            background: meta.tone.bg,
+            border: `1px solid ${meta.tone.border}`,
+            color: meta.tone.color,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span>{meta.icon}</span>
+          <span>{meta.label}</span>
+        </span>
+      ))}
+      {remaining > 0 && (
+        <span style={{ fontSize: 10, color: '#6B7280' }} title="Additional capabilities reported by this agent">
+          +{remaining} more
+        </span>
+      )}
+    </div>
+  );
+};
+
 type FetchOptions = Omit<FetchRequest, 'url' | 'method'>;
 
 type OpampSettingsResponse = {
@@ -666,6 +840,12 @@ export const App = () => {
   const [upgradingAgent, setUpgradingAgent] = useState<string | null>(null);
 
   const handleUpgrade = async (agentUID: string) => {
+    const confirmUpgrade = window.confirm(
+      '⚠️ Upgrading will restart this collector and update only the collector binary/image. Please review the release notes and ensure your operator/CRDs support the new version.\n\nContinue with the upgrade?'
+    );
+    if (!confirmUpgrade) {
+      return;
+    }
     setUpgradingAgent(agentUID);
     try {
       setError('');
@@ -1278,6 +1458,7 @@ export const App = () => {
                               <span style={{ fontSize: 11, color: '#6B7280', fontWeight: 500 }}>
                                 {bridgeCollectors.length} collector{bridgeCollectors.length !== 1 ? 's' : ''}
                               </span>
+                              <CapabilityBadges capabilities={bridge.capabilities} limit={3} compact />
                             </div>
                             
                             {/* Bridge Status */}
@@ -2316,9 +2497,18 @@ export const App = () => {
                 minHeight: '40px',
                 transition: 'all 0.2s'
               }}
+              title="Upgrades restart the collector process and may require compatible CRDs/operators."
             >
               {upgradingAgent === selectedAgent.agentUid ? 'Upgrading...' : 'Upgrade'}
             </button>
+          </div>
+          <div style={{ padding: '8px 20px 0', fontSize: 11, color: '#92400E', lineHeight: 1.4 }}>
+            ⚠️ Upgrading only replaces the collector binary/image. It does not upgrade the OpenTelemetry Collector Operator or its CRDs.
+            Review the{' '}
+            <a href="https://github.com/open-telemetry/opentelemetry-collector-releases/releases" target="_blank" rel="noopener noreferrer" style={{ color: '#B45309', textDecoration: 'underline' }}>
+              upstream release notes
+            </a>{' '}
+            before proceeding.
           </div>
         </div>
       )}
@@ -2851,8 +3041,28 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({ config, pi
         boxSizing: 'border-box',
         boxShadow: '0 18px 32px rgba(15,23,42,0.08)'
       }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: '#111827', marginBottom: 20 }}>
-          Pipeline Flow & Metrics
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
+            Pipeline Flow & Metrics
+          </div>
+          <div style={{ display: 'flex', gap: 12, fontSize: 12, flexWrap: 'wrap' }}>
+            <a
+              href="https://opentelemetry.io/docs/collector/configuration/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#2563EB', textDecoration: 'underline' }}
+            >
+              Collector config docs
+            </a>
+            <a
+              href="https://opentelemetry.io/docs/collector/configuration/#validate-your-config"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#B45309', textDecoration: 'underline' }}
+            >
+              Validate pipeline changes
+            </a>
+          </div>
         </div>
         
         {/* Show Complete Overview only if there are multiple pipelines, otherwise show individual pipelines below */}
@@ -3202,6 +3412,25 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
   ];
   const onlineAgents = allCollectors.filter(a => a.status === 'online');
   const totalAgents = allCollectors.length;
+  const resolvedAgentCaps = useMemo(() => {
+    if (monitoringData?.agent?.agent?.capabilities) {
+      return monitoringData.agent.agent.capabilities;
+    }
+    if (monitoringData?.agent?.capabilities) {
+      return monitoringData.agent.capabilities;
+    }
+    const fallback = agents.find((a) => a.agentUid === selectedAgentUID);
+    return fallback?.capabilities || undefined;
+  }, [monitoringData, agents, selectedAgentUID]);
+  const healthCapability = resolvedAgentCaps?.reports_health;
+  const logsCapability = resolvedAgentCaps?.reports_own_logs;
+  const supportsHealthReports = healthCapability === undefined || healthCapability === true;
+  const supportsOwnLogs = logsCapability === undefined || logsCapability === true;
+  const telemetryLogs = Array.isArray(monitoringData?.telemetry)
+    ? monitoringData.telemetry.filter((item: any) =>
+        String(item?.type || item?.signal || item?.category || '').toLowerCase().includes('log')
+      )
+    : [];
   const currentConfig = monitoringData?.currentConfig || null;
   const hasCurrentConfigLoaded = Boolean(currentConfig && (currentConfig.hasAgentConfig || currentConfig.hasConfig));
   const pipelineConfigValue = currentConfig ? (currentConfig.agentConfig || currentConfig.config) : '';
@@ -3612,8 +3841,15 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                     <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
                       🏥 Agent Health Status
                     </div>
-                    <div style={{ fontSize: 13, color: '#92400E' }}>
-                      Health data not yet reported by agent. The agent may not be sending OpAMP health messages yet.
+                    <div style={{ fontSize: 13, color: '#92400E', lineHeight: 1.5 }}>
+                      {supportsHealthReports
+                        ? 'Health data has not been reported yet. The agent might need a few moments after connecting before it emits OpAMP health messages.'
+                        : 'This agent reported reports_health = false, so the OpAMP server cannot display health data for it.'}
+                    </div>
+                    <div style={{ fontSize: 11, marginTop: 6 }}>
+                      <a href="https://opentelemetry.io/docs/specs/opamp/protocol/#health-reporting" target="_blank" rel="noopener noreferrer" style={{ color: '#B45309', textDecoration: 'underline' }}>
+                        Learn how OpAMP health reporting works
+                      </a>
                     </div>
                   </div>
                 )}
@@ -3662,6 +3898,53 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Collector Logs */}
+                {monitoringData.telemetry && (
+                  <div style={{
+                    padding: 16,
+                    background: '#F9FAFB',
+                    borderRadius: 6,
+                    border: '1px solid #E5E7EB'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                        📜 Collector Telemetry Logs
+                      </div>
+                      {selectedAgentUID && (
+                        <a
+                          href={`/api/plugins/${PLUGIN_ID}/resources/agents/${selectedAgentUID}/telemetry?limit=200`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ fontSize: 11, color: '#3B82F6', textDecoration: 'underline' }}
+                        >
+                          Open raw feed
+                        </a>
+                      )}
+                    </div>
+                    {telemetryLogs.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto' }}>
+                        {telemetryLogs.map((entry: any, idx: number) => (
+                          <div key={`telemetry-log-${idx}`} style={{ padding: 10, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6B7280', marginBottom: 4 }}>
+                              <span style={{ fontWeight: 600, color: '#0F172A' }}>{entry.level?.toUpperCase() || entry.type || 'log'}</span>
+                              <span>{entry.reported_at ? new Date(entry.reported_at).toLocaleString() : ''}</span>
+                            </div>
+                            <div style={{ fontSize: 12, color: '#111827', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                              {entry.message || entry.description || entry.error || JSON.stringify(entry.data || entry)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.6 }}>
+                        {supportsOwnLogs
+                          ? 'No logs have been reported through OpAMP telemetry yet.'
+                          : 'This agent reported reports_own_logs = false, so it will not stream logs through OpAMP. Use your platform (e.g., kubectl logs) to inspect collector logs.'}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -3976,14 +4259,20 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                             </div>
                           </div>
                         )}
-                        <div>
-                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Current Config</div>
-                          <div style={{ fontSize: 13, fontWeight: 500, color: hasCurrentConfigLoaded ? '#10B981' : '#EF4444' }}>
-                            {hasCurrentConfigLoaded ? '✓ Loaded' : '✗ Not Available'}
-                          </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Current Config</div>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: hasCurrentConfigLoaded ? '#10B981' : '#EF4444' }}>
+                          {hasCurrentConfigLoaded ? '✓ Loaded' : '✗ Not Available'}
                         </div>
                       </div>
+                      {resolvedAgentCaps && Object.keys(resolvedAgentCaps).length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>OpAMP Capabilities</div>
+                          <CapabilityBadges capabilities={resolvedAgentCaps} limit={4} />
+                        </div>
+                      )}
                     </div>
+                  </div>
 
                     {/* Recent Activity */}
                     <div style={{
@@ -4799,6 +5088,82 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receivers, processors, exporters]);
 
+  const isValidHostPort = (value?: string | null) => {
+    if (!value) {
+      return false;
+    }
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return false;
+    }
+    // IPv6 support: allow [::1]:4317
+    if (trimmed.startsWith('[')) {
+      const closing = trimmed.indexOf(']');
+      if (closing > 0) {
+        const portPart = trimmed.slice(closing + 1);
+        if (portPart.startsWith(':')) {
+          const port = Number(portPart.slice(1));
+          return Number.isInteger(port) && port > 0 && port <= 65535;
+        }
+      }
+      return false;
+    }
+    const parts = trimmed.split(':');
+    if (parts.length !== 2) {
+      return false;
+    }
+    const port = Number(parts[1]);
+    return parts[0].length > 0 && Number.isInteger(port) && port > 0 && port <= 65535;
+  };
+
+  const isValidHttpUrl = (value?: string | null) => {
+    if (!value) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
+  const validateCRDSettings = (opts: {
+    includeDeploymentSettings: boolean;
+    crdSettings: typeof crdSettings;
+    isNewCollector: boolean;
+    canModifyDeploymentSettings: boolean;
+  }) => {
+    const errors: string[] = [];
+    if (!opts.includeDeploymentSettings) {
+      return errors;
+    }
+    if (!(opts.isNewCollector || opts.canModifyDeploymentSettings)) {
+      return errors;
+    }
+    const settings = opts.crdSettings;
+    if (!settings.name?.trim()) {
+      errors.push('CRD name is required when deployment settings are enabled.');
+    }
+    if (!settings.namespace?.trim()) {
+      errors.push('CRD namespace is required when deployment settings are enabled.');
+    }
+    if (!settings.image?.trim()) {
+      errors.push('Collector image is required in deployment settings.');
+    }
+    if ((settings.mode === 'deployment' || settings.mode === 'statefulset') && (!settings.replicas || settings.replicas < 1)) {
+      errors.push('Replicas must be at least 1 for deployment/statefulset modes.');
+    }
+    const cpuReq = settings.resources.requests.cpu?.trim();
+    const memReq = settings.resources.requests.memory?.trim();
+    const cpuLimit = settings.resources.limits.cpu?.trim();
+    const memLimit = settings.resources.limits.memory?.trim();
+    if (!cpuReq || !memReq || !cpuLimit || !memLimit) {
+      errors.push('CPU/Memory requests and limits must be provided in deployment settings.');
+    }
+    return errors;
+  };
+
   const generateConfig = async () => {
     if (receivers.length === 0) {
       alert('Please add at least one receiver');
@@ -4832,6 +5197,19 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       if (!r.type || r.type === '') {
         invalidComponents.push(`Receiver ${i + 1} (${r.name || 'unnamed'}) is missing type`);
       }
+      if (r.type === 'otlp') {
+        const grpcEndpoint = r.protocols?.grpc?.endpoint?.trim();
+        const httpEndpoint = r.protocols?.http?.endpoint?.trim();
+        if (!grpcEndpoint && !httpEndpoint) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || 'otlp'}) requires at least one endpoint (gRPC and/or HTTP).`);
+        }
+        if (grpcEndpoint && !isValidHostPort(grpcEndpoint)) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || 'otlp'}) has invalid gRPC endpoint "${grpcEndpoint}". Use host:port (e.g., 0.0.0.0:4317).`);
+        }
+        if (httpEndpoint && !isValidHostPort(httpEndpoint)) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || 'otlp'}) has invalid HTTP endpoint "${httpEndpoint}". Use host:port (e.g., 0.0.0.0:4318).`);
+        }
+      }
     });
     processors.forEach((p, i) => {
       if (!p.type || p.type === '') {
@@ -4846,7 +5224,22 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       if (!e.type || e.type === '') {
         invalidComponents.push(`Exporter ${i + 1} (${e.name || 'unnamed'}) is missing type`);
       }
+      if (e.type === 'otlp') {
+        const endpoint = e.endpoint?.trim();
+        if (!endpoint) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || 'otlp'}) requires an endpoint (http://host:port or host:port).`);
+        } else if (!isValidHttpUrl(endpoint) && !isValidHostPort(endpoint)) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || 'otlp'}) endpoint "${endpoint}" is invalid. Use http(s) URL or host:port for gRPC.`);
+        }
+      }
     });
+    const crdValidationErrors = validateCRDSettings({
+      includeDeploymentSettings,
+      crdSettings,
+      isNewCollector,
+      canModifyDeploymentSettings,
+    });
+    invalidComponents.push(...crdValidationErrors);
     
     if (invalidComponents.length > 0) {
       alert('Invalid configuration:\n\n' + invalidComponents.join('\n') + '\n\nPlease ensure all components have a valid type.');
