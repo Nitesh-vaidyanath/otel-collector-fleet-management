@@ -6988,30 +6988,29 @@ service:
                 <button
                   onClick={generateConfig}
                   disabled={(() => {
-                    // Only enable if there are receivers that are NOT custom
-                    const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                    return nonCustomReceivers.length === 0;
+                    const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                    return configuredReceivers.length === 0;
                   })()}
                   style={{
                     padding: '8px 16px',
                     background: (() => {
-                      const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                      return nonCustomReceivers.length === 0 ? '#D1D5DB' : '#3B82F6';
+                      const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                      return configuredReceivers.length === 0 ? '#D1D5DB' : '#3B82F6';
                     })(),
                     color: 'white',
                     border: 'none',
                     borderRadius: 6,
                     cursor: (() => {
-                      const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                      return nonCustomReceivers.length === 0 ? 'not-allowed' : 'pointer';
+                      const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                      return configuredReceivers.length === 0 ? 'not-allowed' : 'pointer';
                     })(),
                     fontSize: 14,
                     fontWeight: 500
                   }}
                   title={(() => {
-                    const nonCustomReceivers = receivers.filter((r: any) => r.type && r.type !== 'custom' && r.type !== '');
-                    if (nonCustomReceivers.length === 0) {
-                      return 'Please select at least one non-custom receiver to generate configuration';
+                    const configuredReceivers = receivers.filter((r: any) => typeof r.name === 'string' && r.name.trim() !== '');
+                    if (configuredReceivers.length === 0) {
+                      return 'Please configure at least one receiver (with a name) to generate a configuration';
                     }
                     return exporters.length === 0 ? 'Warning: No exporters configured. Config will be incomplete.' : '';
                   })()}
