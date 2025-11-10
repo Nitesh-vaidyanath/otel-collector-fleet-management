@@ -69,6 +69,9 @@ func roleFromHeader(r *http.Request) Role {
 	default:
 		// Try to infer from Grafana role headers
 		grafanaRole := strings.ToLower(r.Header.Get("X-Grafana-Role"))
+		if grafanaRole == "" {
+			grafanaRole = strings.ToLower(r.Header.Get("X-Grafana-Org-Role"))
+		}
 		switch grafanaRole {
 		case "admin":
 			return RoleAdmin
