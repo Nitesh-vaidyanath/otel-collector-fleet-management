@@ -3920,6 +3920,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
   const [selectedConfigVersion, setSelectedConfigVersion] = useState<any | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [diffData, setDiffData] = useState<any>(null);
+  const [showFullDiff, setShowFullDiff] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   const [approvalAction, setApprovalAction] = useState<'approve' | 'reject' | null>(null);
@@ -4062,7 +4063,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       const syncStatusMap: Record<number, any> = {};
       for (const cfg of pushedConfigs) {
         try {
-          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/current-config`);
+          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/config-sync-status`);
           syncStatusMap[cfg.id] = syncResp;
         } catch (err) {
           console.log('Could not load sync status for config', cfg.id, err);
@@ -4097,7 +4098,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     const checkSync = async () => {
       for (const cfg of pushedConfigs) {
         try {
-          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgentUID}/current-config`);
+          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgentUID}/config-sync-status`);
           setConfigSyncStatus((prev) => ({ ...prev, [cfg.id]: syncResp }));
         } catch (err) {
           console.log('Could not check sync status for config', cfg.id, err);
@@ -4296,6 +4297,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       console.log('Loading diff for config:', configId, 'against baseline, URL:', url);
       const response = await backendSrv.get(url);
       setDiffData(response);
+      setShowFullDiff(false);
       setShowDiff(true);
     } catch (err: any) {
       const errMsg = err.data?.message || err.message || err.statusText || 'Unknown error';
@@ -7028,6 +7030,47 @@ service:
                 <h3 style={{ margin: 0 }}>Configuration Diff</h3>
                 <button onClick={() => setShowDiff(false)} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer' }}>×</button>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: '#4B5563' }}>
+                  Viewing scope:&nbsp;
+                  <strong>{diffData.currentScope ? diffData.currentScope : 'full document'}</strong>
+                  {diffData.previousScope && diffData.previousScope !== diffData.currentScope && (
+                    <> (previous: {diffData.previousScope})</>
+                  )}
+                </div>
+                {diffData.fullCurrent && (
+                  <button
+                    onClick={() => setShowFullDiff((prev) => !prev)}
+                    style={{
+                      padding: '6px 12px',
+                      background: showFullDiff ? '#1F2937' : '#2563EB',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 500
+                    }}
+                  >
+                    {showFullDiff ? 'Hide Full CR YAML' : 'Show Full CR YAML'}
+                  </button>
+                )}
+              </div>
+              {showFullDiff && diffData.fullCurrent && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Full Current CRD YAML</div>
+                  <pre style={{
+                    maxHeight: 200,
+                    overflow: 'auto',
+                    background: '#F3F4F6',
+                    padding: 12,
+                    borderRadius: 4,
+                    fontSize: 11
+                  }}>
+{diffData.fullCurrent}
+                  </pre>
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                 <div>
                   <div style={{ fontWeight: 600, marginBottom: 8, color: '#DC2626' }}>

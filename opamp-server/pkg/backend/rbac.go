@@ -18,14 +18,15 @@ const (
 )
 
 type reqCtx struct {
-	OrgID          int64
-	OrgName        string
-	GrafanaOrgID   int64
-	GrafanaOrgName string
-	Role           Role
-	UserID         int64
-	UserName       string
-	IsAdmin        bool
+	OrgID           int64
+	OrgName         string
+	GrafanaOrgID    int64
+	GrafanaOrgName  string
+	Role            Role
+	UserID          int64
+	UserName        string
+	UserDisplayName string
+	IsAdmin         bool
 }
 
 type grafanaContext struct {
@@ -272,21 +273,22 @@ func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFun
 		ctx := parseGrafanaContext(r)
 		role := roleFromHeader(r)
 		orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
-		userID, userName := getUserFromRequest(r, ctx)
-		userName = sanitizeDisplayName(userName, grafanaOrgID)
+		userID, rawUserName := getUserFromRequest(r, ctx)
+		displayName := sanitizeDisplayName(rawUserName, grafanaOrgID)
 		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
 		if ctx != nil && ctx.IsGrafanaAdmin {
 			isAdmin = true
 		}
 		next(w, r, reqCtx{
-			OrgID:          orgID,
-			OrgName:        orgName,
-			GrafanaOrgID:   grafanaOrgID,
-			GrafanaOrgName: grafanaOrgName,
-			Role:           role,
-			UserID:         userID,
-			UserName:       userName,
-			IsAdmin:        isAdmin,
+			OrgID:           orgID,
+			OrgName:         orgName,
+			GrafanaOrgID:    grafanaOrgID,
+			GrafanaOrgName:  grafanaOrgName,
+			Role:            role,
+			UserID:          userID,
+			UserName:        displayName,
+			UserDisplayName: displayName,
+			IsAdmin:         isAdmin,
 		})
 	}
 }
@@ -314,21 +316,22 @@ func rbac(min Role, next func(http.ResponseWriter, *http.Request, reqCtx)) http.
 			return
 		}
 		orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
-		userID, userName := getUserFromRequest(r, ctx)
-		userName = sanitizeDisplayName(userName, grafanaOrgID)
+		userID, rawUserName := getUserFromRequest(r, ctx)
+		displayName := sanitizeDisplayName(rawUserName, grafanaOrgID)
 		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
 		if ctx != nil && ctx.IsGrafanaAdmin {
 			isAdmin = true
 		}
 		next(w, r, reqCtx{
-			OrgID:          orgID,
-			OrgName:        orgName,
-			GrafanaOrgID:   grafanaOrgID,
-			GrafanaOrgName: grafanaOrgName,
-			Role:           role,
-			UserID:         userID,
-			UserName:       userName,
-			IsAdmin:        isAdmin,
+			OrgID:           orgID,
+			OrgName:         orgName,
+			GrafanaOrgID:    grafanaOrgID,
+			GrafanaOrgName:  grafanaOrgName,
+			Role:            role,
+			UserID:          userID,
+			UserName:        displayName,
+			UserDisplayName: displayName,
+			IsAdmin:         isAdmin,
 		})
 	}
 }

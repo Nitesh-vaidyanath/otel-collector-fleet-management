@@ -1177,7 +1177,7 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 		})
 		_, _ = db.Exec(`
 			INSERT INTO agent_telemetry (org_id, agent_uid, telemetry_type, telemetry_data, reported_at)
-			VALUES (?, ?, 'health', ?, NOW())
+			VALUES (?, ?, 'remote_config_status', ?, NOW())
 		`, orgID, instanceUID, string(configStatusData))
 
 		// Detect config drift (desired != effective)

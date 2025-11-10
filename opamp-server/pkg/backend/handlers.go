@@ -71,7 +71,7 @@ func userRoleHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		"isAdmin":         c.IsAdmin,
 		"userID":          c.UserID,
 		"userName":        c.UserName,
-		"userDisplayName": c.UserName,
+		"userDisplayName": c.UserDisplayName,
 		"orgID":           c.OrgID,
 		"orgName":         c.OrgName,
 		"grafanaOrgID":    c.GrafanaOrgID,
@@ -239,7 +239,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				"isAdmin":         c.IsAdmin,
 				"userID":          c.UserID,
 				"userName":        c.UserName,
-				"userDisplayName": c.UserName,
+				"userDisplayName": c.UserDisplayName,
 				"grafanaOrgID":    c.GrafanaOrgID,
 				"grafanaOrgName":  c.GrafanaOrgName,
 			},
@@ -505,7 +505,7 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			"isAdmin":         c.IsAdmin,
 			"userID":          c.UserID,
 			"userName":        c.UserName,
-			"userDisplayName": c.UserName,
+			"userDisplayName": c.UserDisplayName,
 			"grafanaOrgID":    c.GrafanaOrgID,
 			"grafanaOrgName":  c.GrafanaOrgName,
 		},
@@ -1605,14 +1605,80 @@ func configDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		config2Value = config2.String
 	}
 
-	// Simple diff calculation (line-by-line)
-	diff := calculateDiff(config1Value, config2Value)
+	currentNormalized, currentScope := normalizeConfigForDiff(config1Value)
+	previousNormalized, previousScope := normalizeConfigForDiff(config2Value)
+
+	// Simple diff calculation (line-by-line) using normalized scope
+	diff := calculateDiff(currentNormalized, previousNormalized)
 
 	jsonOK(w, map[string]any{
-		"current":  config1Value,
-		"previous": config2Value,
-		"diff":     diff,
+		"current":       currentNormalized,
+		"previous":      previousNormalized,
+		"diff":          diff,
+		"currentScope":  currentScope,
+		"previousScope": previousScope,
+		"fullCurrent":   config1Value,
+		"fullPrevious":  config2Value,
 	})
+}
+
+func normalizeConfigForDiff(configYAML string) (string, string) {
+	trimmed := strings.TrimSpace(configYAML)
+	if trimmed == "" {
+		return trimmed, "empty"
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return trimmed, "raw"
+	}
+
+	// Prefer spec.config for CRDs
+	if spec, ok := parsed["spec"].(map[string]interface{}); ok {
+		if cfg, ok := spec["config"]; ok {
+			if normalized, ok := marshalConfigSectionForDiff(cfg); ok {
+				return normalized, "spec.config"
+			}
+		}
+	}
+
+	// Some CRDs embed config at top-level "config"
+	if cfg, ok := parsed["config"]; ok {
+		if normalized, ok := marshalConfigSectionForDiff(cfg); ok {
+			return normalized, "config"
+		}
+	}
+
+	// If YAML already looks like collector config (receivers/processors/etc)
+	if _, hasReceivers := parsed["receivers"]; hasReceivers || parsed["processors"] != nil || parsed["exporters"] != nil || parsed["service"] != nil {
+		if bytes, err := yaml.Marshal(parsed); err == nil {
+			return string(bytes), "pipeline"
+		}
+	}
+
+	return trimmed, "raw"
+}
+
+func marshalConfigSectionForDiff(section interface{}) (string, bool) {
+	switch val := section.(type) {
+	case map[string]interface{}:
+		if bytes, err := yaml.Marshal(val); err == nil {
+			return string(bytes), true
+		}
+	case []interface{}:
+		if bytes, err := yaml.Marshal(val); err == nil {
+			return string(bytes), true
+		}
+	case string:
+		if strings.TrimSpace(val) != "" {
+			return val, true
+		}
+	default:
+		if bytes, err := yaml.Marshal(val); err == nil {
+			return string(bytes), true
+		}
+	}
+	return "", false
 }
 
 // generateDiff creates a line-by-line diff between two YAML strings (for agent vs database comparison)
@@ -1855,16 +1921,30 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 		result["pendingConfig"] = map[string]any{"hasPending": false}
 	}
 
-	// Get latest RemoteConfigStatus from agent_telemetry
+	// Get latest RemoteConfigStatus from agent_telemetry (dedicated telemetry type)
 	var telemetryData sql.NullString
 	var reportedAt sql.NullTime
+	statusSource := "remote_config_status"
 	row3 := db.QueryRow(`
 		SELECT telemetry_data, reported_at 
 		FROM agent_telemetry 
-		WHERE agent_uid=? AND org_id=? AND telemetry_type='health' 
+		WHERE agent_uid=? AND org_id=? AND telemetry_type='remote_config_status' 
 		ORDER BY reported_at DESC LIMIT 1
 	`, uid, c.OrgID)
-	if err := row3.Scan(&telemetryData, &reportedAt); err == nil && telemetryData.Valid {
+	err := row3.Scan(&telemetryData, &reportedAt)
+	if err == sql.ErrNoRows {
+		// Fall back to legacy entries stored under "health"
+		statusSource = "health"
+		row3 = db.QueryRow(`
+			SELECT telemetry_data, reported_at 
+			FROM agent_telemetry 
+			WHERE agent_uid=? AND org_id=? AND telemetry_type='health' 
+			ORDER BY reported_at DESC LIMIT 1
+		`, uid, c.OrgID)
+		err = row3.Scan(&telemetryData, &reportedAt)
+	}
+
+	if err == nil && telemetryData.Valid {
 		var data map[string]interface{}
 		if json.Unmarshal([]byte(telemetryData.String), &data) == nil {
 			if status, ok := data["status"].(string); ok {
@@ -1888,6 +1968,7 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 		if reportedAt.Valid {
 			result["lastStatusReport"] = reportedAt.Time.Format(time.RFC3339)
 		}
+		result["remoteConfigStatusSource"] = statusSource
 	}
 
 	jsonOK(w, result)
