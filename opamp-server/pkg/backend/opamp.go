@@ -34,6 +34,8 @@ type OpampManager struct {
 	conns  map[string]*agentConnection // agent_uid -> connection
 }
 
+const agentTelemetryRetention = 10 * time.Minute
+
 func NewOpampManager() (*OpampManager, error) {
 	s := server.New(nil)
 	return &OpampManager{
@@ -46,6 +48,16 @@ func NewOpampManager() (*OpampManager, error) {
 func normalizeAgentUID(uid string) string {
 	// Remove hyphens from UUID format (e.g., "550e8400-e29b-41d4-a716-446655440001" -> "550e8400e29b41d4a716446655440001")
 	return strings.ReplaceAll(uid, "-", "")
+}
+
+func pruneAgentTelemetry(db *sql.DB) {
+	if db == nil {
+		return
+	}
+	cutoff := time.Now().Add(-agentTelemetryRetention)
+	if _, err := db.Exec(`DELETE FROM agent_telemetry WHERE reported_at < ?`, cutoff); err != nil {
+		log.Printf("WARN: failed to prune agent telemetry older than %v: %v", agentTelemetryRetention, err)
+	}
 }
 
 func resolveOrgIDFromLabels(labels map[string]string) (int64, string) {
@@ -1031,6 +1043,7 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 			INSERT INTO agent_telemetry (org_id, agent_uid, telemetry_type, telemetry_data, reported_at)
 			VALUES (?, ?, 'health', ?, NOW())
 		`, orgID, instanceUID, string(healthData))
+		pruneAgentTelemetry(db)
 	}
 
 	// Extract RemoteConfigStatus (status of remote config application)
@@ -1179,6 +1192,7 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 			INSERT INTO agent_telemetry (org_id, agent_uid, telemetry_type, telemetry_data, reported_at)
 			VALUES (?, ?, 'remote_config_status', ?, NOW())
 		`, orgID, instanceUID, string(configStatusData))
+		pruneAgentTelemetry(db)
 
 		// Detect config drift (desired != effective)
 		var desiredHash, currentEffectiveHash sql.NullString
