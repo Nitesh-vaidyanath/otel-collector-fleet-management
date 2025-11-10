@@ -397,6 +397,14 @@ export const App = () => {
     role: '',
     isAdmin: false,
   });
+  const [collectorTotals, setCollectorTotals] = useState({
+    direct: 0,
+    directOnline: 0,
+    managed: 0,
+    managedOnline: 0,
+    total: 0,
+    online: 0,
+  });
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
   const displayUserName = useMemo(() => {
     const raw = (userContext.name || '').trim();
@@ -464,7 +472,19 @@ export const App = () => {
     try {
       setError('');
       const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/agents');
-      setAgents(response.items || []);
+      const incomingAgents = response.items || [];
+      setAgents(incomingAgents);
+      const directOnline = incomingAgents.filter((a: Agent) => a.status === 'online').length;
+      const totals = response.totals || {};
+      const mergedTotals = {
+        direct: totals.directAgents ?? incomingAgents.length,
+        directOnline: totals.directOnline ?? directOnline,
+        managed: totals.managedCollectors ?? 0,
+        managedOnline: totals.managedOnline ?? 0,
+        total: totals.totalCollectors ?? ((totals.directAgents ?? incomingAgents.length) + (totals.managedCollectors ?? 0)),
+        online: totals.onlineCollectors ?? ((totals.directOnline ?? directOnline) + (totals.managedOnline ?? 0)),
+      };
+      setCollectorTotals(mergedTotals);
       // Update admin status from response (refresh on each fetch)
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 2);
@@ -715,7 +735,11 @@ export const App = () => {
     return groups;
   })() : null;
 
-  const onlineCount = agents.filter(a => a.status === 'online').length;
+  const derivedBridgeCount = bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0);
+  const derivedBridgeOnline = bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0);
+  const totalCollectorsDisplay = collectorTotals.total || (agents.length + derivedBridgeCount);
+  const totalOnlineDisplay = collectorTotals.online || ((collectorTotals.directOnline || agents.filter(a => a.status === 'online').length) + (collectorTotals.managedOnline || derivedBridgeOnline));
+  const totalOfflineDisplay = Math.max(totalCollectorsDisplay - totalOnlineDisplay, 0);
 
   return (
     <div style={{ 
@@ -992,13 +1016,13 @@ export const App = () => {
               }}>
                 <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#111827' }}>{agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)}</span> Total
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{totalCollectorsDisplay}</span> Total
                   </div>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#10B981' }}>{onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0)}</span> Online
+                    <span style={{ fontWeight: 600, color: '#10B981' }}>{totalOnlineDisplay}</span> Online
                   </div>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#EF4444' }}>{(agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0))}</span> Offline
+                    <span style={{ fontWeight: 600, color: '#EF4444' }}>{totalOfflineDisplay}</span> Offline
                   </div>
                   {agents.length > 0 && (selectedOrgId || currentOrgName) && (
                     <div style={{ 
@@ -6151,6 +6175,24 @@ service:
                 style={{ padding: '8px 20px', background: '#10B981', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}
               >
                 💾 Save Raw YAML Config
+              </button>
+              <button
+                onClick={() => {
+                  if (!rawYAMLConfig.trim()) {
+                    alert('Please enter a YAML configuration to apply.');
+                    return;
+                  }
+                  setGeneratedConfig(rawYAMLConfig.trim());
+                  try {
+                    parseConfigYAML(rawYAMLConfig);
+                    alert('✅ Applied raw YAML to the visual editor preview. Review the Generated Configuration section below.');
+                  } catch (err) {
+                    console.error('Failed to parse raw YAML during apply:', err);
+                  }
+                }}
+                style={{ padding: '8px 16px', background: '#2563EB', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                ⚙️ Apply Raw YAML
               </button>
               <button
                 onClick={() => setRawYAMLConfig('')}

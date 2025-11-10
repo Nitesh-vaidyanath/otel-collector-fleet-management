@@ -226,7 +226,29 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				json.Unmarshal([]byte(capabilitiesJSON.String), &a.Capabilities)
 			}
 			list = append(list, a)
+			if a.Status == "online" {
+				directOnline++
+			}
 		}
+
+		// Count collectors managed by bridges (discovered collectors)
+		var managedCollectors int64
+		var managedOnline sql.NullInt64
+		row := db.QueryRow(`
+		SELECT COUNT(*), SUM(CASE WHEN status='online' THEN 1 ELSE 0 END) 
+		FROM agents 
+		WHERE org_id=? 
+		  AND JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') IS NOT NULL 
+		  AND JSON_UNQUOTE(JSON_EXTRACT(labels_json, '$."bridge.instance_uid"')) != ''
+	`, orgID)
+		_ = row.Scan(&managedCollectors, &managedOnline)
+		managedOnlineCount := 0
+		if managedOnline.Valid {
+			managedOnlineCount = int(managedOnline.Int64)
+		}
+
+		totalCollectors := len(list) + int(managedCollectors)
+		totalOnline := directOnline + managedOnlineCount
 		// Get org name for display
 		responseOrgName := c.OrgName
 		if strings.TrimSpace(responseOrgName) == "" {
@@ -247,6 +269,14 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			"orgName":        responseOrgName,
 			"grafanaOrgId":   c.GrafanaOrgID,
 			"grafanaOrgName": c.GrafanaOrgName,
+			"totals": map[string]any{
+				"directAgents":      len(list),
+				"directOnline":      directOnline,
+				"managedCollectors": managedCollectors,
+				"managedOnline":     managedOnlineCount,
+				"totalCollectors":   totalCollectors,
+				"onlineCollectors":  totalOnline,
+			},
 		})
 	case http.MethodPost:
 		var in struct{ AgentUID, Name string }
