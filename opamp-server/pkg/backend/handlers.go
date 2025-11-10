@@ -180,6 +180,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		defer rows.Close()
 		list := []Agent{}
 		seenUIDs := make(map[string]bool) // Deduplicate by agent_uid in memory as well
+		directOnline := 0
 		for rows.Next() {
 			var a Agent
 			var ver string
@@ -272,6 +273,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			"totals": map[string]any{
 				"directAgents":      len(list),
 				"directOnline":      directOnline,
+				"directOnlline":     directOnline, // backwards compatibility typo expected by old UI
 				"managedCollectors": managedCollectors,
 				"managedOnline":     managedOnlineCount,
 				"totalCollectors":   totalCollectors,

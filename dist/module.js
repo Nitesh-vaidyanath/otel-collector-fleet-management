@@ -2921,7 +2921,40 @@ var App = () => {
     role: "",
     isAdmin: false
   });
+  const [collectorTotals, setCollectorTotals] = useState({
+    direct: 0,
+    directOnline: 0,
+    managed: 0,
+    managedOnline: 0,
+    total: 0,
+    online: 0
+  });
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
+  const displayUserName = useMemo(() => {
+    const raw = (userContext.name || "").trim();
+    if (!raw) {
+      return "unknown";
+    }
+    if (selectedOrgId && raw.endsWith(` ${selectedOrgId}`)) {
+      const sliced = raw.slice(0, raw.length - ` ${selectedOrgId}`.length).trim();
+      if (sliced) {
+        return sliced;
+      }
+    }
+    return raw;
+  }, [userContext.name, selectedOrgId]);
+  const displayOrgBadge = useMemo(() => {
+    if (currentOrgName && selectedOrgId) {
+      return `${currentOrgName} (#${selectedOrgId})`;
+    }
+    if (currentOrgName) {
+      return currentOrgName;
+    }
+    if (selectedOrgId) {
+      return `Org #${selectedOrgId}`;
+    }
+    return "Organization unknown";
+  }, [currentOrgName, selectedOrgId]);
   const handleDeleteBridge = async (bridgeUid, bridgeName) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?
 
@@ -2960,20 +2993,33 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     try {
       setError("");
       const response = await backendSrv.get("/api/plugins/otel-collector-agent-fleet-management/resources/agents");
-      setAgents(response.items || []);
+      const incomingAgents = response.items || [];
+      setAgents(incomingAgents);
+      const directOnline = incomingAgents.filter((a) => a.status === "online").length;
+      const totals = response.totals || {};
+      const mergedTotals = {
+        direct: totals.directAgents ?? incomingAgents.length,
+        directOnline: totals.directOnline ?? directOnline,
+        managed: totals.managedCollectors ?? 0,
+        managedOnline: totals.managedOnline ?? 0,
+        total: totals.totalCollectors ?? (totals.directAgents ?? incomingAgents.length) + (totals.managedCollectors ?? 0),
+        online: totals.onlineCollectors ?? (totals.directOnline ?? directOnline) + (totals.managedOnline ?? 0)
+      };
+      setCollectorTotals(mergedTotals);
       if (response.userRole) {
         setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === 2);
         setUserContext((prev) => ({
-          name: response.userRole.userName || prev.name,
+          name: response.userRole.userDisplayName || response.userRole.userName || prev.name,
           role: response.userRole.role || prev.role,
           isAdmin: response.userRole.isAdmin === true || response.userRole.role === "RoleAdmin" || response.userRole.role === "Admin" || response.userRole.role === 2
         }));
       }
-      if (typeof response.orgId === "number") {
-        setSelectedOrgId(response.orgId);
+      const effectiveOrgId = typeof response.grafanaOrgId === "number" ? response.grafanaOrgId : typeof response.orgId === "number" ? response.orgId : void 0;
+      if (typeof effectiveOrgId === "number") {
+        setSelectedOrgId(effectiveOrgId);
       }
-      if (response.orgName) {
-        setCurrentOrgName(response.orgName);
+      if (response.grafanaOrgName || response.orgName) {
+        setCurrentOrgName(response.grafanaOrgName || response.orgName);
       }
       await fetchBridges();
     } catch (err) {
@@ -2997,11 +3043,18 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     try {
       const response = await backendSrv.get("/user-role");
       if (response) {
+        const displayName = response.userDisplayName || response.userName || "unknown";
         setUserContext({
-          name: response.userName || "unknown",
+          name: displayName,
           role: response.role || "unknown",
           isAdmin: response.isAdmin === true || response.isAdmin === "true"
         });
+        if (typeof response.grafanaOrgId === "number") {
+          setSelectedOrgId(response.grafanaOrgId);
+        }
+        if (response.grafanaOrgName) {
+          setCurrentOrgName(response.grafanaOrgName);
+        }
         setIsAdmin(response.isAdmin === true || response.role === "RoleAdmin" || response.role === "Admin" || response.role === 2);
       }
     } catch (err) {
@@ -3163,7 +3216,11 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     });
     return groups;
   })() : null;
-  const onlineCount = agents.filter((a) => a.status === "online").length;
+  const derivedBridgeCount = bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0);
+  const derivedBridgeOnline = bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0);
+  const totalCollectorsDisplay = collectorTotals.total || agents.length + derivedBridgeCount;
+  const totalOnlineDisplay = collectorTotals.online || (collectorTotals.directOnline || agents.filter((a) => a.status === "online").length) + (collectorTotals.managedOnline || derivedBridgeOnline);
+  const totalOfflineDisplay = Math.max(totalCollectorsDisplay - totalOnlineDisplay, 0);
   return /* @__PURE__ */ React.createElement("div", { style: {
     minHeight: "100vh",
     background: "#F9FAFB",
@@ -3193,7 +3250,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     background: "#F3F4F6",
     borderRadius: 6,
     border: "1px solid #E5E7EB"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, /* @__PURE__ */ React.createElement("strong", null, "User:"), " ", userContext.name || "unknown"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: userContext.isAdmin ? "#059669" : "#B45309", fontWeight: 600 } }, userContext.role || (userContext.isAdmin ? "Admin" : "Viewer")))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginTop: 4 } }, "Manage your OpenTelemetry Collector agents \u2022 Viewing agents for selected organization")), /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, /* @__PURE__ */ React.createElement("strong", null, "User:"), " ", displayUserName), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: userContext.isAdmin ? "#059669" : "#B45309", fontWeight: 600 } }, userContext.role || (userContext.isAdmin ? "Admin" : "Viewer")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, /* @__PURE__ */ React.createElement("strong", null, "Org:"), " ", displayOrgBadge))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280", marginTop: 4 } }, "Manage your OpenTelemetry Collector agents \u2022 Viewing agents for selected organization")), /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: handleRefresh,
@@ -3367,7 +3424,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     color: "#6B7280",
     alignItems: "center",
     justifyContent: "space-between"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)), " Total"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#10B981" } }, onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0)), " Online"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#EF4444" } }, agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c) => c.status === "online").length || 0), 0))), " Offline"), agents.length > 0 && (selectedOrgId || currentOrgName) && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#111827" } }, totalCollectorsDisplay), " Total"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#10B981" } }, totalOnlineDisplay), " Online"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#EF4444" } }, totalOfflineDisplay), " Offline"), agents.length > 0 && (selectedOrgId || currentOrgName) && /* @__PURE__ */ React.createElement("div", { style: {
     marginLeft: 16,
     paddingLeft: 16,
     borderLeft: "1px solid #E5E7EB",
@@ -4958,6 +5015,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
   const [selectedConfigVersion, setSelectedConfigVersion] = useState(null);
   const [showDiff, setShowDiff] = useState(false);
   const [diffData, setDiffData] = useState(null);
+  const [showFullDiff, setShowFullDiff] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   const [approvalAction, setApprovalAction] = useState(null);
@@ -5067,7 +5125,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
       const syncStatusMap = {};
       for (const cfg of pushedConfigs) {
         try {
-          const syncResp = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/current-config`);
+          const syncResp = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/config-sync-status`);
           syncStatusMap[cfg.id] = syncResp;
         } catch (err) {
           console.log("Could not load sync status for config", cfg.id, err);
@@ -5096,7 +5154,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
     const checkSync = async () => {
       for (const cfg of pushedConfigs) {
         try {
-          const syncResp = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgentUID}/current-config`);
+          const syncResp = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgentUID}/config-sync-status`);
           setConfigSyncStatus((prev) => ({ ...prev, [cfg.id]: syncResp }));
         } catch (err) {
           console.log("Could not check sync status for config", cfg.id, err);
@@ -5257,6 +5315,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
       console.log("Loading diff for config:", configId, "against baseline, URL:", url);
       const response = await backendSrv.get(url);
       setDiffData(response);
+      setShowFullDiff(false);
       setShowDiff(true);
     } catch (err) {
       const errMsg = err.data?.message || err.message || err.statusText || "Unknown error";
@@ -6592,6 +6651,25 @@ service:
   ), /* @__PURE__ */ React.createElement(
     "button",
     {
+      onClick: () => {
+        if (!rawYAMLConfig.trim()) {
+          alert("Please enter a YAML configuration to apply.");
+          return;
+        }
+        setGeneratedConfig(rawYAMLConfig.trim());
+        try {
+          parseConfigYAML(rawYAMLConfig);
+          alert("\u2705 Applied raw YAML to the visual editor preview. Review the Generated Configuration section below.");
+        } catch (err) {
+          console.error("Failed to parse raw YAML during apply:", err);
+        }
+      },
+      style: { padding: "8px 16px", background: "#2563EB", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }
+    },
+    "\u2699\uFE0F Apply Raw YAML"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
       onClick: () => setRawYAMLConfig(""),
       style: { padding: "6px 16px", background: "#6B7280", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }
     },
@@ -7199,7 +7277,30 @@ ${statusInfo.join("\n")}
     width: 1e3,
     overflow: "auto",
     boxShadow: "0 4px 20px rgba(0,0,0,0.3)"
-  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0 } }, "Configuration Diff"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowDiff(false), style: { background: "none", border: "none", fontSize: 24, cursor: "pointer" } }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#DC2626" } }, "\u274C ", diffData.isUsingBaseline ? "Baseline" : `Previous Version (v${diffData.previousVersion || "N/A"})`, " (Removed/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
+  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0 } }, "Configuration Diff"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowDiff(false), style: { background: "none", border: "none", fontSize: 24, cursor: "pointer" } }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, "Viewing scope:\xA0", /* @__PURE__ */ React.createElement("strong", null, diffData.currentScope ? diffData.currentScope : "full document"), diffData.previousScope && diffData.previousScope !== diffData.currentScope && /* @__PURE__ */ React.createElement(React.Fragment, null, " (previous: ", diffData.previousScope, ")")), diffData.fullCurrent && /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      onClick: () => setShowFullDiff((prev) => !prev),
+      style: {
+        padding: "6px 12px",
+        background: showFullDiff ? "#1F2937" : "#2563EB",
+        color: "white",
+        border: "none",
+        borderRadius: 4,
+        cursor: "pointer",
+        fontSize: 12,
+        fontWeight: 500
+      }
+    },
+    showFullDiff ? "Hide Full CR YAML" : "Show Full CR YAML"
+  )), showFullDiff && diffData.fullCurrent && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Full Current CRD YAML"), /* @__PURE__ */ React.createElement("pre", { style: {
+    maxHeight: 200,
+    overflow: "auto",
+    background: "#F3F4F6",
+    padding: 12,
+    borderRadius: 4,
+    fontSize: 11
+  } }, diffData.fullCurrent)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#DC2626" } }, "\u274C ", diffData.isUsingBaseline ? "Baseline" : `Previous Version (v${diffData.previousVersion || "N/A"})`, " (Removed/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
     width: "100%",
     minHeight: 400,
     maxHeight: 500,
