@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { getBackendSrv, type FetchRequest } from '@grafana/runtime';
+import { getBackendSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
 
@@ -448,7 +448,129 @@ const CapabilityBadges = ({
   );
 };
 
-type FetchOptions = Omit<FetchRequest, 'url' | 'method'>;
+const builtinReceiverTemplates = [
+  {
+    value: 'otlp',
+    label: 'OTLP (gRPC + HTTP)',
+    description: 'Default OpenTelemetry receiver with gRPC (4317) and HTTP (4318) endpoints.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      protocols: {
+        grpc: { endpoint: '0.0.0.0:4317' },
+        http: { endpoint: '0.0.0.0:4318' },
+      },
+    },
+  },
+  {
+    value: 'prometheus',
+    label: 'Prometheus Scraper',
+    description: 'Scrape metrics from Prometheus targets on port 9090 every 30s.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      config: {
+        scrape_configs: [
+          {
+            job_name: 'otel-collector',
+            scrape_interval: '30s',
+            static_configs: [{ targets: ['0.0.0.0:9090'] }],
+          },
+        ],
+      },
+    },
+  },
+];
+
+const builtinProcessorTemplates = [
+  {
+    value: 'batch',
+    label: 'Batch',
+    description: 'Recommended batch processor with sane defaults.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      send_batch_size: 8192,
+      timeout: '10s',
+    },
+  },
+  {
+    value: 'memory_limiter',
+    label: 'Memory Limiter',
+    description: 'Prevents the collector from running out of memory.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      check_interval: '2s',
+      limit_percentage: 75,
+      spike_limit_percentage: 15,
+    },
+  },
+];
+
+const builtinExporterTemplates = [
+  {
+    value: 'otlp',
+    label: 'OTLP (HTTP)',
+    description: 'Send data to an upstream OTLP endpoint over HTTP.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      endpoint: 'http://localhost:4318',
+    },
+  },
+  {
+    value: 'debug',
+    label: 'Debug (logging)',
+    description: 'Log telemetry payloads for troubleshooting.',
+    isSystem: true,
+    isCustom: false,
+    config: {
+      verbosity: 'basic',
+    },
+  },
+];
+
+const customComponentOption = {
+  value: 'custom',
+  label: 'Custom (YAML)',
+  config: {},
+  isSystem: false,
+  isCustom: true,
+};
+
+const mergeComponentTypeLists = (
+  fetched: any[],
+  fallback: any[]
+) => {
+  const merged = new Map<string, any>();
+
+  [...(fetched || []), ...(fallback || [])].forEach((item: any) => {
+    if (!item) {
+      return;
+    }
+    const key = item.value || item.type;
+    if (!key) {
+      return;
+    }
+    if (!merged.has(key)) {
+      merged.set(key, {
+        ...item,
+        value: key,
+        label: item.label || item.displayLabel || key,
+        config: item.config || {},
+      });
+    }
+  });
+
+  const result = Array.from(merged.values());
+  if (!result.some((t) => t.value === 'custom')) {
+    result.push({ ...customComponentOption });
+  }
+  return result;
+};
+
+type FetchOptions = Record<string, any>;
 
 type OpampSettingsResponse = {
   opampServerURL?: string | null;
@@ -483,19 +605,19 @@ const normalizeRequestHeaders = (incoming?: HeadersInit | Record<string, string>
   return { ...(incoming as Record<string, string>) };
 };
 
-const fetchWithAuth = async <T = any>({ responseType, headers: requestHeaders, ...rest }: FetchRequest): Promise<T> => {
+const fetchWithAuth = async <T = any>({ responseType, headers: requestHeaders, ...rest }: Record<string, any>): Promise<T> => {
   const headers = normalizeRequestHeaders(requestHeaders);
   if (tenantHeaderValue && !headers['X-Scoper-Tenant']) {
     headers['X-Scoper-Tenant'] = tenantHeaderValue;
   }
 
-  const response = await lastValueFrom(
-    rawBackendSrv.fetch<T>({
-      responseType: (responseType as any) ?? 'json',
-      ...rest,
-      headers,
-    })
-  );
+  const requestPayload = {
+    responseType: (responseType as any) ?? 'json',
+    ...rest,
+    headers,
+  } as any;
+
+  const response = await lastValueFrom(rawBackendSrv.fetch<T>(requestPayload));
 
   if (response.status >= 200 && response.status < 300) {
     return response.data;
@@ -517,7 +639,7 @@ const backendSrv = {
     fetchWithAuth<T>({ ...options, url: normalizeUrl(url), method: 'DELETE' }),
   patch: <T = any>(url: string, data?: any, options: FetchOptions = {}) =>
     fetchWithAuth<T>({ ...options, url: normalizeUrl(url), data, method: 'PATCH' }),
-  request: <T = any>(options: FetchRequest) =>
+  request: <T = any>(options: Record<string, any>) =>
     fetchWithAuth<T>({
       ...options,
       url: normalizeUrl(options.url ?? ''),
@@ -2311,10 +2433,11 @@ export const App = () => {
                       'reports_connection_settings_status'
                     ];
                     
-                    const reportedCaps = new Set(Object.keys(selectedAgent.capabilities));
+                    const capabilitySource = selectedAgent?.capabilities || {};
+                    const reportedCaps = new Set(Object.keys(capabilitySource));
                     const missingCaps = allCapabilities.filter(cap => !reportedCaps.has(cap));
                     const unsupportedCaps = allCapabilities.filter(cap => 
-                      reportedCaps.has(cap) && selectedAgent.capabilities[cap] === false
+                      reportedCaps.has(cap) && capabilitySource[cap] === false
                     );
                     
                     if (missingCaps.length === 0 && unsupportedCaps.length === 0) {
@@ -5376,6 +5499,16 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         }
       }
     });
+    // Check if selected agent is a DaemonSet collector
+    const selectedAgent = agents.find((a: Agent) => a.agentUid === selectedAgentUID);
+    const isDaemonSet = selectedAgent?.labels?.['k8s.crd_name']?.toLowerCase().includes('daemonset') || 
+                        selectedAgent?.name?.toLowerCase().includes('daemonset');
+    
+    // For NEW collectors: Include CRD settings if name AND namespace provided
+    // For EXISTING collectors: Include CRD settings if it's Deployment or StatefulSet (DaemonSet only sends spec.config)
+    const isNewCollector = Boolean(crdSettings.name && crdSettings.namespace);
+    const canModifyDeploymentSettings = Boolean(!isDaemonSet && selectedAgentUID); // Deployment/StatefulSet can be modified
+
     const crdValidationErrors = validateCRDSettings({
       includeDeploymentSettings,
       crdSettings,
@@ -5388,16 +5521,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       alert('Invalid configuration:\n\n' + invalidComponents.join('\n') + '\n\nPlease ensure all components have a valid type.');
       return;
     }
-
-    // Check if selected agent is a DaemonSet collector
-    const selectedAgent = agents.find((a: Agent) => a.agentUid === selectedAgentUID);
-    const isDaemonSet = selectedAgent?.labels?.['k8s.crd_name']?.toLowerCase().includes('daemonset') || 
-                        selectedAgent?.name?.toLowerCase().includes('daemonset');
-    
-    // For NEW collectors: Include CRD settings if name AND namespace provided
-    // For EXISTING collectors: Include CRD settings if it's Deployment or StatefulSet (DaemonSet only sends spec.config)
-    const isNewCollector = crdSettings.name && crdSettings.namespace;
-    const canModifyDeploymentSettings = !isDaemonSet && selectedAgentUID; // Deployment/StatefulSet can be modified
     
     try {
       const response = await backendSrv.post(
@@ -5428,7 +5551,11 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
           } : undefined
         }
       );
-      setGeneratedConfig(response.config || '');
+      const generated = typeof response.config === 'string' ? response.config : '';
+      if (!generated.trim()) {
+        alert('The config generator did not return any YAML. Please verify that you have at least one receiver and exporter configured.');
+      }
+      setGeneratedConfig(generated);
     } catch (err: any) {
       alert('Failed to generate config: ' + (err.message || 'Unknown error'));
     }
@@ -5452,11 +5579,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         isCustom: t.isCustom,
         id: t.id,
       }));
-      if (!receiversList.some((t: any) => t.value === 'custom')) {
-        receiversList.push({ value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true });
-      }
-      setReceiverTypes(receiversList);
-
       const processorsList = (processorsRes.items || []).map((t: any) => ({
         value: t.type,
         label: t.label,
@@ -5466,11 +5588,6 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         isCustom: t.isCustom,
         id: t.id,
       }));
-      if (!processorsList.some((t: any) => t.value === 'custom')) {
-        processorsList.push({ value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true });
-      }
-      setProcessorTypes(processorsList);
-
       const exportersList = (exportersRes.items || []).map((t: any) => ({
         value: t.type,
         label: t.label,
@@ -5480,10 +5597,10 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
         isCustom: t.isCustom,
         id: t.id,
       }));
-      if (!exportersList.some((t: any) => t.value === 'custom')) {
-        exportersList.push({ value: 'custom', label: 'Custom (YAML)', config: {}, isSystem: false, isCustom: true });
-      }
-      setExporterTypes(exportersList);
+
+      setReceiverTypes(mergeComponentTypeLists(receiversList, builtinReceiverTemplates));
+      setProcessorTypes(mergeComponentTypeLists(processorsList, builtinProcessorTemplates));
+      setExporterTypes(mergeComponentTypeLists(exportersList, builtinExporterTemplates));
     } catch (err: any) {
       console.error('Failed to load component types:', err);
     }
