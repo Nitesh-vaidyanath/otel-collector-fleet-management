@@ -397,7 +397,40 @@ export const App = () => {
     role: '',
     isAdmin: false,
   });
+  const [collectorTotals, setCollectorTotals] = useState({
+    direct: 0,
+    directOnline: 0,
+    managed: 0,
+    managedOnline: 0,
+    total: 0,
+    online: 0,
+  });
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
+  const displayUserName = useMemo(() => {
+    const raw = (userContext.name || '').trim();
+    if (!raw) {
+      return 'unknown';
+    }
+    if (selectedOrgId && raw.endsWith(` ${selectedOrgId}`)) {
+      const sliced = raw.slice(0, raw.length - (` ${selectedOrgId}`).length).trim();
+      if (sliced) {
+        return sliced;
+      }
+    }
+    return raw;
+  }, [userContext.name, selectedOrgId]);
+  const displayOrgBadge = useMemo(() => {
+    if (currentOrgName && selectedOrgId) {
+      return `${currentOrgName} (#${selectedOrgId})`;
+    }
+    if (currentOrgName) {
+      return currentOrgName;
+    }
+    if (selectedOrgId) {
+      return `Org #${selectedOrgId}`;
+    }
+    return 'Organization unknown';
+  }, [currentOrgName, selectedOrgId]);
 
   const handleDeleteBridge = async (bridgeUid: string, bridgeName: string) => {
     if (!window.confirm(`Are you sure you want to delete bridge "${bridgeName}"?\n\nThis will remove the bridge from the UI. Collectors managed by this bridge will be cleaned up automatically if they remain offline for 24 hours.`)) {
@@ -439,21 +472,53 @@ export const App = () => {
     try {
       setError('');
       const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/agents');
-      setAgents(response.items || []);
+      const incomingAgents = response.items || [];
+      setAgents(incomingAgents);
+      const directOnline = incomingAgents.filter((a: Agent) => a.status === 'online').length;
+      const totals = response.totals || {};
+      const mergedTotals = {
+        direct: totals.directAgents ?? incomingAgents.length,
+        directOnline: totals.directOnline ?? directOnline,
+        managed: totals.managedCollectors ?? 0,
+        managedOnline: totals.managedOnline ?? 0,
+        total: totals.totalCollectors ?? ((totals.directAgents ?? incomingAgents.length) + (totals.managedCollectors ?? 0)),
+        online: totals.onlineCollectors ?? ((totals.directOnline ?? directOnline) + (totals.managedOnline ?? 0)),
+      };
+      setCollectorTotals(mergedTotals);
       // Update admin status from response (refresh on each fetch)
       if (response.userRole) {
-        setIsAdmin(response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 2);
+        const rawRole = response.userRole.role;
+        const normalizedRole = (() => {
+          if (typeof rawRole === 'string') {
+            const lower = rawRole.toLowerCase();
+            if (lower.includes('admin')) return 'Admin';
+            if (lower.includes('editor')) return 'Editor';
+            if (lower.includes('viewer')) return 'Viewer';
+            return rawRole;
+          }
+          if (typeof rawRole === 'number') {
+            if (rawRole === 2) return 'Admin';
+            if (rawRole === 1) return 'Editor';
+            return 'Viewer';
+          }
+          return response.userRole.isAdmin ? 'Admin' : 'Viewer';
+        })();
+        const inferredIsAdmin = response.userRole.isAdmin === true || normalizedRole === 'Admin';
+        setIsAdmin(inferredIsAdmin);
         setUserContext(prev => ({
-          name: response.userRole.userName || prev.name,
-          role: response.userRole.role || prev.role,
-          isAdmin: response.userRole.isAdmin === true || response.userRole.role === 'RoleAdmin' || response.userRole.role === 'Admin' || response.userRole.role === 2,
+          name: response.userRole.userDisplayName || response.userRole.userName || prev.name,
+          role: normalizedRole || prev.role,
+          isAdmin: inferredIsAdmin,
         }));
       }
-      if (typeof response.orgId === 'number') {
-        setSelectedOrgId(response.orgId);
+      const effectiveOrgId = typeof response.grafanaOrgId === 'number'
+        ? response.grafanaOrgId
+        : (typeof response.orgId === 'number' ? response.orgId : undefined);
+      if (typeof effectiveOrgId === 'number') {
+        setSelectedOrgId(effectiveOrgId);
       }
-      if (response.orgName) {
-        setCurrentOrgName(response.orgName);
+      if (response.grafanaOrgName || response.orgName) {
+        setCurrentOrgName(response.grafanaOrgName || response.orgName);
       }
       // Also fetch bridges for hierarchical view
       await fetchBridges();
@@ -480,12 +545,35 @@ export const App = () => {
     try {
       const response = await backendSrv.get('/user-role');
       if (response) {
+        const displayName = response.userDisplayName || response.userName || 'unknown';
+        const rawRole = response.role;
+        const normalizedRole = (() => {
+          if (typeof rawRole === 'string') {
+            const lower = rawRole.toLowerCase();
+            if (lower.includes('admin')) return 'Admin';
+            if (lower.includes('editor')) return 'Editor';
+            if (lower.includes('viewer')) return 'Viewer';
+            return rawRole;
+          }
+          if (typeof rawRole === 'number') {
+            if (rawRole === 2) return 'Admin';
+            if (rawRole === 1) return 'Editor';
+            return 'Viewer';
+          }
+          return response.isAdmin ? 'Admin' : 'Viewer';
+        })();
         setUserContext({
-          name: response.userName || 'unknown',
-          role: response.role || 'unknown',
-          isAdmin: response.isAdmin === true || response.isAdmin === 'true',
+          name: displayName,
+          role: normalizedRole,
+          isAdmin: response.isAdmin === true || response.isAdmin === 'true' || normalizedRole === 'Admin',
         });
-        setIsAdmin(response.isAdmin === true || response.role === 'RoleAdmin' || response.role === 'Admin' || response.role === 2);
+        if (typeof response.grafanaOrgId === 'number') {
+          setSelectedOrgId(response.grafanaOrgId);
+        }
+        if (response.grafanaOrgName) {
+          setCurrentOrgName(response.grafanaOrgName);
+        }
+        setIsAdmin(response.isAdmin === true || normalizedRole === 'Admin');
       }
     } catch (err) {
       console.error('Failed to load user context:', err);
@@ -680,7 +768,11 @@ export const App = () => {
     return groups;
   })() : null;
 
-  const onlineCount = agents.filter(a => a.status === 'online').length;
+  const derivedBridgeCount = bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0);
+  const derivedBridgeOnline = bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0);
+  const totalCollectorsDisplay = collectorTotals.total || (agents.length + derivedBridgeCount);
+  const totalOnlineDisplay = collectorTotals.online || ((collectorTotals.directOnline || agents.filter(a => a.status === 'online').length) + (collectorTotals.managedOnline || derivedBridgeOnline));
+  const totalOfflineDisplay = Math.max(totalCollectorsDisplay - totalOnlineDisplay, 0);
 
   return (
     <div style={{ 
@@ -730,10 +822,13 @@ export const App = () => {
               border: '1px solid #E5E7EB'
             }}>
               <div style={{ fontSize: 12, color: '#4B5563' }}>
-                <strong>User:</strong> {userContext.name || 'unknown'}
+                <strong>User:</strong> {displayUserName}
               </div>
               <div style={{ fontSize: 12, color: userContext.isAdmin ? '#059669' : '#B45309', fontWeight: 600 }}>
                 {userContext.role || (userContext.isAdmin ? 'Admin' : 'Viewer')}
+              </div>
+              <div style={{ fontSize: 12, color: '#4B5563' }}>
+                <strong>Org:</strong> {displayOrgBadge}
               </div>
             </div>
           </div>
@@ -806,7 +901,7 @@ export const App = () => {
                 fontWeight: 600,
                 marginLeft: 4
               }}>
-                {agents.length}
+                {totalCollectorsDisplay}
               </span>
             )}
           </button>
@@ -954,13 +1049,13 @@ export const App = () => {
               }}>
                 <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#111827' }}>{agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)}</span> Total
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{totalCollectorsDisplay}</span> Total
                   </div>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#10B981' }}>{onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0)}</span> Online
+                    <span style={{ fontWeight: 600, color: '#10B981' }}>{totalOnlineDisplay}</span> Online
                   </div>
                   <div>
-                    <span style={{ fontWeight: 600, color: '#EF4444' }}>{(agents.length + bridges.reduce((sum, b) => sum + (b.collectors?.length || 0), 0)) - (onlineCount + bridges.reduce((sum, b) => sum + (b.collectors?.filter((c: any) => c.status === 'online').length || 0), 0))}</span> Offline
+                    <span style={{ fontWeight: 600, color: '#EF4444' }}>{totalOfflineDisplay}</span> Offline
                   </div>
                   {agents.length > 0 && (selectedOrgId || currentOrgName) && (
                     <div style={{ 
@@ -3882,6 +3977,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
   const [selectedConfigVersion, setSelectedConfigVersion] = useState<any | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const [diffData, setDiffData] = useState<any>(null);
+  const [showFullDiff, setShowFullDiff] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   const [approvalAction, setApprovalAction] = useState<'approve' | 'reject' | null>(null);
@@ -3900,6 +3996,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
   // Raw YAML mode
   const [useRawYAML, setUseRawYAML] = useState(false);
   const [rawYAMLConfig, setRawYAMLConfig] = useState('');
+  const [includeDeploymentSettings, setIncludeDeploymentSettings] = useState(false);
 
   // Signal selection (logs, metrics, traces)
   const [selectedSignals, setSelectedSignals] = useState<{ logs: boolean; metrics: boolean; traces: boolean }>({
@@ -3930,6 +4027,10 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     },
     advancedYaml: ''  // For custom fields: targetAllocator, volumes, serviceAccount, etc.
   });
+
+  useEffect(() => {
+    setIncludeDeploymentSettings(false);
+  }, [selectedAgentUID]);
 
   useEffect(() => {
     loadTemplates();
@@ -4024,7 +4125,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       const syncStatusMap: Record<number, any> = {};
       for (const cfg of pushedConfigs) {
         try {
-          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/current-config`);
+          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/config-sync-status`);
           syncStatusMap[cfg.id] = syncResp;
         } catch (err) {
           console.log('Could not load sync status for config', cfg.id, err);
@@ -4059,7 +4160,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     const checkSync = async () => {
       for (const cfg of pushedConfigs) {
         try {
-          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgentUID}/current-config`);
+          const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgentUID}/config-sync-status`);
           setConfigSyncStatus((prev) => ({ ...prev, [cfg.id]: syncResp }));
         } catch (err) {
           console.log('Could not check sync status for config', cfg.id, err);
@@ -4258,6 +4359,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       console.log('Loading diff for config:', configId, 'against baseline, URL:', url);
       const response = await backendSrv.get(url);
       setDiffData(response);
+      setShowFullDiff(false);
       setShowDiff(true);
     } catch (err: any) {
       const errMsg = err.data?.message || err.message || err.statusText || 'Unknown error';
@@ -4595,11 +4697,11 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
               .filter(([_, selected]) => selected)
               .map(([signal, _]) => signal)
           },
-          // Include CRD settings for:
+          // Include CRD settings only when the user opts-in AND it's permitted for this collector
           // 1. NEW collectors (name + namespace provided)
           // 2. EXISTING Deployment/StatefulSet collectors (deployment settings can be modified)
           // Do NOT include for DaemonSet collectors (only spec.config is updated)
-          crdSettings: (isNewCollector || canModifyDeploymentSettings) ? {
+          crdSettings: (includeDeploymentSettings && (isNewCollector || canModifyDeploymentSettings)) ? {
             name: crdSettings.name,
             namespace: crdSettings.namespace,
             mode: crdSettings.mode,
@@ -5252,8 +5354,17 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
           const isDaemonSet = selectedAgent?.labels?.['k8s.crd_name']?.toLowerCase().includes('daemonset') || 
                               selectedAgent?.name?.toLowerCase().includes('daemonset');
           
+          // If editing an existing collector (selectedAgentUID set), suppress deployment controls entirely.
+          if (selectedAgentUID) {
+            return (
+              <div style={{ marginBottom: 24, padding: 16, background: '#F3F4F6', borderRadius: 6, border: '1px solid #D1D5DB', color: '#4B5563', fontSize: 12 }}>
+                ℹ️ Deployment (CRD) settings are managed directly in Kubernetes. This UI only manages <code>spec.config</code> pushed over OpAMP. To change replicas, resources, images, or autoscaler settings, update the `OpenTelemetryCollector` CRD manually.
+              </div>
+            );
+          }
+          
           // Hide deployment settings for DaemonSet collectors (they don't support remote config)
-          if (isDaemonSet && selectedAgentUID) {
+          if (isDaemonSet) {
             return (
               <div style={{ marginBottom: 24, padding: 16, background: '#FEE2E2', borderRadius: 6, border: '1px solid #FCA5A5' }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#991B1B', marginBottom: 8 }}>
@@ -6111,6 +6222,24 @@ service:
                 style={{ padding: '8px 20px', background: '#10B981', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500 }}
               >
                 💾 Save Raw YAML Config
+              </button>
+              <button
+                onClick={() => {
+                  if (!rawYAMLConfig.trim()) {
+                    alert('Please enter a YAML configuration to apply.');
+                    return;
+                  }
+                  setGeneratedConfig(rawYAMLConfig.trim());
+                  try {
+                    parseConfigYAML(rawYAMLConfig);
+                    alert('✅ Applied raw YAML to the visual editor preview. Review the Generated Configuration section below.');
+                  } catch (err) {
+                    console.error('Failed to parse raw YAML during apply:', err);
+                  }
+                }}
+                style={{ padding: '8px 16px', background: '#2563EB', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+              >
+                ⚙️ Apply Raw YAML
               </button>
               <button
                 onClick={() => setRawYAMLConfig('')}
@@ -6990,6 +7119,47 @@ service:
                 <h3 style={{ margin: 0 }}>Configuration Diff</h3>
                 <button onClick={() => setShowDiff(false)} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer' }}>×</button>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: '#4B5563' }}>
+                  Viewing scope:&nbsp;
+                  <strong>{diffData.currentScope ? diffData.currentScope : 'full document'}</strong>
+                  {diffData.previousScope && diffData.previousScope !== diffData.currentScope && (
+                    <> (previous: {diffData.previousScope})</>
+                  )}
+                </div>
+                {diffData.fullCurrent && (
+                  <button
+                    onClick={() => setShowFullDiff((prev) => !prev)}
+                    style={{
+                      padding: '6px 12px',
+                      background: showFullDiff ? '#1F2937' : '#2563EB',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 500
+                    }}
+                  >
+                    {showFullDiff ? 'Hide Full CR YAML' : 'Show Full CR YAML'}
+                  </button>
+                )}
+              </div>
+              {showFullDiff && diffData.fullCurrent && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Full Current CRD YAML</div>
+                  <pre style={{
+                    maxHeight: 200,
+                    overflow: 'auto',
+                    background: '#F3F4F6',
+                    padding: 12,
+                    borderRadius: 4,
+                    fontSize: 11
+                  }}>
+{diffData.fullCurrent}
+                  </pre>
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                 <div>
                   <div style={{ fontWeight: 600, marginBottom: 8, color: '#DC2626' }}>

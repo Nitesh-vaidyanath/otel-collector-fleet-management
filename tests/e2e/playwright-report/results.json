@@ -106,7 +106,7 @@
                   "workerIndex": 0,
                   "parallelIndex": 0,
                   "status": "failed",
-                  "duration": 3,
+                  "duration": 2,
                   "error": {
                     "message": "Error: Error reading storage state from /Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json:\nENOENT: no such file or directory, open '/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json'",
                     "stack": "Error: Error reading storage state from /Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json:\nENOENT: no such file or directory, open '/Users/NiteshBV/otel-collector-fleet-management/tests/e2e/playwright/.auth/user.json'"
@@ -119,7 +119,7 @@
                   "stdout": [],
                   "stderr": [],
                   "retry": 0,
-                  "startTime": "2025-11-09T17:28:28.204Z",
+                  "startTime": "2025-11-10T04:22:12.114Z",
                   "annotations": [],
                   "attachments": []
                 }
@@ -129,7 +129,7 @@
           ],
           "id": "17e3fe6f4d9d8bd79c6b-60f085b113a677673906",
           "file": "auth.setup.ts",
-          "line": 5,
+          "line": 7,
           "column": 6
         }
       ]
@@ -702,8 +702,8 @@
   ],
   "errors": [],
   "stats": {
-    "startTime": "2025-11-09T17:28:27.772Z",
-    "duration": 749.4870000000001,
+    "startTime": "2025-11-10T04:22:11.723Z",
+    "duration": 694.599,
     "expected": 0,
     "skipped": 27,
     "unexpected": 1,

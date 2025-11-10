@@ -67,11 +67,15 @@ func settingsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 
 func userRoleHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	jsonOK(w, map[string]any{
-		"role":     c.Role,
-		"isAdmin":  c.IsAdmin,
-		"userID":   c.UserID,
-		"userName": c.UserName,
-		"orgID":    c.OrgID,
+		"role":            c.Role,
+		"isAdmin":         c.IsAdmin,
+		"userID":          c.UserID,
+		"userName":        c.UserName,
+		"userDisplayName": c.UserDisplayName,
+		"orgID":           c.OrgID,
+		"orgName":         c.OrgName,
+		"grafanaOrgID":    c.GrafanaOrgID,
+		"grafanaOrgName":  c.GrafanaOrgName,
 	})
 }
 
@@ -176,6 +180,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		defer rows.Close()
 		list := []Agent{}
 		seenUIDs := make(map[string]bool) // Deduplicate by agent_uid in memory as well
+		directOnline := 0
 		for rows.Next() {
 			var a Agent
 			var ver string
@@ -222,7 +227,29 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				json.Unmarshal([]byte(capabilitiesJSON.String), &a.Capabilities)
 			}
 			list = append(list, a)
+			if a.Status == "online" {
+				directOnline++
+			}
 		}
+
+		// Count collectors managed by bridges (discovered collectors)
+		var managedCollectors int64
+		var managedOnline sql.NullInt64
+		row := db.QueryRow(`
+		SELECT COUNT(*), SUM(CASE WHEN status='online' THEN 1 ELSE 0 END) 
+		FROM agents 
+		WHERE org_id=? 
+		  AND JSON_EXTRACT(labels_json, '$."bridge.instance_uid"') IS NOT NULL 
+		  AND JSON_UNQUOTE(JSON_EXTRACT(labels_json, '$."bridge.instance_uid"')) != ''
+	`, orgID)
+		_ = row.Scan(&managedCollectors, &managedOnline)
+		managedOnlineCount := 0
+		if managedOnline.Valid {
+			managedOnlineCount = int(managedOnline.Int64)
+		}
+
+		totalCollectors := len(list) + int(managedCollectors)
+		totalOnline := directOnline + managedOnlineCount
 		// Get org name for display
 		responseOrgName := c.OrgName
 		if strings.TrimSpace(responseOrgName) == "" {
@@ -231,11 +258,27 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		jsonOK(w, map[string]any{
 			"items": list,
 			"userRole": map[string]any{
-				"role":    c.Role,
-				"isAdmin": c.IsAdmin,
+				"role":            c.Role,
+				"isAdmin":         c.IsAdmin,
+				"userID":          c.UserID,
+				"userName":        c.UserName,
+				"userDisplayName": c.UserDisplayName,
+				"grafanaOrgID":    c.GrafanaOrgID,
+				"grafanaOrgName":  c.GrafanaOrgName,
 			},
-			"orgID":   orgID,
-			"orgName": responseOrgName,
+			"orgID":          orgID,
+			"orgName":        responseOrgName,
+			"grafanaOrgId":   c.GrafanaOrgID,
+			"grafanaOrgName": c.GrafanaOrgName,
+			"totals": map[string]any{
+				"directAgents":      len(list),
+				"directOnline":      directOnline,
+				"directOnlline":     directOnline, // backwards compatibility typo expected by old UI
+				"managedCollectors": managedCollectors,
+				"managedOnline":     managedOnlineCount,
+				"totalCollectors":   totalCollectors,
+				"onlineCollectors":  totalOnline,
+			},
 		})
 	case http.MethodPost:
 		var in struct{ AgentUID, Name string }
@@ -377,6 +420,9 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 			// If capabilities_json is NULL or empty, initialize empty map
 			bridge.Capabilities = make(map[string]interface{})
 		}
+		if bridge.Labels == nil {
+			bridge.Labels = make(map[string]string)
+		}
 
 		// Get collectors managed by this bridge
 		// Use bracket notation for JSON keys with dots: $."key.with.dots"
@@ -437,6 +483,42 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 		}
 		collectorRows.Close()
 
+		// Fallbacks for bridge metadata if bridge record lacks version or location labels
+		if len(collectors) > 0 {
+			first := collectors[0]
+			if bridge.Version == nil || *bridge.Version == "" || *bridge.Version == "unknown" {
+				if first.Version != nil && *first.Version != "" && *first.Version != "unknown" {
+					v := *first.Version
+					bridge.Version = &v
+				} else if first.Labels != nil {
+					if v := first.Labels["collector.version"]; v != "" {
+						vCopy := v
+						bridge.Version = &vCopy
+					} else if v := first.Labels["otelcol.version"]; v != "" {
+						vCopy := v
+						bridge.Version = &vCopy
+					}
+				}
+			}
+			if bridge.Namespace == "" && first.Labels != nil {
+				if ns := first.Labels["k8s.namespace"]; ns != "" {
+					bridge.Namespace = ns
+				}
+			}
+			if bridge.Cluster == "" && first.Labels != nil {
+				if cluster := first.Labels["k8s.cluster"]; cluster != "" {
+					bridge.Cluster = cluster
+				}
+			}
+		}
+
+		if bridge.Namespace != "" {
+			bridge.Labels["k8s.namespace"] = bridge.Namespace
+		}
+		if bridge.Cluster != "" {
+			bridge.Labels["k8s.cluster"] = bridge.Cluster
+		}
+
 		log.Printf("DEBUG: Bridge %s (%s) has %d collectors (scanned %d rows)", bridge.AgentUID[:8], bridge.Name, len(collectors), rowCount)
 
 		bridge.Collectors = collectors
@@ -451,11 +533,18 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 	jsonOK(w, map[string]any{
 		"bridges": bridges,
 		"userRole": map[string]any{
-			"role":    c.Role,
-			"isAdmin": c.IsAdmin,
+			"role":            c.Role,
+			"isAdmin":         c.IsAdmin,
+			"userID":          c.UserID,
+			"userName":        c.UserName,
+			"userDisplayName": c.UserDisplayName,
+			"grafanaOrgID":    c.GrafanaOrgID,
+			"grafanaOrgName":  c.GrafanaOrgName,
 		},
-		"orgID":   orgID,
-		"orgName": orgName,
+		"orgID":          orgID,
+		"orgName":        orgName,
+		"grafanaOrgId":   c.GrafanaOrgID,
+		"grafanaOrgName": c.GrafanaOrgName,
 	})
 }
 
@@ -1548,14 +1637,80 @@ func configDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		config2Value = config2.String
 	}
 
-	// Simple diff calculation (line-by-line)
-	diff := calculateDiff(config1Value, config2Value)
+	currentNormalized, currentScope := normalizeConfigForDiff(config1Value)
+	previousNormalized, previousScope := normalizeConfigForDiff(config2Value)
+
+	// Simple diff calculation (line-by-line) using normalized scope
+	diff := calculateDiff(currentNormalized, previousNormalized)
 
 	jsonOK(w, map[string]any{
-		"current":  config1Value,
-		"previous": config2Value,
-		"diff":     diff,
+		"current":       currentNormalized,
+		"previous":      previousNormalized,
+		"diff":          diff,
+		"currentScope":  currentScope,
+		"previousScope": previousScope,
+		"fullCurrent":   config1Value,
+		"fullPrevious":  config2Value,
 	})
+}
+
+func normalizeConfigForDiff(configYAML string) (string, string) {
+	trimmed := strings.TrimSpace(configYAML)
+	if trimmed == "" {
+		return trimmed, "empty"
+	}
+
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return trimmed, "raw"
+	}
+
+	// Prefer spec.config for CRDs
+	if spec, ok := parsed["spec"].(map[string]interface{}); ok {
+		if cfg, ok := spec["config"]; ok {
+			if normalized, ok := marshalConfigSectionForDiff(cfg); ok {
+				return normalized, "spec.config"
+			}
+		}
+	}
+
+	// Some CRDs embed config at top-level "config"
+	if cfg, ok := parsed["config"]; ok {
+		if normalized, ok := marshalConfigSectionForDiff(cfg); ok {
+			return normalized, "config"
+		}
+	}
+
+	// If YAML already looks like collector config (receivers/processors/etc)
+	if _, hasReceivers := parsed["receivers"]; hasReceivers || parsed["processors"] != nil || parsed["exporters"] != nil || parsed["service"] != nil {
+		if bytes, err := yaml.Marshal(parsed); err == nil {
+			return string(bytes), "pipeline"
+		}
+	}
+
+	return trimmed, "raw"
+}
+
+func marshalConfigSectionForDiff(section interface{}) (string, bool) {
+	switch val := section.(type) {
+	case map[string]interface{}:
+		if bytes, err := yaml.Marshal(val); err == nil {
+			return string(bytes), true
+		}
+	case []interface{}:
+		if bytes, err := yaml.Marshal(val); err == nil {
+			return string(bytes), true
+		}
+	case string:
+		if strings.TrimSpace(val) != "" {
+			return val, true
+		}
+	default:
+		if bytes, err := yaml.Marshal(val); err == nil {
+			return string(bytes), true
+		}
+	}
+	return "", false
 }
 
 // generateDiff creates a line-by-line diff between two YAML strings (for agent vs database comparison)
@@ -1798,16 +1953,30 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 		result["pendingConfig"] = map[string]any{"hasPending": false}
 	}
 
-	// Get latest RemoteConfigStatus from agent_telemetry
+	// Get latest RemoteConfigStatus from agent_telemetry (dedicated telemetry type)
 	var telemetryData sql.NullString
 	var reportedAt sql.NullTime
+	statusSource := "remote_config_status"
 	row3 := db.QueryRow(`
 		SELECT telemetry_data, reported_at 
 		FROM agent_telemetry 
-		WHERE agent_uid=? AND org_id=? AND telemetry_type='health' 
+		WHERE agent_uid=? AND org_id=? AND telemetry_type='remote_config_status' 
 		ORDER BY reported_at DESC LIMIT 1
 	`, uid, c.OrgID)
-	if err := row3.Scan(&telemetryData, &reportedAt); err == nil && telemetryData.Valid {
+	err := row3.Scan(&telemetryData, &reportedAt)
+	if err == sql.ErrNoRows {
+		// Fall back to legacy entries stored under "health"
+		statusSource = "health"
+		row3 = db.QueryRow(`
+			SELECT telemetry_data, reported_at 
+			FROM agent_telemetry 
+			WHERE agent_uid=? AND org_id=? AND telemetry_type='health' 
+			ORDER BY reported_at DESC LIMIT 1
+		`, uid, c.OrgID)
+		err = row3.Scan(&telemetryData, &reportedAt)
+	}
+
+	if err == nil && telemetryData.Valid {
 		var data map[string]interface{}
 		if json.Unmarshal([]byte(telemetryData.String), &data) == nil {
 			if status, ok := data["status"].(string); ok {
@@ -1831,6 +2000,7 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 		if reportedAt.Valid {
 			result["lastStatusReport"] = reportedAt.Time.Format(time.RFC3339)
 		}
+		result["remoteConfigStatusSource"] = statusSource
 	}
 
 	jsonOK(w, result)
