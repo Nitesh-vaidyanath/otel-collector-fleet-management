@@ -570,6 +570,150 @@ const mergeComponentTypeLists = (
   return result;
 };
 
+type ComponentCategory = 'receiver' | 'processor' | 'exporter';
+
+const deriveComponentTypeFromName = (name?: string | null): string | null => {
+  if (!name) {
+    return null;
+  }
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const [base] = trimmed.split(/[/:]/, 1);
+  return base?.trim() || null;
+};
+
+const formatComponentLabel = (value: string): string => {
+  if (!value) {
+    return 'Custom';
+  }
+  const cleaned = value.replace(/\//g, ' / ');
+  return cleaned
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+};
+
+const cloneSampleConfig = (config: any): any => {
+  if (!config || typeof config !== 'object') {
+    return {};
+  }
+  try {
+    return JSON.parse(JSON.stringify(config));
+  } catch {
+    return { ...config };
+  }
+};
+
+const inferReceiverTypeByStructure = (config: any): string | null => {
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+  const protocols = config.protocols || {};
+  if (protocols.thrift_http || protocols.thrift_compact || protocols.thrift_binary) {
+    return 'jaeger';
+  }
+  if (protocols.kafka || config.kafka) {
+    return 'kafka';
+  }
+  if (protocols.grpc && protocols.http) {
+    return 'otlp';
+  }
+  if (protocols.grpc && !protocols.http && !protocols.thrift_http && !protocols.thrift_compact) {
+    return 'otlp';
+  }
+  if (config.scrape_configs || config.config?.scrape_configs) {
+    return 'prometheus';
+  }
+  if (Array.isArray(config.include) || Array.isArray(config.exclude) || config.include || config.exclude) {
+    return 'filelog';
+  }
+  if (config.endpoint && String(config.endpoint).includes('9411')) {
+    return 'zipkin';
+  }
+  if (config.endpoint && String(config.endpoint).includes('14250')) {
+    return 'jaeger';
+  }
+  if (config.endpoint && String(config.endpoint).includes('12347')) {
+    return 'faro';
+  }
+  return null;
+};
+
+const inferProcessorTypeByStructure = (config: any): string | null => {
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+  if (
+    config.send_batch_size !== undefined ||
+    config.send_batch_max_size !== undefined ||
+    config.timeout !== undefined
+  ) {
+    return 'batch';
+  }
+  if (
+    config.limit_mib !== undefined ||
+    config.memory_limit_mib !== undefined ||
+    config.spike_limit_mib !== undefined ||
+    config.check_interval !== undefined
+  ) {
+    return 'memory_limiter';
+  }
+  if (config.actions !== undefined) {
+    return 'attributes';
+  }
+  if (config.include || config.exclude) {
+    return 'filter';
+  }
+  return null;
+};
+
+const inferExporterTypeByStructure = (config: any): string | null => {
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+  if (config.endpoint) {
+    const endpoint = String(config.endpoint);
+    if (/4317|4318/.test(endpoint) || endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
+      return 'otlp';
+    }
+    if (endpoint.includes('9411')) {
+      return 'zipkin';
+    }
+    if (endpoint.includes('14250')) {
+      return 'jaeger';
+    }
+  }
+  if (config.loglevel !== undefined || config.verbosity !== undefined) {
+    return 'debug';
+  }
+  if (config.prometheusremotewrite || config.namespace || config.collectd) {
+    return 'prometheus';
+  }
+  return null;
+};
+
+const inferComponentType = (category: ComponentCategory, name: string, config: any): string => {
+  let structural: string | null = null;
+  if (category === 'receiver') {
+    structural = inferReceiverTypeByStructure(config);
+  } else if (category === 'processor') {
+    structural = inferProcessorTypeByStructure(config);
+  } else if (category === 'exporter') {
+    structural = inferExporterTypeByStructure(config);
+  }
+  if (structural) {
+    return structural;
+  }
+  const fromName = deriveComponentTypeFromName(name);
+  if (fromName) {
+    return fromName;
+  }
+  return 'custom';
+};
+
 type FetchOptions = Record<string, any>;
 
 type OpampSettingsResponse = {
@@ -4131,6 +4275,42 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
   const [receiverTypes, setReceiverTypes] = useState<any[]>([]);
   const [processorTypes, setProcessorTypes] = useState<any[]>([]);
   const [exporterTypes, setExporterTypes] = useState<any[]>([]);
+  const registerDiscoveredTypes = useCallback(
+    (category: ComponentCategory, discovered: Array<{ type: string; sample?: any }>) => {
+      if (!discovered || discovered.length === 0) {
+        return;
+      }
+      const setter =
+        category === 'receiver'
+          ? setReceiverTypes
+          : category === 'processor'
+          ? setProcessorTypes
+          : setExporterTypes;
+      setter((prev = []) => {
+        const existing = new Set(prev.map((opt: any) => opt.value));
+        let mutated = false;
+        const next = [...prev];
+        for (const entry of discovered) {
+          const normalized = entry.type?.trim();
+          if (!normalized || normalized === 'custom' || existing.has(normalized)) {
+            continue;
+          }
+          existing.add(normalized);
+          mutated = true;
+          next.push({
+            value: normalized,
+            label: formatComponentLabel(normalized),
+            config: cloneSampleConfig(entry.sample || {}),
+            isSystem: false,
+            isCustom: true,
+            isDiscovered: true,
+          });
+        }
+        return mutated ? next : prev;
+      });
+    },
+    [setReceiverTypes, setProcessorTypes, setExporterTypes]
+  );
   
   // Raw YAML mode
   const [useRawYAML, setUseRawYAML] = useState(false);
@@ -4330,29 +4510,19 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
   const parseConfigYAML = (yamlConfig: string): boolean => {
     try {
       const parsed = yaml.load(yamlConfig) as any;
+      const discoveredReceiverSamples: Record<string, any> = {};
+      const discoveredProcessorSamples: Record<string, any> = {};
+      const discoveredExporterSamples: Record<string, any> = {};
       
       // Extract receivers
       const parsedReceivers: any[] = [];
       if (parsed.receivers && typeof parsed.receivers === 'object') {
         for (const [name, config] of Object.entries(parsed.receivers)) {
           const recConfig = config as any;
-          // Try to identify type from common patterns
-          let recType = 'custom';
-          if (recConfig.protocols?.grpc || recConfig.protocols?.http) {
-            recType = 'otlp';
-          } else if (recConfig.config?.scrape_configs) {
-            recType = 'prometheus';
-          } else if (recConfig.include !== undefined || recConfig.exclude !== undefined) {
-            recType = 'filelog';
-          } else if (recConfig.protocols?.grpc || recConfig.endpoint) {
-            // Try to infer from structure
-            if (recConfig.protocols) {
-              recType = 'jaeger';
-            } else if (recConfig.endpoint) {
-              recType = 'zipkin';
-            }
+          const recType = inferComponentType('receiver', name, recConfig);
+          if (recType !== 'custom' && !discoveredReceiverSamples[recType]) {
+            discoveredReceiverSamples[recType] = recConfig;
           }
-          
           parsedReceivers.push({
             name,
             type: recType,
@@ -4368,20 +4538,10 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       if (parsed.processors && typeof parsed.processors === 'object') {
         for (const [name, config] of Object.entries(parsed.processors)) {
           const procConfig = config as any;
-          let procType = 'custom';
-          if (procConfig.send_batch_size !== undefined) {
-            procType = 'batch';
-          } else if (procConfig.limit_mib !== undefined) {
-            procType = 'memory_limiter';
-          } else if (procConfig.actions !== undefined) {
-            procType = 'attributes';
+          const procType = inferComponentType('processor', name, procConfig) || 'custom';
+          if (procType !== 'custom' && !discoveredProcessorSamples[procType]) {
+            discoveredProcessorSamples[procType] = procConfig;
           }
-          
-          // Ensure type is always set and valid
-          if (!procType || procType === '') {
-            procType = 'custom';
-          }
-          
           parsedProcessors.push({
             name,
             type: procType,
@@ -4396,15 +4556,10 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       if (parsed.exporters && typeof parsed.exporters === 'object') {
         for (const [name, config] of Object.entries(parsed.exporters)) {
           const expConfig = config as any;
-          let expType = 'custom';
-          if (expConfig.endpoint && (expConfig.endpoint.includes('4317') || expConfig.endpoint.includes('4318'))) {
-            expType = 'otlp';
-          } else if (expConfig.loglevel !== undefined) {
-            expType = 'logging';
-          } else if (expConfig.endpoint && expConfig.endpoint.includes('8889')) {
-            expType = 'prometheus';
+          const expType = inferComponentType('exporter', name, expConfig);
+          if (expType !== 'custom' && !discoveredExporterSamples[expType]) {
+            discoveredExporterSamples[expType] = expConfig;
           }
-          
           parsedExporters.push({
             name,
             type: expType,
@@ -4431,6 +4586,18 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
       setReceivers(parsedReceivers);
       setProcessors(parsedProcessors);
       setExporters(parsedExporters);
+      registerDiscoveredTypes(
+        'receiver',
+        Object.entries(discoveredReceiverSamples).map(([type, sample]) => ({ type, sample }))
+      );
+      registerDiscoveredTypes(
+        'processor',
+        Object.entries(discoveredProcessorSamples).map(([type, sample]) => ({ type, sample }))
+      );
+      registerDiscoveredTypes(
+        'exporter',
+        Object.entries(discoveredExporterSamples).map(([type, sample]) => ({ type, sample }))
+      );
       
       // Expand all components for visibility - Initialize allKeys first
       const allKeys = new Set<string>();
@@ -4473,6 +4640,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
 
       // Set generated config to original (in case user wants to see/edit it)
       setGeneratedConfig(yamlConfig);
+      setRawYAMLConfig(yamlConfig);
       
       // Set expanded components
       setExpandedComponents(allKeys);
