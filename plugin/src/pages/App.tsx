@@ -2372,85 +2372,99 @@ export const App = () => {
                     
                     {/* Agent Metrics Section */}
                     {(() => {
-                      // Load monitoring data for this agent to get metrics
-                      const telemetryItems = detailPanelMonitoringData?.telemetry || [];
-                      
-                      // Calculate aggregated metrics from telemetry
-                      let avgCPU = 0, avgMemory = 0, avgBandwidth = 0, avgThroughput = 0;
-                      let metricsCount = 0;
-                      
-                      // Try to get metrics from telemetry (OwnMetrics - not yet implemented in opamp-go)
-                      telemetryItems.forEach((item: any) => {
-                        if (item.type === 'metrics' && item.data) {
-                          const data = item.data;
-                          if (data.cpu !== undefined) {
-                            avgCPU += data.cpu;
-                            metricsCount++;
-                          }
-                          if (data.memory !== undefined) {
-                            avgMemory += data.memory;
-                          }
-                          if (data.bandwidth !== undefined) {
-                            avgBandwidth += data.bandwidth;
-                          }
-                          if (data.throughput !== undefined) {
-                            avgThroughput += data.throughput;
-                          }
+                      const telemetrySamples = Array.isArray(detailPanelMonitoringData?.telemetry)
+                        ? detailPanelMonitoringData.telemetry
+                        : [];
+                      const latestSample = telemetrySamples.find((sample: any) => {
+                        if (!sample) {
+                          return false;
                         }
+                        const cpu = sample.cpu_percent;
+                        const memory = sample.memory_bytes;
+                        const inbound = sample.inbound_bandwidth_kbps;
+                        const outbound = sample.outbound_bandwidth_kbps;
+                        return (
+                          (typeof cpu === 'number' && Number.isFinite(cpu)) ||
+                          (typeof memory === 'number' && Number.isFinite(memory)) ||
+                          (typeof inbound === 'number' && Number.isFinite(inbound)) ||
+                          (typeof outbound === 'number' && Number.isFinite(outbound))
+                        );
                       });
-                      
-                      if (metricsCount > 0) {
-                        avgCPU = avgCPU / metricsCount;
-                        avgMemory = avgMemory / metricsCount;
-                        avgBandwidth = avgBandwidth / metricsCount;
-                        avgThroughput = avgThroughput / metricsCount;
-                      } else {
-                        // OwnMetrics not available - calculate synthetic metrics from agent UID hash
-                        // This provides consistent metrics for UI display (same agent = same metrics)
-                        const agentUID = selectedAgent.agentUid || '';
-                        const hash = agentUID.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
-                        const seed = hash % 100;
-                        
-                        // Generate synthetic metrics (consistent per agent)
-                        avgCPU = (seed % 50) + 10; // 10-60%
-                        avgMemory = ((seed * 2) % 200) + 50; // 50-250 MB
-                        avgBandwidth = ((seed * 10) % 1000) + 100; // 100-1100 KB/s
-                        avgThroughput = ((seed * 50) % 5000) + 1000; // 1000-6000 events/s
+
+                      if (!latestSample) {
+                        const reportsOwnTelemetry = Boolean(
+                          selectedAgent?.capabilities?.reports_own_metrics === true ||
+                          selectedAgent?.capabilities?.reports_own_logs === true ||
+                          selectedAgent?.capabilities?.reports_own_traces === true
+                        );
+                        if (!reportsOwnTelemetry) {
+                          return null;
+                        }
+                        return (
+                          <div style={{ marginBottom: 24, padding: 16, background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
+                              📊 Agent Telemetry
+                            </div>
+                            <div style={{ fontSize: 12, color: '#6B7280' }}>
+                              This agent advertises telemetry capabilities, but no samples have been ingested yet.
+                            </div>
+                          </div>
+                        );
                       }
-                      
+
+                      const cpuPercent =
+                        typeof latestSample.cpu_percent === 'number' && Number.isFinite(latestSample.cpu_percent)
+                          ? latestSample.cpu_percent
+                          : null;
+                      const memoryBytes =
+                        typeof latestSample.memory_bytes === 'number' && Number.isFinite(latestSample.memory_bytes)
+                          ? latestSample.memory_bytes
+                          : null;
+                      const inboundKB =
+                        typeof latestSample.inbound_bandwidth_kbps === 'number' &&
+                        Number.isFinite(latestSample.inbound_bandwidth_kbps)
+                          ? latestSample.inbound_bandwidth_kbps
+                          : null;
+                      const outboundKB =
+                        typeof latestSample.outbound_bandwidth_kbps === 'number' &&
+                        Number.isFinite(latestSample.outbound_bandwidth_kbps)
+                          ? latestSample.outbound_bandwidth_kbps
+                          : null;
+                      const recordedAt = latestSample.recorded_at ? new Date(latestSample.recorded_at) : null;
+
                       return (
                         <div style={{ marginBottom: 24, padding: 16, background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
-                            📊 Agent Performance Metrics
+                          <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 8 }}>
+                            📊 Agent Telemetry
                           </div>
-                          {metricsCount === 0 && (
-                            <div style={{ marginBottom: 12, padding: 10, background: '#FEF3C7', borderRadius: 4, border: '1px solid #FCD34D', fontSize: 11, color: '#92400E' }}>
-                              ⚠️ <strong>Note:</strong> OwnMetrics is not yet implemented in opamp-go v0.22.0. Metrics shown are estimated from agent status. For real metrics, scrape the agent's Prometheus endpoint (port 8888).
+                          {recordedAt && (
+                            <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 12 }}>
+                              Last sample: {recordedAt.toLocaleString()}
                             </div>
                           )}
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
                             <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
                               <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>CPU Usage</div>
                               <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgCPU > 0 ? `${avgCPU.toFixed(1)}%` : 'N/A'}
+                                {cpuPercent !== null ? `${cpuPercent.toFixed(1)}%` : '—'}
                               </div>
                             </div>
                             <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
                               <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Memory Usage</div>
                               <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgMemory > 0 ? `${avgMemory.toFixed(0)} MB` : 'N/A'}
+                                {memoryBytes !== null ? `${(memoryBytes / (1024 * 1024)).toFixed(1)} MB` : '—'}
                               </div>
                             </div>
                             <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
-                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Bandwidth</div>
+                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Inbound Bandwidth</div>
                               <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgBandwidth > 0 ? `${avgBandwidth.toFixed(0)} KB/s` : 'N/A'}
+                                {inboundKB !== null ? `${inboundKB.toFixed(1)} KB/s` : '—'}
                               </div>
                             </div>
                             <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
-                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Throughput</div>
+                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Outbound Bandwidth</div>
                               <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgThroughput > 0 ? `${avgThroughput.toFixed(0)}/s` : 'N/A'}
+                                {outboundKB !== null ? `${outboundKB.toFixed(1)} KB/s` : '—'}
                               </div>
                             </div>
                           </div>
