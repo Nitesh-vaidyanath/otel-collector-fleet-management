@@ -816,6 +816,31 @@ const getStatusBadge = (status: string) => {
     </span>
   );
 };
+
+const normalizeTelemetryItems = (items?: any[]) => {
+  if (!Array.isArray(items)) {
+    return [] as Array<{
+      recorded_at: string | null;
+      cpu_percent: number | null;
+      memory_bytes: number | null;
+      inbound_bandwidth_kbps: number | null;
+      outbound_bandwidth_kbps: number | null;
+      pipelines: any;
+    }>;
+  }
+  return items.map((item) => {
+    const payload = item?.data ?? item ?? {};
+    return {
+      recorded_at: item?.recorded_at || item?.reported_at || payload?.recorded_at || payload?.reported_at || null,
+      cpu_percent: payload?.cpu_percent ?? null,
+      memory_bytes: payload?.memory_bytes ?? null,
+      inbound_bandwidth_kbps: payload?.inbound_bandwidth_kbps ?? null,
+      outbound_bandwidth_kbps: payload?.outbound_bandwidth_kbps ?? null,
+      pipelines: payload?.pipelines ?? payload?.pipelines_json ?? null,
+    };
+  });
+};
+
 export const App = () => {
   const [activeTab, setActiveTab] = useState<Tab>('collectors');
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -1161,7 +1186,7 @@ export const App = () => {
               .catch(() => ({ items: [], current: {} })),
           ]);
           setDetailPanelMonitoringData({
-            telemetry: telemetryResponse.items || [],
+            telemetry: normalizeTelemetryItems(telemetryResponse.items),
             health: healthResponse,
           });
         } catch (err) {
@@ -3180,7 +3205,7 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
         agent: agentResponse,
         currentConfig: currentConfigResponse,
         recentActivity: activityResponse.items || [],
-        telemetry: telemetryResponse.items || [],
+        telemetry: normalizeTelemetryItems(telemetryResponse.items),
         health: healthResponse,
         pipelines: pipelinesResponse.items || []
       }));
@@ -3212,7 +3237,7 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
       setMonitoringData((prev: any) => ({
         ...prev,
         agent: agentResponse || prev.agent, // Update agent if available (includes status)
-        telemetry: telemetryResponse.items || [],
+        telemetry: normalizeTelemetryItems(telemetryResponse.items),
         health: healthResponse,
         pipelines: pipelinesResponse.items || []
       }));
@@ -3276,7 +3301,6 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
     }
   })();
   const hasPipelineDiagramData = pipelineConfigString.trim().length > 0;
-
   return (
     <div style={{ width: '100%' }}>
       <div style={{
