@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
+import { PipelineMetricsPanelView } from '../panels/pipeline/PanelView';
 
 const PLUGIN_ID = 'otel-collector-agent-fleet-management';
 const RESOURCE_ROOT = `/api/plugins/${PLUGIN_ID}/resources`;
@@ -2997,10 +2998,16 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   config,
   pipelines,
   telemetry,
+  agentName,
+  agentUid,
+  orgName,
 }: {
   config: string;
   pipelines: any[];
   telemetry: any[];
+  agentName?: string;
+  agentUid?: string;
+  orgName?: string;
 }) {
   const pipelineFlows = useMemo(() => {
     const flows: Array<{ type: string; receivers: string[]; processors: string[]; exporters: string[] }> = [];
@@ -3146,6 +3153,16 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
                 border: '#BFDBFE',
                 color: '#1D4ED8',
               })}
+            </div>
+            <div style={{ marginTop: 16 }}>
+              <PipelineMetricsPanelView
+                pipelineType={flow.type}
+                agentUid={agentUid}
+                agentName={agentName}
+                orgName={orgName}
+                allowDisable
+                initialEnabled={false}
+              />
             </div>
           </div>
         ))}
@@ -4236,10 +4253,13 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                       <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
                         Pipeline Monitoring
                 </div>
-                      <PipelineFlowDiagram 
+                      <PipelineFlowDiagram
                         config={pipelineConfigString}
                         pipelines={monitoringData.pipelines || []}
                         telemetry={monitoringData.telemetry || []}
+                        agentName={monitoringData?.agent?.name || monitoringData?.agent?.agentUid}
+                        agentUid={monitoringData?.agent?.agentUid}
+                        orgName={monitoringData?.agent?.orgName}
                       />
                     </div>
                   ) : (
