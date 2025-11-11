@@ -35,6 +35,44 @@ Check if the backend service is running.
 
 ---
 
+### Logging Configuration
+
+#### Get Logging Settings
+
+**GET** `/logging`
+
+Returns the current log level and whether JSON logging is enabled.
+
+```json
+{
+  "level": "info",
+  "jsonLogging": false
+}
+```
+
+#### Update Logging Settings
+
+**POST** `/logging` *(Admin only)*
+
+```json
+{
+  "level": "debug",
+  "jsonLogging": true
+}
+```
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "level": "debug",
+  "jsonLogging": true
+}
+```
+
+---
+
 ### Organizations
 
 #### List Organizations
@@ -731,4 +769,3 @@ This API does not currently use versioning. Future breaking changes will be vers
 - [OpAMP Specification](https://github.com/open-telemetry/opamp-spec)
 - [OpenTelemetry Collector Documentation](https://opentelemetry.io/docs/collector/)
 - [Grafana Plugin Development](https://grafana.com/developers/plugin-tools/)
-

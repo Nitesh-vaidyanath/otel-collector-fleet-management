@@ -41,6 +41,35 @@ DB_NAME=grafana_agents
 DB_USER=grafana
 DB_PASSWORD=your_password
 OPAMP_ENDPOINT=0.0.0.0:4321
+# Logging (optional)
+LOG_LEVEL=info          # debug | info | warn | error
+LOG_FORMAT=text         # json | text
+```
+
+### Logging Configuration
+
+Logging can be tuned via environment variables or at runtime:
+
+| Option | Description |
+| --- | --- |
+| `LOG_LEVEL` | Set to `debug`, `info`, `warn`, or `error`. Defaults to `info`. |
+| `LOG_FORMAT` | Set to `json` for structured logs or `text` (default). `JSON_LOGGING=true` is also supported for backwards compatibility. |
+| `LOG_DEBUG` / `DEBUG` | Setting either to `true` is equivalent to `LOG_LEVEL=debug`. |
+
+At runtime you can query or update logging with the `/logging` API (admin role required for updates):
+
+```
+GET  /api/plugins/otel-collector-agent-fleet-management/resources/logging
+POST /api/plugins/otel-collector-agent-fleet-management/resources/logging
+```
+
+Example payload:
+
+```json
+{
+  "level": "debug",
+  "jsonLogging": true
+}
 ```
 
 ## Building
@@ -148,4 +177,3 @@ See LICENSE file for details.
 - [OpenTelemetry Collector Documentation](https://opentelemetry.io/docs/collector/)
 - [API Specification](../API_SPEC.md)
 - [Backend Configuration Guide](../BACKEND_CONFIG.md)
-

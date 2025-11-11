@@ -1561,6 +1561,41 @@ func configApprovalHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	jsonOK(w, map[string]any{"ok": true, "approvalStatus": status, "approvedBy": c.UserName})
 }
 
+func loggingConfigGetHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	jsonOK(w, map[string]any{
+		"level":       GetLogLevel(),
+		"jsonLogging": IsJSONLoggingEnabled(),
+	})
+}
+
+func loggingConfigUpdateHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	var req struct {
+		Level       string `json:"level"`
+		JSONLogging *bool  `json:"jsonLogging"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	if strings.TrimSpace(req.Level) != "" {
+		if err := SetLogLevel(req.Level); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+
+	if req.JSONLogging != nil {
+		SetJSONLogging(*req.JSONLogging)
+	}
+
+	jsonOK(w, map[string]any{
+		"ok":          true,
+		"level":       GetLogLevel(),
+		"jsonLogging": IsJSONLoggingEnabled(),
+	})
+}
+
 func configDiffHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	db := mustDB()
 	defer db.Close()

@@ -2817,6 +2817,279 @@ var normalizeUrl = (rawUrl) => {
   return `${base}${urlWithoutBase}`;
 };
 var rawBackendSrv = __GRAFANA_RUNTIME__.getBackendSrv();
+var capabilityOrder = [
+  "accepts_remote_config",
+  "reports_effective_config",
+  "reports_health",
+  "reports_own_logs",
+  "reports_own_metrics",
+  "reports_own_traces",
+  "accepts_restart_command",
+  "reports_remote_config",
+  "reports_status",
+  "reports_available_components"
+];
+var capabilityMeta = {
+  accepts_remote_config: {
+    label: "Remote Config",
+    description: "Accepts remote configuration updates pushed via OpAMP.",
+    icon: "\u2699\uFE0F",
+    tone: { bg: "#EEF2FF", border: "#C7D2FE", color: "#3730A3" }
+  },
+  reports_effective_config: {
+    label: "Reports Config",
+    description: "Reports effective configuration back to the OpAMP server.",
+    icon: "\u{1F9FE}",
+    tone: { bg: "#ECFDF5", border: "#A7F3D0", color: "#065F46" }
+  },
+  reports_health: {
+    label: "Health",
+    description: "Sends health status updates (required for health widget).",
+    icon: "\u2764\uFE0F",
+    tone: { bg: "#FEF2F2", border: "#FECACA", color: "#991B1B" }
+  },
+  reports_own_logs: {
+    label: "Logs",
+    description: "Streams self-observed logs via OpAMP telemetry endpoint.",
+    icon: "\u{1F4DC}",
+    tone: { bg: "#FDF2F8", border: "#FBCFE8", color: "#9D174D" }
+  },
+  reports_own_metrics: {
+    label: "Metrics",
+    description: "Streams self-observed metrics via OpAMP telemetry endpoint.",
+    icon: "\u{1F4C8}",
+    tone: { bg: "#ECFEFF", border: "#BAE6FD", color: "#0C4A6E" }
+  },
+  reports_own_traces: {
+    label: "Traces",
+    description: "Streams self-observed traces via OpAMP telemetry endpoint.",
+    icon: "\u{1F6F0}\uFE0F",
+    tone: { bg: "#FFF7ED", border: "#FED7AA", color: "#9A3412" }
+  },
+  accepts_restart_command: {
+    label: "Restart Cmd",
+    description: "Can be restarted remotely from the OpAMP server.",
+    icon: "\u{1F501}",
+    tone: { bg: "#E0E7FF", border: "#C7D2FE", color: "#312E81" }
+  },
+  reports_remote_config: {
+    label: "Config Status",
+    description: "Reports remote configuration hashes/status for auditing.",
+    icon: "\u{1F6F0}\uFE0F",
+    tone: { bg: "#F3F4F6", border: "#E5E7EB", color: "#111827" }
+  },
+  reports_status: {
+    label: "Agent Status",
+    description: "Sends regular status updates (uptime, metadata, etc.).",
+    icon: "\u{1F4E1}",
+    tone: { bg: "#F0FDFA", border: "#99F6E4", color: "#115E59" }
+  },
+  reports_available_components: {
+    label: "Component Inventory",
+    description: "Reports available receivers/processors/exporters.",
+    icon: "\u{1F9E9}",
+    tone: { bg: "#EFF6FF", border: "#BFDBFE", color: "#1E3A8A" }
+  }
+};
+var isCapabilityEnabled = (value) => {
+  if (value === void 0 || value === null) {
+    return false;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    return value.toLowerCase() === "true" || value === "1";
+  }
+  return true;
+};
+var CapabilityBadges = ({
+  capabilities,
+  limit = 5,
+  compact = false,
+  onOpenDetails
+}) => {
+  const badges = React.useMemo(() => {
+    if (!capabilities) {
+      return [];
+    }
+    const seen = /* @__PURE__ */ new Set();
+    const enabledPairs = [];
+    const orderedKeys = [...capabilityOrder, ...Object.keys(capabilities)];
+    orderedKeys.forEach((key) => {
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      if (!isCapabilityEnabled(capabilities[key])) {
+        return;
+      }
+      const meta = capabilityMeta[key] || {
+        label: key.replace(/_/g, " "),
+        description: "Reported capability",
+        icon: "\u2728",
+        tone: { bg: "#F3F4F6", border: "#E5E7EB", color: "#111827" }
+      };
+      enabledPairs.push({ key, meta, rawKey: key });
+    });
+    return enabledPairs;
+  }, [capabilities]);
+  if (!capabilities || badges.length === 0) {
+    return null;
+  }
+  const displayed = badges.slice(0, limit);
+  const remaining = badges.length - displayed.length;
+  return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" } }, displayed.map(({ key, meta }) => /* @__PURE__ */ React.createElement(
+    "span",
+    {
+      key,
+      title: meta.description,
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: compact ? 10 : 11,
+        fontWeight: 600,
+        padding: compact ? "2px 6px" : "4px 8px",
+        borderRadius: 999,
+        background: meta.tone.bg,
+        border: `1px solid ${meta.tone.border}`,
+        color: meta.tone.color,
+        whiteSpace: "nowrap"
+      }
+    },
+    /* @__PURE__ */ React.createElement("span", null, meta.icon),
+    /* @__PURE__ */ React.createElement("span", null, meta.label)
+  )), remaining > 0 && /* @__PURE__ */ React.createElement(
+    "span",
+    {
+      style: { fontSize: 10, color: "#3B82F6", cursor: onOpenDetails ? "pointer" : "default", textDecoration: onOpenDetails ? "underline" : "none" },
+      title: "Additional capabilities reported by this agent",
+      onClick: (e) => {
+        e.stopPropagation();
+        onOpenDetails?.();
+      }
+    },
+    "+",
+    remaining,
+    " more"
+  ));
+};
+var builtinReceiverTemplates = [
+  {
+    value: "otlp",
+    label: "OTLP (gRPC + HTTP)",
+    description: "Default OpenTelemetry receiver with gRPC (4317) and HTTP (4318) endpoints.",
+    isSystem: true,
+    isCustom: false,
+    config: {
+      protocols: {
+        grpc: { endpoint: "0.0.0.0:4317" },
+        http: { endpoint: "0.0.0.0:4318" }
+      }
+    }
+  },
+  {
+    value: "prometheus",
+    label: "Prometheus Scraper",
+    description: "Scrape metrics from Prometheus targets on port 9090 every 30s.",
+    isSystem: true,
+    isCustom: false,
+    config: {
+      config: {
+        scrape_configs: [
+          {
+            job_name: "otel-collector",
+            scrape_interval: "30s",
+            static_configs: [{ targets: ["0.0.0.0:9090"] }]
+          }
+        ]
+      }
+    }
+  }
+];
+var builtinProcessorTemplates = [
+  {
+    value: "batch",
+    label: "Batch",
+    description: "Recommended batch processor with sane defaults.",
+    isSystem: true,
+    isCustom: false,
+    config: {
+      send_batch_size: 8192,
+      timeout: "10s"
+    }
+  },
+  {
+    value: "memory_limiter",
+    label: "Memory Limiter",
+    description: "Prevents the collector from running out of memory.",
+    isSystem: true,
+    isCustom: false,
+    config: {
+      check_interval: "2s",
+      limit_percentage: 75,
+      spike_limit_percentage: 15
+    }
+  }
+];
+var builtinExporterTemplates = [
+  {
+    value: "otlp",
+    label: "OTLP (HTTP)",
+    description: "Send data to an upstream OTLP endpoint over HTTP.",
+    isSystem: true,
+    isCustom: false,
+    config: {
+      endpoint: "http://localhost:4318"
+    }
+  },
+  {
+    value: "debug",
+    label: "Debug (logging)",
+    description: "Log telemetry payloads for troubleshooting.",
+    isSystem: true,
+    isCustom: false,
+    config: {
+      verbosity: "basic"
+    }
+  }
+];
+var customComponentOption = {
+  value: "custom",
+  label: "Custom (YAML)",
+  config: {},
+  isSystem: false,
+  isCustom: true
+};
+var mergeComponentTypeLists = (fetched, fallback) => {
+  const merged = /* @__PURE__ */ new Map();
+  [...fetched || [], ...fallback || []].forEach((item) => {
+    if (!item) {
+      return;
+    }
+    const key = item.value || item.type;
+    if (!key) {
+      return;
+    }
+    if (!merged.has(key)) {
+      merged.set(key, {
+        ...item,
+        value: key,
+        label: item.label || item.displayLabel || key,
+        config: item.config || {}
+      });
+    }
+  });
+  const result = Array.from(merged.values());
+  if (!result.some((t) => t.value === "custom")) {
+    result.push({ ...customComponentOption });
+  }
+  return result;
+};
 var tenantHeaderValue = null;
 var setTenantHeaderValue = (value) => {
   tenantHeaderValue = value && value.trim() ? value.trim() : null;
@@ -2847,13 +3120,12 @@ var fetchWithAuth = async ({ responseType, headers: requestHeaders, ...rest }) =
   if (tenantHeaderValue && !headers["X-Scoper-Tenant"]) {
     headers["X-Scoper-Tenant"] = tenantHeaderValue;
   }
-  const response = await lastValueFrom(
-    rawBackendSrv.fetch({
-      responseType: responseType ?? "json",
-      ...rest,
-      headers
-    })
-  );
+  const requestPayload = {
+    responseType: responseType ?? "json",
+    ...rest,
+    headers
+  };
+  const response = await lastValueFrom(rawBackendSrv.fetch(requestPayload));
   if (response.status >= 200 && response.status < 300) {
     return response.data;
   }
@@ -2910,6 +3182,11 @@ var App = () => {
   const [loadingDetailMonitoring, setLoadingDetailMonitoring] = useState(false);
   const [groupByDeploymentType, setGroupByDeploymentType] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState(/* @__PURE__ */ new Set());
+  const [bridgeCapabilitySheet, setBridgeCapabilitySheet] = useState({
+    bridge: null,
+    open: false
+  });
+  const closeBridgeCapabilitySheet = () => setBridgeCapabilitySheet({ bridge: null, open: false });
   const [selectedOrgId, setSelectedOrgId] = useState(null);
   const [currentOrgName, setCurrentOrgName] = useState("");
   const [agentActivityLog, setAgentActivityLog] = useState([]);
@@ -3168,6 +3445,12 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   };
   const [upgradingAgent, setUpgradingAgent] = useState(null);
   const handleUpgrade = async (agentUID) => {
+    const confirmUpgrade = window.confirm(
+      "\u26A0\uFE0F Upgrading will restart this collector and update only the collector binary/image. Please review the release notes and ensure your operator/CRDs support the new version.\n\nContinue with the upgrade?"
+    );
+    if (!confirmUpgrade) {
+      return;
+    }
     setUpgradingAgent(agentUID);
     try {
       setError("");
@@ -3184,9 +3467,13 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     }
   };
   useEffect(() => {
-    if (showDetailsPanel && selectedAgent && (detailTab === "capabilities" || detailTab === "activity")) {
-      setLoadingDetailMonitoring(true);
-      const loadDetailMonitoring = async () => {
+    let interval = null;
+    const shouldLoadDetails = showDetailsPanel && selectedAgent && (detailTab === "capabilities" || detailTab === "activity");
+    if (shouldLoadDetails) {
+      const loadDetailMonitoring = async (silent = false) => {
+        if (!silent) {
+          setLoadingDetailMonitoring(true);
+        }
         try {
           const [telemetryResponse, healthResponse] = await Promise.all([
             backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${selectedAgent.agentUid}/telemetry?limit=50`).catch(() => ({ items: [] })),
@@ -3200,13 +3487,21 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
           console.error("Failed to load detail monitoring data:", err);
           setDetailPanelMonitoringData({ telemetry: [], health: { items: [], current: {} } });
         } finally {
-          setLoadingDetailMonitoring(false);
+          if (!silent) {
+            setLoadingDetailMonitoring(false);
+          }
         }
       };
-      loadDetailMonitoring();
+      loadDetailMonitoring(false);
+      interval = setInterval(() => loadDetailMonitoring(true), 5e3);
     } else {
       setDetailPanelMonitoringData(null);
     }
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
   }, [selectedAgent?.agentUid, detailTab, showDetailsPanel]);
   const allLabels = /* @__PURE__ */ new Map();
   agents.forEach((agent) => {
@@ -3563,7 +3858,20 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         wordBreak: "break-all",
         whiteSpace: "normal"
       } }, bridge.name),
-      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", bridge.cluster), bridge.labels && Object.keys(bridge.labels).length > 0 ? Object.entries(bridge.labels).filter(([key]) => !["k8s.namespace", "k8s.cluster", "cluster", "namespace"].includes(key)).slice(0, 3).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key: `${key}:${value}`, style: { fontSize: 10, color: "#374151", padding: "3px 8px", background: "#F3F4F6", borderRadius: 4 } }, key, ": ", value)) : /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#9CA3AF" } }, "no labels"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 500 } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : "")),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#1E40AF", padding: "3px 8px", background: "#EFF6FF", borderRadius: 4, border: "1px solid #BFDBFE" } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: "#166534", padding: "3px 8px", background: "#F0FDF4", borderRadius: 4, border: "1px solid #86EFAC" } }, "cluster: ", bridge.cluster), bridge.labels && Object.keys(bridge.labels).length > 0 ? Object.entries(bridge.labels).filter(([key]) => !["k8s.namespace", "k8s.cluster", "cluster", "namespace"].includes(key)).slice(0, 3).map(([key, value]) => /* @__PURE__ */ React.createElement("span", { key: `${key}:${value}`, style: { fontSize: 10, color: "#374151", padding: "3px 8px", background: "#F3F4F6", borderRadius: 4 } }, key, ": ", value)) : /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#9CA3AF" } }, "no labels"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280", fontWeight: 500 } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""), /* @__PURE__ */ React.createElement(
+        CapabilityBadges,
+        {
+          capabilities: bridge.capabilities,
+          limit: 3,
+          compact: true,
+          onOpenDetails: () => {
+            setBridgeCapabilitySheet({
+              bridge,
+              open: true
+            });
+          }
+        }
+      )),
       /* @__PURE__ */ React.createElement("div", null, getStatusBadge(bridge.status)),
       /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridge.version || "unknown"),
       /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation() }, bridge.status === "offline" && /* @__PURE__ */ React.createElement(
@@ -4034,10 +4342,11 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       "reports_available_components",
       "reports_connection_settings_status"
     ];
-    const reportedCaps = new Set(Object.keys(selectedAgent.capabilities));
+    const capabilitySource = selectedAgent?.capabilities || {};
+    const reportedCaps = new Set(Object.keys(capabilitySource));
     const missingCaps = allCapabilities.filter((cap) => !reportedCaps.has(cap));
     const unsupportedCaps = allCapabilities.filter(
-      (cap) => reportedCaps.has(cap) && selectedAgent.capabilities[cap] === false
+      (cap) => reportedCaps.has(cap) && capabilitySource[cap] === false
     );
     if (missingCaps.length === 0 && unsupportedCaps.length === 0) {
       return null;
@@ -4143,10 +4452,89 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         fontWeight: 500,
         minHeight: "40px",
         transition: "all 0.2s"
-      }
+      },
+      title: "Upgrades restart the collector process and may require compatible CRDs/operators."
     },
     upgradingAgent === selectedAgent.agentUid ? "Upgrading..." : "Upgrade"
-  ))), showDetailsPanel && /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { style: { padding: "8px 20px 0", fontSize: 11, color: "#92400E", lineHeight: 1.4 } }, "\u26A0\uFE0F This action only asks the collector process to restart with whatever image/tag is currently defined in the CRD. It does ", /* @__PURE__ */ React.createElement("strong", null, "not"), " patch ", /* @__PURE__ */ React.createElement("code", null, "spec.image"), ", upgrade the OpenTelemetry Collector Operator, or apply CRD migrations for you. Review the", " ", /* @__PURE__ */ React.createElement("a", { href: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases", target: "_blank", rel: "noopener noreferrer", style: { color: "#B45309", textDecoration: "underline" } }, "upstream release notes"), " ", "and update your CRD (e.g., ", /* @__PURE__ */ React.createElement("code", null, "spec.image"), ", resources, feature flags) before using this button.")), bridgeCapabilitySheet.open && bridgeCapabilitySheet.bridge && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: "rgba(0,0,0,0.45)",
+        zIndex: 1090
+      },
+      onClick: closeBridgeCapabilitySheet
+    }
+  ), /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 420,
+        background: "white",
+        boxShadow: "-6px 0 18px rgba(15,23,42,0.25)",
+        zIndex: 1100,
+        display: "flex",
+        flexDirection: "column",
+        animation: "slideIn 0.25s ease-out"
+      }
+    },
+    /* @__PURE__ */ React.createElement("div", { style: { padding: 20, borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, bridgeCapabilitySheet.bridge.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Bridge Capabilities")), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: closeBridgeCapabilitySheet,
+        style: {
+          background: "none",
+          border: "none",
+          fontSize: 24,
+          cursor: "pointer",
+          color: "#6B7280",
+          width: 32,
+          height: 32
+        }
+      },
+      "\xD7"
+    )),
+    /* @__PURE__ */ React.createElement("div", { style: { padding: 20, overflowY: "auto" } }, bridgeCapabilitySheet.bridge.capabilities ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, Object.entries(bridgeCapabilitySheet.bridge.capabilities).sort((a, b) => {
+      const ai = capabilityOrder.indexOf(a[0]);
+      const bi = capabilityOrder.indexOf(b[0]);
+      return (ai === -1 ? capabilityOrder.length : ai) - (bi === -1 ? capabilityOrder.length : bi);
+    }).map(([key, value]) => {
+      const meta = capabilityMeta[key] || {
+        label: key.replace(/_/g, " "),
+        description: "Reported capability",
+        icon: "\u2728",
+        tone: { bg: "#F3F4F6", border: "#E5E7EB", color: "#111827" }
+      };
+      const enabled = isCapabilityEnabled(value);
+      return /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          key,
+          style: {
+            border: `1px solid ${meta.tone.border}`,
+            borderRadius: 10,
+            padding: 14,
+            background: meta.tone.bg,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6
+          }
+        },
+        /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", color: meta.tone.color, fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", null, meta.icon), /* @__PURE__ */ React.createElement("span", null, meta.label)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: enabled ? "#059669" : "#B91C1C", fontWeight: 600 } }, enabled ? "Enabled" : "Disabled")),
+        /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, meta.description),
+        !enabled && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF" } }, "Raw value: ", /* @__PURE__ */ React.createElement("code", null, String(value)))
+      );
+    })) : /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#6B7280" } }, "No capabilities reported by this bridge."))
+  )), showDetailsPanel && /* @__PURE__ */ React.createElement(
     "div",
     {
       onClick: () => setShowDetailsPanel(false),
@@ -4171,427 +4559,149 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         }
       `));
 };
-var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({ config, pipelines, telemetry }) {
-  const [, setAnimationTick] = useState(0);
-  const [metricsData, setMetricsData] = useState({});
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setAnimationTick((prev) => prev + 1);
-    }, 2e3);
-    return () => clearInterval(interval);
-  }, []);
+var PipelineFlowDiagram = React.memo(function PipelineFlowDiagram2({
+  config,
+  pipelines,
+  telemetry
+}) {
   const pipelineFlows = useMemo(() => {
-    let parsedConfig = null;
-    const flows = [];
+    const flows2 = [];
+    if (!config) {
+      return flows2;
+    }
     try {
-      parsedConfig = load(config);
-      if (parsedConfig && parsedConfig.service && parsedConfig.service.pipelines) {
-        Object.entries(parsedConfig.service.pipelines).forEach(([pipelineType, pipelineConfig]) => {
-          flows.push({
+      const parsed = load(config);
+      const servicePipelines = parsed?.service?.pipelines;
+      if (servicePipelines && typeof servicePipelines === "object") {
+        Object.entries(servicePipelines).forEach(([pipelineType, pipelineConfig]) => {
+          flows2.push({
             type: pipelineType,
-            receivers: pipelineConfig.receivers || [],
-            processors: pipelineConfig.processors || [],
-            exporters: pipelineConfig.exporters || []
+            receivers: pipelineConfig?.receivers || [],
+            processors: pipelineConfig?.processors || [],
+            exporters: pipelineConfig?.exporters || []
           });
         });
       }
     } catch (err) {
       console.error("Failed to parse config for flow diagram:", err);
     }
-    return flows;
+    return flows2;
   }, [config]);
-  useEffect(() => {
-    const updateMetrics = () => {
-      const newData = {};
-      newData.agent = {
-        cpu: Math.round(Math.random() * 40 + 20),
-        memory: Math.round(Math.random() * 300 + 200),
-        bandwidth: Math.round(Math.random() * 500 + 200),
-        throughput: Math.round(Math.random() * 3e3 + 1e3)
-      };
-      pipelineFlows.forEach((flow) => {
-        flow.receivers.forEach((rec) => {
-          const key = `rec-${rec}`;
-          newData[key] = {
-            cpu: Math.round(Math.random() * 60 + 10),
-            memory: Math.round(Math.random() * 200 + 50),
-            bandwidth: Math.round(Math.random() * 800 + 100),
-            throughput: Math.round(Math.random() * 4e3 + 1e3)
-          };
-        });
-        flow.processors.forEach((proc) => {
-          const key = `proc-${proc}`;
-          newData[key] = {
-            cpu: Math.round(Math.random() * 50 + 15),
-            memory: Math.round(Math.random() * 250 + 50),
-            bandwidth: Math.round(Math.random() * 900 + 100),
-            throughput: Math.round(Math.random() * 4e3 + 1e3)
-          };
-        });
-        flow.exporters.forEach((exp) => {
-          const key = `exp-${exp}`;
-          newData[key] = {
-            cpu: Math.round(Math.random() * 40 + 10),
-            memory: Math.round(Math.random() * 150 + 20),
-            bandwidth: Math.round(Math.random() * 700 + 50),
-            throughput: Math.round(Math.random() * 3500 + 500)
-          };
-        });
-      });
-      setMetricsData(newData);
-    };
-    updateMetrics();
-    const interval = setInterval(updateMetrics, 5e3);
-    return () => clearInterval(interval);
-  }, [pipelineFlows]);
-  const agentMetrics = metricsData.agent || {
-    cpu: Math.round(Math.random() * 40 + 20),
-    memory: Math.round(Math.random() * 300 + 200),
-    bandwidth: Math.round(Math.random() * 500 + 200),
-    throughput: Math.round(Math.random() * 3e3 + 1e3)
-  };
-  const getMetricsForComponent = useCallback((componentName, componentType) => {
-    const prefix = componentType === "receiver" ? "rec-" : componentType === "processor" ? "proc-" : "exp-";
-    const key = `${prefix}${componentName}`;
-    if (metricsData[key]) {
-      return metricsData[key];
-    }
-    const hash = componentName.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const seed = hash % 100;
-    return {
-      cpu: seed % 50 + 10,
-      // 10-60% CPU
-      memory: seed * 2 % 200 + 50,
-      // 50-250 MB
-      bandwidth: seed * 10 % 1e3 + 100,
-      // 100-1100 KB/s
-      throughput: seed * 50 % 5e3 + 1e3
-      // 1000-6000 events/s
-    };
-  }, [metricsData]);
-  const pipelineLogs = useMemo(() => {
-    if (!Array.isArray(telemetry)) {
-      return [];
-    }
-    return telemetry.filter((entry) => {
-      const type2 = String(entry?.type || entry?.signal || "").toLowerCase();
-      const channel = String(entry?.channel || entry?.category || "").toLowerCase();
-      return type2.includes("log") || type2.includes("event") || type2.includes("error") || channel.includes("log");
-    }).slice(0, 12);
-  }, [telemetry]);
-  const pipelineErrors = useMemo(() => {
-    return pipelineLogs.filter((entry) => {
-      const severity = String(entry?.level || entry?.severity || "").toLowerCase();
-      const type2 = String(entry?.type || "").toLowerCase();
-      return severity === "error" || severity === "critical" || severity === "fatal" || type2.includes("error") || type2.includes("fault");
-    }).slice(0, 6);
-  }, [pipelineLogs]);
-  const formatLogMessage = (entry) => {
-    if (!entry) {
-      return "";
-    }
-    const candidates = [entry.message, entry.description, entry.details, entry.error, entry.body];
-    for (const candidate of candidates) {
-      if (typeof candidate === "string" && candidate.trim() !== "") {
-        return candidate.trim();
+  const flows = pipelineFlows.length > 0 ? pipelineFlows : Array.isArray(pipelines) ? pipelines : [];
+  const hasTelemetryUsage = Array.isArray(telemetry) && telemetry.some((item) => {
+    const type2 = String(item?.type || item?.signal || "").toLowerCase();
+    return type2.includes("metric") || type2.includes("usage");
+  });
+  const renderColumn = (items, header, palette) => /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 200 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: palette.color, textAlign: "center", marginBottom: 8 } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, items.length > 0 ? items.map((name) => /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      key: name,
+      style: {
+        padding: 12,
+        background: palette.background,
+        border: `1px solid ${palette.border}`,
+        borderRadius: 6,
+        textAlign: "center",
+        fontSize: 12,
+        color: palette.color
       }
-    }
-    const payloads = [entry.data, entry.payload, entry.content];
-    for (const payload of payloads) {
-      if (!payload) {
-        continue;
+    },
+    name
+  )) : /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      style: {
+        padding: 12,
+        background: "#F3F4F6",
+        border: "1px dashed #D1D5DB",
+        borderRadius: 6,
+        textAlign: "center",
+        fontSize: 11,
+        color: "#9CA3AF"
       }
-      if (typeof payload === "string") {
-        return payload;
-      }
-      try {
-        return JSON.stringify(payload);
-      } catch {
-        continue;
-      }
-    }
-    try {
-      return JSON.stringify(entry);
-    } catch {
-      return String(entry);
-    }
-  };
-  const formatLogTimestamp = (entry) => {
-    const raw = entry?.reported_at || entry?.reportedAt || entry?.timestamp || entry?.time;
-    if (!raw) {
-      return "just now";
-    }
-    if (typeof raw === "number") {
-      const fromNumber = new Date(raw);
-      if (!Number.isNaN(fromNumber.getTime())) {
-        return fromNumber.toLocaleString();
-      }
-    }
-    try {
-      const dt = new Date(raw);
-      if (!Number.isNaN(dt.getTime())) {
-        return dt.toLocaleString();
-      }
-    } catch (err) {
-    }
-    return String(raw);
-  };
-  if (pipelineFlows.length === 0) {
+    },
+    "None"
+  )));
+  if (flows.length === 0) {
     return null;
   }
-  const renderHorizontalConnector = (label) => /* @__PURE__ */ React.createElement("div", { style: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    width: "100%"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, color: "#9CA3AF", position: "relative" } }, "\u2192", /* @__PURE__ */ React.createElement("div", { className: "flow-particle", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } })), label && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", textAlign: "center", maxWidth: 120 } }, label));
-  const renderReceiversColumn = (receivers, header, options) => /* @__PURE__ */ React.createElement("div", { style: {
-    flex: "1 1 0",
-    minWidth: 0,
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    flexShrink: 1
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#065F46", textAlign: "center", marginBottom: 4 } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, receivers.length > 0 ? receivers.map((receiver, idx) => {
-    const metrics = getMetricsForComponent(receiver, "receiver");
-    return /* @__PURE__ */ React.createElement("div", { key: receiver + idx, style: {
-      padding: 12,
-      background: "#D1FAE5",
-      borderRadius: 6,
-      border: "2px solid #10B981",
-      textAlign: "center",
-      width: "100%",
-      boxSizing: "border-box"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#065F46", marginBottom: 6 } }, receiver), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW (In): ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s"));
-  }) : /* @__PURE__ */ React.createElement("div", { style: {
-    padding: 12,
-    background: "#F3F4F6",
-    borderRadius: 6,
-    border: "2px dashed #9CA3AF",
-    textAlign: "center",
-    color: "#9CA3AF",
-    fontSize: 11,
-    width: "100%",
-    boxSizing: "border-box"
-  } }, "No Receivers")));
-  const renderProcessorsColumn = (processors, header, options) => /* @__PURE__ */ React.createElement("div", { style: {
-    flex: "1 1 0",
-    minWidth: 0,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 0,
-    flexShrink: 1
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#991B1B", textAlign: "center", marginBottom: 8 } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 0, overflow: "visible", minWidth: 0 } }, processors.length > 0 ? processors.map((processor, idx) => {
-    const metrics = getMetricsForComponent(processor, "processor");
-    const nextProcessor = idx < processors.length - 1 ? processors[idx + 1] : null;
-    const nextMetrics = nextProcessor ? getMetricsForComponent(nextProcessor, "processor") : null;
-    const bandwidthBetween = options?.showBandwidth && nextMetrics ? Math.round((metrics.bandwidth + nextMetrics.bandwidth) / 2) : null;
-    return /* @__PURE__ */ React.createElement(React.Fragment, { key: processor + idx }, /* @__PURE__ */ React.createElement("div", { style: {
-      padding: 16,
-      background: "#FEE2E2",
-      borderRadius: 8,
-      border: "2px solid #EF4444",
-      textAlign: "center",
-      width: "100%",
-      maxWidth: "100%"
-    } }, options?.showOrder && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "#", idx + 1), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#991B1B", marginBottom: 6 } }, processor), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW (In): ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s")), idx < processors.length - 1 && /* @__PURE__ */ React.createElement("div", { className: "flow-arrow-vertical", style: { width: "100%", margin: "16px 0", position: "relative", minHeight: "60px", overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 22, color: "#9CA3AF", position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative", zIndex: 1 } }, "\u2193", /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "20%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "50%", left: "50%", transform: "translate(-50%, -50%)" } }), /* @__PURE__ */ React.createElement("div", { className: "flow-particle-vertical", style: { top: "80%", left: "50%", transform: "translate(-50%, -50%)" } })), bandwidthBetween && /* @__PURE__ */ React.createElement("div", { style: {
-      fontSize: 9,
-      color: "#10B981",
-      fontWeight: 600,
-      marginTop: 8,
-      padding: "4px 10px",
-      background: "#D1FAE5",
-      borderRadius: 4,
-      border: "1px solid #10B981",
-      position: "relative",
-      zIndex: 2,
-      whiteSpace: "nowrap",
-      width: "fit-content",
-      minWidth: "max-content",
-      boxSizing: "border-box"
-    } }, bandwidthBetween, " KB/s"))));
-  }) : /* @__PURE__ */ React.createElement("div", { style: {
-    padding: 12,
-    background: "#F3F4F6",
-    borderRadius: 6,
-    border: "2px dashed #9CA3AF",
-    textAlign: "center",
-    color: "#9CA3AF",
-    fontSize: 11,
-    width: "100%",
-    maxWidth: "220px"
-  } }, "No Processors")));
-  const renderExportersColumn = (exporters, header, options) => /* @__PURE__ */ React.createElement("div", { style: {
-    flex: "1 1 0",
-    minWidth: 0,
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    flexShrink: 1
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#1E40AF", textAlign: "center" } }, header), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, exporters.length > 0 ? exporters.map((exporter, idx) => {
-    const metrics = getMetricsForComponent(exporter, "exporter");
-    return /* @__PURE__ */ React.createElement("div", { key: exporter + idx, style: {
-      padding: 16,
-      background: "#DBEAFE",
-      borderRadius: 8,
-      border: "2px solid #2563EB",
-      textAlign: "center",
-      width: "100%"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#1E40AF", marginBottom: 6 } }, exporter), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "CPU: ", metrics.cpu.toFixed(1), "%"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "Mem: ", metrics.memory.toFixed(0), " MB"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginBottom: 2 } }, "BW (Out): ", metrics.bandwidth.toFixed(0), " KB/s"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#10B981", fontWeight: 600 } }, metrics.throughput.toFixed(0), "/s"));
-  }) : /* @__PURE__ */ React.createElement("div", { style: {
-    padding: 12,
-    background: "#F3F4F6",
-    borderRadius: 6,
-    border: "2px dashed #9CA3AF",
-    textAlign: "center",
-    color: "#9CA3AF",
-    fontSize: 11
-  } }, "No Exporters")));
-  const allReceivers = /* @__PURE__ */ new Set();
-  const allProcessors = /* @__PURE__ */ new Set();
-  const allExporters = /* @__PURE__ */ new Set();
-  pipelineFlows.forEach((flow) => {
-    flow.receivers.forEach((r) => allReceivers.add(r));
-    flow.processors.forEach((p) => allProcessors.add(p));
-    flow.exporters.forEach((e) => allExporters.add(e));
-  });
-  return /* @__PURE__ */ React.createElement("div", { style: { width: "100%", margin: 0, padding: 0 } }, /* @__PURE__ */ React.createElement("style", null, `
-        @keyframes flowAnimation {
-          0% { transform: translateX(-20px); opacity: 0; }
-          50% { opacity: 1; }
-          100% { transform: translateX(20px); opacity: 0; }
+  return /* @__PURE__ */ React.createElement("div", { style: { width: "100%", margin: 0, padding: 0 } }, /* @__PURE__ */ React.createElement(
+    "div",
+    {
+      style: {
+        width: "100%",
+        padding: "24px 28px",
+        background: "#F9FAFB",
+        border: "1px solid #E5E7EB",
+        borderRadius: 16,
+        boxSizing: "border-box",
+        boxShadow: "0 12px 24px rgba(15,23,42,0.08)"
+      }
+    },
+    /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "Pipeline Flow"),
+    /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: {
+          marginBottom: 20,
+          padding: 16,
+          background: "#F3F4F6",
+          borderRadius: 8,
+          border: "1px dashed #D1D5DB",
+          fontSize: 12,
+          color: "#4B5563",
+          lineHeight: 1.6
         }
-        @keyframes flowAnimationVertical {
-          0% { transform: translateY(-20px); opacity: 0; }
-          50% { opacity: 1; }
-          100% { transform: translateY(20px); opacity: 0; }
+      },
+      hasTelemetryUsage ? "Usage telemetry has started to arrive from this collector. Detailed CPU/memory charts will appear here once they are wired into the UI." : "The collector has not reported usage telemetry via OpAMP yet. Configure the agent to report own metrics or scrape it with your preferred monitoring stack to visualise CPU, memory, and throughput."
+    ),
+    flows.map((flow) => /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        key: flow.type,
+        style: {
+          width: "100%",
+          marginBottom: 20,
+          padding: "20px 24px",
+          background: "white",
+          borderRadius: 10,
+          border: "1px solid #E5E7EB",
+          boxSizing: "border-box"
         }
-        .flow-particle {
-          position: absolute;
-          width: 8px;
-          height: 8px;
-          background: #10B981;
-          border-radius: 50%;
-          animation: flowAnimation 2s infinite;
+      },
+      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 14, textTransform: "capitalize" } }, flow.type, " pipeline"),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, overflowX: "auto" } }, renderColumn(flow.receivers, `Receivers (${flow.receivers.length})`, {
+        background: "#ECFDF5",
+        border: "#6EE7B7",
+        color: "#047857"
+      }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 24, color: "#9CA3AF" } }, "\u2192"), renderColumn(flow.processors, `Processors (${flow.processors.length})`, {
+        background: "#FEF2F2",
+        border: "#FECACA",
+        color: "#B91C1C"
+      }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 24, color: "#9CA3AF" } }, "\u2192"), renderColumn(flow.exporters, `Exporters (${flow.exporters.length})`, {
+        background: "#EFF6FF",
+        border: "#BFDBFE",
+        color: "#1D4ED8"
+      }))
+    )),
+    /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        style: {
+          marginTop: 12,
+          padding: 16,
+          background: "#F9FAFB",
+          borderRadius: 8,
+          border: "1px solid #E5E7EB",
+          fontSize: 12,
+          color: "#6B7280"
         }
-        .flow-particle-vertical {
-          position: absolute;
-          width: 8px;
-          height: 8px;
-          background: #10B981;
-          border-radius: 50%;
-          animation: flowAnimationVertical 2s infinite;
-        }
-        .flow-particle:nth-child(1) { animation-delay: 0s; }
-        .flow-particle:nth-child(2) { animation-delay: 0.4s; }
-        .flow-particle:nth-child(3) { animation-delay: 0.8s; }
-        .flow-particle-vertical:nth-child(1) { animation-delay: 0s; }
-        .flow-particle-vertical:nth-child(2) { animation-delay: 0.4s; }
-        .flow-particle-vertical:nth-child(3) { animation-delay: 0.8s; }
-        .flow-arrow {
-          position: relative;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 40px;
-          height: 60px;
-          overflow: hidden;
-        }
-        .flow-arrow-vertical {
-          position: relative;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 100%;
-          height: 40px;
-          overflow: hidden;
-        }
-      `), /* @__PURE__ */ React.createElement("div", { style: {
-    width: "100%",
-    padding: "24px 28px",
-    background: "#F9FAFB",
-    border: "1px solid #E5E7EB",
-    borderRadius: 16,
-    boxSizing: "border-box",
-    boxShadow: "0 18px 32px rgba(15,23,42,0.08)"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827", marginBottom: 20 } }, "Pipeline Flow & Metrics"), pipelineFlows.length > 1 && /* @__PURE__ */ React.createElement("div", { style: {
-    width: "100%",
-    padding: "28px 32px",
-    background: "white",
-    borderRadius: 10,
-    border: "2px solid #E5E7EB",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.06)",
-    boxSizing: "border-box"
-  } }, /* @__PURE__ */ React.createElement("div", { style: {
-    marginBottom: 24,
-    paddingBottom: 16,
-    borderBottom: "2px solid #E5E7EB"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "\u{1F4CA} Complete Pipeline Overview (", pipelineFlows.length, " Pipelines)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Receivers (", allReceivers.size, ") \u2192 Processors (", allProcessors.size, ") \u2192 Exporters (", allExporters.size, ")")), /* @__PURE__ */ React.createElement("div", { style: { width: "100%", overflowX: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: {
-    display: "grid",
-    gridTemplateColumns: "minmax(240px, 1fr) 48px minmax(240px, 1fr) 48px minmax(240px, 1fr)",
-    alignItems: "start",
-    gap: 16,
-    width: "100%",
-    minWidth: 960,
-    paddingBottom: 8
-  } }, /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderReceiversColumn(Array.from(allReceivers), `RECEIVERS (${allReceivers.size})`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector()), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0, overflow: "visible" } }, renderProcessorsColumn(
-    Array.from(allProcessors),
-    `PROCESSORS (${allProcessors.size || 0})`,
-    { showOrder: true, showBandwidth: true }
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector()), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderExportersColumn(Array.from(allExporters), `EXPORTERS (${allExporters.size})`))))), /* @__PURE__ */ React.createElement("div", { style: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 16,
-    marginBottom: 24,
-    padding: 16,
-    background: "white",
-    borderRadius: 8,
-    border: "1px solid #E5E7EB"
-  } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "CPU Usage"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#3B82F6" } }, agentMetrics.cpu, "%")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Memory"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#10B981" } }, agentMetrics.memory, " MB")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Bandwidth"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#F59E0B" } }, agentMetrics.bandwidth, " KB/s")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Throughput"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#8B5CF6" } }, agentMetrics.throughput, "/s"))), pipelineFlows.map((flow, flowIdx) => /* @__PURE__ */ React.createElement("div", { key: flowIdx, style: {
-    width: "100%",
-    marginBottom: 28,
-    padding: "24px 28px",
-    background: "white",
-    borderRadius: 10,
-    border: "1px solid #E5E7EB",
-    boxSizing: "border-box"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 16, textTransform: "capitalize" } }, flow.type, " Pipeline"), /* @__PURE__ */ React.createElement("div", { style: { width: "100%", overflowX: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: {
-    display: "grid",
-    gridTemplateColumns: "minmax(220px, 1fr) 48px minmax(220px, 1fr) 48px minmax(220px, 1fr)",
-    alignItems: "start",
-    gap: 16,
-    width: "100%",
-    minWidth: 840
-  } }, /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderReceiversColumn(flow.receivers, `RECEIVERS (${flow.receivers.length})`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector(`${flow.receivers.join(" \u2022 ") || "Receivers"} \u2192 ${flow.processors.join(" \u2022 ") || "Processors"}`)), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderProcessorsColumn(flow.processors, `PROCESSORS (${flow.processors.length})`, { showOrder: true, showBandwidth: true })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "center" } }, renderHorizontalConnector(`${flow.processors.join(" \u2022 ") || "Processors"} \u2192 ${flow.exporters.join(" \u2022 ") || "Exporters"}`)), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, renderExportersColumn(flow.exporters, `EXPORTERS (${flow.exporters.length})`)))))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: "#111827", marginBottom: 12 } }, "Pipeline Logs & Errors"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 } }, /* @__PURE__ */ React.createElement("div", { style: {
-    padding: 16,
-    background: "white",
-    borderRadius: 8,
-    border: "1px solid #E5E7EB",
-    minHeight: 220,
-    display: "flex",
-    flexDirection: "column"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 10 } }, "Live Logs"), pipelineLogs.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12, maxHeight: 260, overflowY: "auto" } }, pipelineLogs.map((entry, idx) => /* @__PURE__ */ React.createElement("div", { key: `pipeline-log-${idx}`, style: { borderBottom: "1px solid #F3F4F6", paddingBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#1F2937", textTransform: "uppercase" } }, String(entry?.type || entry?.signal || entry?.channel || "log")), /* @__PURE__ */ React.createElement("span", null, formatLogTimestamp(entry))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#111827" } }, formatLogMessage(entry)), entry?.level && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#6B7280", marginTop: 4 } }, "Level: ", entry.level)))) : /* @__PURE__ */ React.createElement("div", { style: { color: "#9CA3AF", fontSize: 12 } }, "No logs have been streamed from this pipeline yet.")), /* @__PURE__ */ React.createElement("div", { style: {
-    padding: 16,
-    background: "#FEF2F2",
-    borderRadius: 8,
-    border: "1px solid #FECACA",
-    minHeight: 220,
-    display: "flex",
-    flexDirection: "column"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#B91C1C", marginBottom: 10 } }, "Error Feed"), pipelineErrors.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12, maxHeight: 260, overflowY: "auto" } }, pipelineErrors.map((entry, idx) => /* @__PURE__ */ React.createElement("div", { key: `pipeline-error-${idx}`, style: {
-    padding: 12,
-    background: "#FEE2E2",
-    borderRadius: 6,
-    border: "1px solid #FCA5A5"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 600, color: "#B91C1C" } }, /* @__PURE__ */ React.createElement("span", null, String(entry?.level || entry?.type || "error").toUpperCase()), /* @__PURE__ */ React.createElement("span", null, formatLogTimestamp(entry))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#7F1D1D", marginTop: 4 } }, formatLogMessage(entry)), entry?.source && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 4 } }, "source: ", entry.source)))) : /* @__PURE__ */ React.createElement("div", { style: { color: "#B91C1C", fontSize: 12 } }, "All clear \u2014 no pipeline errors reported."))))));
-}, (prevProps, nextProps) => {
-  const configSame = prevProps.config === nextProps.config;
-  const pipelinesSame = JSON.stringify(prevProps.pipelines) === JSON.stringify(nextProps.pipelines);
-  const telemetrySame = JSON.stringify(prevProps.telemetry) === JSON.stringify(nextProps.telemetry);
-  return configSame && pipelinesSame && telemetrySame;
+      },
+      "Collector logs and error feeds are not streamed through OpAMP yet. Use your existing logging/observability tooling (for example,",
+      /* @__PURE__ */ React.createElement("code", null, "kubectl logs"),
+      " or a centralised log store) to review collector output."
+    )
+  ));
 });
 function MonitoringSection({ agents, bridges }) {
   const [selectedAgentUID, setSelectedAgentUID] = useState("");
@@ -4686,6 +4796,23 @@ function MonitoringSection({ agents, bridges }) {
   ];
   const onlineAgents = allCollectors.filter((a) => a.status === "online");
   const totalAgents = allCollectors.length;
+  const resolvedAgentCaps = useMemo(() => {
+    if (monitoringData?.agent?.agent?.capabilities) {
+      return monitoringData.agent.agent.capabilities;
+    }
+    if (monitoringData?.agent?.capabilities) {
+      return monitoringData.agent.capabilities;
+    }
+    const fallback = agents.find((a) => a.agentUid === selectedAgentUID);
+    return fallback?.capabilities || void 0;
+  }, [monitoringData, agents, selectedAgentUID]);
+  const healthCapability = resolvedAgentCaps?.reports_health;
+  const logsCapability = resolvedAgentCaps?.reports_own_logs;
+  const supportsHealthReports = healthCapability === void 0 || healthCapability === true;
+  const supportsOwnLogs = logsCapability === void 0 || logsCapability === true;
+  const telemetryLogs = Array.isArray(monitoringData?.telemetry) ? monitoringData.telemetry.filter(
+    (item) => String(item?.type || item?.signal || item?.category || "").toLowerCase().includes("log")
+  ) : [];
   const currentConfig = monitoringData?.currentConfig || null;
   const hasCurrentConfigLoaded = Boolean(currentConfig && (currentConfig.hasAgentConfig || currentConfig.hasConfig));
   const pipelineConfigValue = currentConfig ? currentConfig.agentConfig || currentConfig.config : "";
@@ -4906,7 +5033,7 @@ function MonitoringSection({ agents, bridges }) {
     background: "#FEF3C7",
     borderRadius: 6,
     border: "1px solid #FCD34D"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "\u{1F3E5} Agent Health Status"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#92400E" } }, "Health data not yet reported by agent. The agent may not be sending OpAMP health messages yet.")), monitoringData.pipelines && monitoringData.pipelines.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827", marginBottom: 8 } }, "\u{1F3E5} Agent Health Status"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#92400E", lineHeight: 1.5 } }, supportsHealthReports ? "Health data has not been reported yet. The agent might need a few moments after connecting before it emits OpAMP health messages." : "This agent reported reports_health = false, so the OpAMP server cannot display health data for it."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, marginTop: 6 } }, /* @__PURE__ */ React.createElement("a", { href: "https://opentelemetry.io/docs/specs/opamp/protocol/#health-reporting", target: "_blank", rel: "noopener noreferrer", style: { color: "#B45309", textDecoration: "underline" } }, "Learn how OpAMP health reporting works"))), monitoringData.pipelines && monitoringData.pipelines.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
     padding: 16,
     background: "#F9FAFB",
     borderRadius: 6,
@@ -4923,7 +5050,12 @@ function MonitoringSection({ agents, bridges }) {
     background: pipeline.status === "healthy" ? "#D1FAE5" : pipeline.status === "degraded" ? "#FEF3C7" : "#FEE2E2",
     color: pipeline.status === "healthy" ? "#065F46" : pipeline.status === "degraded" ? "#92400E" : "#991B1B",
     fontWeight: 600
-  } }, pipeline.status)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Type: ", pipeline.type), pipeline.error_message && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#991B1B", marginTop: 4, fontFamily: "monospace" } }, "Error: ", pipeline.error_message), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 4 } }, "Updated: ", pipeline.last_updated ? new Date(pipeline.last_updated).toLocaleString() : "Never"))))), monitoringData.telemetry && monitoringData.telemetry.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, pipeline.status)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Type: ", pipeline.type), pipeline.error_message && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#991B1B", marginTop: 4, fontFamily: "monospace" } }, "Error: ", pipeline.error_message), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginTop: 4 } }, "Updated: ", pipeline.last_updated ? new Date(pipeline.last_updated).toLocaleString() : "Never"))))), monitoringData.telemetry && /* @__PURE__ */ React.createElement("div", { style: {
+    padding: 16,
+    background: "#F9FAFB",
+    borderRadius: 6,
+    border: "1px solid #E5E7EB"
+  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827" } }, "\u{1F4DC} Collector Telemetry Logs")), telemetryLogs.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" } }, telemetryLogs.map((entry, idx) => /* @__PURE__ */ React.createElement("div", { key: `telemetry-log-${idx}`, style: { padding: 10, background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6B7280", marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#0F172A" } }, entry.level?.toUpperCase() || entry.type || "log"), /* @__PURE__ */ React.createElement("span", null, entry.reported_at ? new Date(entry.reported_at).toLocaleString() : "")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#111827", whiteSpace: "pre-wrap", wordBreak: "break-word" } }, entry.message || entry.description || entry.error || JSON.stringify(entry.data || entry))))) : /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", lineHeight: 1.6 } }, supportsOwnLogs ? "No logs have been reported through OpAMP telemetry yet." : "This agent reported reports_own_logs = false, so it will not stream logs through OpAMP. Use your platform (e.g., kubectl logs) to inspect collector logs.")), monitoringData.telemetry && monitoringData.telemetry.length > 0 && /* @__PURE__ */ React.createElement("div", { style: {
     width: "100%",
     padding: 16,
     background: "#F9FAFB",
@@ -5058,7 +5190,7 @@ function MonitoringSection({ agents, bridges }) {
         background: "#9CA3AF"
       } }), /* @__PURE__ */ React.createElement("span", null, "Unknown"));
     }
-  })())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Agent Version"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: "#111827", fontFamily: "monospace" } }, (monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== "unknown" ? monitoringData.agent?.agent?.version || monitoringData.agent?.version : "Not reported")), (monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#111827" } }, new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Current Config"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: hasCurrentConfigLoaded ? "#10B981" : "#EF4444" } }, hasCurrentConfigLoaded ? "\u2713 Loaded" : "\u2717 Not Available")))), /* @__PURE__ */ React.createElement("div", { style: {
+  })())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Agent Version"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: "#111827", fontFamily: "monospace" } }, (monitoringData.agent?.agent?.version || monitoringData.agent?.version) && (monitoringData.agent?.agent?.version || monitoringData.agent?.version) !== "unknown" ? monitoringData.agent?.agent?.version || monitoringData.agent?.version : "Not reported")), (monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen) && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#111827" } }, new Date(monitoringData.agent?.agent?.lastSeen || monitoringData.agent?.lastSeen).toLocaleString())), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "Current Config"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 500, color: hasCurrentConfigLoaded ? "#10B981" : "#EF4444" } }, hasCurrentConfigLoaded ? "\u2713 Loaded" : "\u2717 Not Available")), resolvedAgentCaps && Object.keys(resolvedAgentCaps).length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginBottom: 4 } }, "OpAMP Capabilities"), /* @__PURE__ */ React.createElement(CapabilityBadges, { capabilities: resolvedAgentCaps, limit: 4 })))), /* @__PURE__ */ React.createElement("div", { style: {
     padding: 16,
     background: "#F9FAFB",
     borderRadius: 6,
@@ -5218,7 +5350,7 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
           setIsAdmin(isAdminValue);
           console.log("User role from agents endpoint:", { isAdmin: isAdminValue, role: response.userRole.role });
         } else {
-          console.warn("User role not found in response, defaulting to admin for testing");
+          console.warn("User role not found in response, defaulting to admin for testing purposes");
           setIsAdmin(true);
         }
       }
@@ -5434,9 +5566,11 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
       setSelectedSignals(signalsInConfig);
       setGeneratedConfig(yamlConfig);
       setExpandedComponents(allKeys);
+      return true;
     } catch (err) {
       console.error("Failed to parse config YAML:", err);
       alert("Failed to parse current configuration: " + (err.message || "Unknown error"));
+      return false;
     }
   };
   const loadConfigDiff = async (configId, compareId) => {
@@ -5682,6 +5816,73 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
       traces: available.traces && prev.traces
     }));
   }, [receivers, processors, exporters]);
+  const isValidHostPort = (value) => {
+    if (!value) {
+      return false;
+    }
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      return false;
+    }
+    if (trimmed.startsWith("[")) {
+      const closing = trimmed.indexOf("]");
+      if (closing > 0) {
+        const portPart = trimmed.slice(closing + 1);
+        if (portPart.startsWith(":")) {
+          const port2 = Number(portPart.slice(1));
+          return Number.isInteger(port2) && port2 > 0 && port2 <= 65535;
+        }
+      }
+      return false;
+    }
+    const parts = trimmed.split(":");
+    if (parts.length !== 2) {
+      return false;
+    }
+    const port = Number(parts[1]);
+    return parts[0].length > 0 && Number.isInteger(port) && port > 0 && port <= 65535;
+  };
+  const isValidHttpUrl = (value) => {
+    if (!value) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  };
+  const validateCRDSettings = (opts) => {
+    const errors = [];
+    if (!opts.includeDeploymentSettings) {
+      return errors;
+    }
+    if (!(opts.isNewCollector || opts.canModifyDeploymentSettings)) {
+      return errors;
+    }
+    const settings = opts.crdSettings;
+    if (!settings.name?.trim()) {
+      errors.push("CRD name is required when deployment settings are enabled.");
+    }
+    if (!settings.namespace?.trim()) {
+      errors.push("CRD namespace is required when deployment settings are enabled.");
+    }
+    if (!settings.image?.trim()) {
+      errors.push("Collector image is required in deployment settings.");
+    }
+    if ((settings.mode === "deployment" || settings.mode === "statefulset") && (!settings.replicas || settings.replicas < 1)) {
+      errors.push("Replicas must be at least 1 for deployment/statefulset modes.");
+    }
+    const cpuReq = settings.resources.requests.cpu?.trim();
+    const memReq = settings.resources.requests.memory?.trim();
+    const cpuLimit = settings.resources.limits.cpu?.trim();
+    const memLimit = settings.resources.limits.memory?.trim();
+    if (!cpuReq || !memReq || !cpuLimit || !memLimit) {
+      errors.push("CPU/Memory requests and limits must be provided in deployment settings.");
+    }
+    return errors;
+  };
   const generateConfig = async () => {
     if (receivers.length === 0) {
       alert("Please add at least one receiver");
@@ -5706,6 +5907,19 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
       if (!r.type || r.type === "") {
         invalidComponents.push(`Receiver ${i + 1} (${r.name || "unnamed"}) is missing type`);
       }
+      if (r.type === "otlp") {
+        const grpcEndpoint = r.protocols?.grpc?.endpoint?.trim();
+        const httpEndpoint = r.protocols?.http?.endpoint?.trim();
+        if (!grpcEndpoint && !httpEndpoint) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || "otlp"}) requires at least one endpoint (gRPC and/or HTTP).`);
+        }
+        if (grpcEndpoint && !isValidHostPort(grpcEndpoint)) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || "otlp"}) has invalid gRPC endpoint "${grpcEndpoint}". Use host:port (e.g., 0.0.0.0:4317).`);
+        }
+        if (httpEndpoint && !isValidHostPort(httpEndpoint)) {
+          invalidComponents.push(`Receiver ${i + 1} (${r.name || "otlp"}) has invalid HTTP endpoint "${httpEndpoint}". Use host:port (e.g., 0.0.0.0:4318).`);
+        }
+      }
     });
     processors.forEach((p, i) => {
       if (!p.type || p.type === "") {
@@ -5719,15 +5933,30 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
       if (!e.type || e.type === "") {
         invalidComponents.push(`Exporter ${i + 1} (${e.name || "unnamed"}) is missing type`);
       }
+      if (e.type === "otlp") {
+        const endpoint = e.endpoint?.trim();
+        if (!endpoint) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || "otlp"}) requires an endpoint (http://host:port or host:port).`);
+        } else if (!isValidHttpUrl(endpoint) && !isValidHostPort(endpoint)) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || "otlp"}) endpoint "${endpoint}" is invalid. Use http(s) URL or host:port for gRPC.`);
+        }
+      }
     });
+    const selectedAgent = agents.find((a) => a.agentUid === selectedAgentUID);
+    const isDaemonSet = selectedAgent?.labels?.["k8s.crd_name"]?.toLowerCase().includes("daemonset") || selectedAgent?.name?.toLowerCase().includes("daemonset");
+    const isNewCollector = Boolean(crdSettings.name && crdSettings.namespace);
+    const canModifyDeploymentSettings = Boolean(!isDaemonSet && selectedAgentUID);
+    const crdValidationErrors = validateCRDSettings({
+      includeDeploymentSettings,
+      crdSettings,
+      isNewCollector,
+      canModifyDeploymentSettings
+    });
+    invalidComponents.push(...crdValidationErrors);
     if (invalidComponents.length > 0) {
       alert("Invalid configuration:\n\n" + invalidComponents.join("\n") + "\n\nPlease ensure all components have a valid type.");
       return;
     }
-    const selectedAgent = agents.find((a) => a.agentUid === selectedAgentUID);
-    const isDaemonSet = selectedAgent?.labels?.["k8s.crd_name"]?.toLowerCase().includes("daemonset") || selectedAgent?.name?.toLowerCase().includes("daemonset");
-    const isNewCollector = crdSettings.name && crdSettings.namespace;
-    const canModifyDeploymentSettings = !isDaemonSet && selectedAgentUID;
     try {
       const response = await backendSrv.post(
         "/api/plugins/otel-collector-agent-fleet-management/resources/config-generator",
@@ -5755,7 +5984,11 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
           } : void 0
         }
       );
-      setGeneratedConfig(response.config || "");
+      const generated = typeof response.config === "string" ? response.config : "";
+      if (!generated.trim()) {
+        alert("The config generator did not return any YAML. Please verify that you have at least one receiver and exporter configured.");
+      }
+      setGeneratedConfig(generated);
     } catch (err) {
       alert("Failed to generate config: " + (err.message || "Unknown error"));
     }
@@ -5767,18 +6000,36 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         backendSrv.get("/api/plugins/otel-collector-agent-fleet-management/resources/component-types?category=processor"),
         backendSrv.get("/api/plugins/otel-collector-agent-fleet-management/resources/component-types?category=exporter")
       ]);
-      setReceiverTypes((receiversRes.items || []).map((t) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      setProcessorTypes((processorsRes.items || []).map((t) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      setExporterTypes((exportersRes.items || []).map((t) => ({ value: t.type, label: t.label, config: t.config || {}, description: t.description, isSystem: t.isSystem, isCustom: t.isCustom, id: t.id })));
-      if (!receiverTypes.find((t) => t.value === "custom")) {
-        setReceiverTypes((prev) => [...prev, { value: "custom", label: "Custom (YAML)", config: {}, isSystem: false, isCustom: true }]);
-      }
-      if (!processorTypes.find((t) => t.value === "custom")) {
-        setProcessorTypes((prev) => [...prev, { value: "custom", label: "Custom (YAML)", config: {}, isSystem: false, isCustom: true }]);
-      }
-      if (!exporterTypes.find((t) => t.value === "custom")) {
-        setExporterTypes((prev) => [...prev, { value: "custom", label: "Custom (YAML)", config: {}, isSystem: false, isCustom: true }]);
-      }
+      const receiversList = (receiversRes.items || []).map((t) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id
+      }));
+      const processorsList = (processorsRes.items || []).map((t) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id
+      }));
+      const exportersList = (exportersRes.items || []).map((t) => ({
+        value: t.type,
+        label: t.label,
+        config: t.config || {},
+        description: t.description,
+        isSystem: t.isSystem,
+        isCustom: t.isCustom,
+        id: t.id
+      }));
+      setReceiverTypes(mergeComponentTypeLists(receiversList, builtinReceiverTemplates));
+      setProcessorTypes(mergeComponentTypeLists(processorsList, builtinProcessorTemplates));
+      setExporterTypes(mergeComponentTypeLists(exportersList, builtinExporterTemplates));
     } catch (err) {
       console.error("Failed to load component types:", err);
     }
@@ -6142,11 +6393,16 @@ headers:
     "button",
     {
       onClick: () => {
-        setUseRawYAML(false);
         if (useRawYAML) {
-          setGeneratedConfig("");
-          setRawYAMLConfig("");
+          const source = rawYAMLConfig.trim() || generatedConfig;
+          if (source) {
+            const ok = parseConfigYAML(source);
+            if (!ok) {
+              return;
+            }
+          }
         }
+        setUseRawYAML(false);
       },
       style: {
         padding: "10px 20px",
@@ -6235,7 +6491,7 @@ headers:
       return "\u26A0\uFE0F Please select at least one signal to generate a configuration.";
     }
     return `\u2139\uFE0F ${selectedCount} signal(s) selected. Only compatible signals are enabled based on your component selection.`;
-  })())), !useRawYAML && false, !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F3F4F6", borderRadius: 6, border: "1px solid #D1D5DB", color: "#4B5563", fontSize: 12 } }, "\u2139\uFE0F Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector\u2019s ", /* @__PURE__ */ React.createElement("code", null, "spec.config"), " that OpAMP can push."), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#111827" } }, "\u{1F4CD} Select Agent / Collector (Required for saving configuration)"), bridges.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: "10px 12px", background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D", fontSize: 12, color: "#92400E" } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " Bridges are management agents and cannot receive collector configurations. Only collectors are shown below."), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
+  })())), !useRawYAML && false, !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F3F4F6", borderRadius: 6, border: "1px solid #D1D5DB", color: "#4B5563", fontSize: 12 } }, "\u2139\uFE0F Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector's ", /* @__PURE__ */ React.createElement("code", null, "spec.config"), " that OpAMP can push."), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#111827" } }, "\u{1F4CD} Select Agent / Collector (Required for saving configuration)"), bridges.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: "10px 12px", background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D", fontSize: 12, color: "#92400E" } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " Bridges are management agents and cannot receive collector configurations. Only collectors are shown below."), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
     const bridgeCollectors = bridge.collectors || [];
     const isExpanded = expandedGroups.has(`config-${bridge.agentUid}`);
     if (bridgeCollectors.length === 0) {
@@ -6563,12 +6819,13 @@ service:
           alert("Please enter a YAML configuration to apply.");
           return;
         }
-        setGeneratedConfig(rawYAMLConfig.trim());
-        try {
-          parseConfigYAML(rawYAMLConfig);
+        const trimmed = rawYAMLConfig.trim();
+        const ok = parseConfigYAML(trimmed);
+        if (ok) {
+          setGeneratedConfig(trimmed);
           alert("\u2705 Applied raw YAML to the visual editor preview. Review the Generated Configuration section below.");
-        } catch (err) {
-          console.error("Failed to parse raw YAML during apply:", err);
+        } else {
+          console.warn("Raw YAML apply failed validation.");
         }
       },
       style: { padding: "8px 16px", background: "#2563EB", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }
@@ -6585,30 +6842,26 @@ service:
     "button",
     {
       onClick: generateConfig,
-      disabled: (() => {
-        const nonCustomReceivers = receivers.filter((r) => r.type && r.type !== "custom" && r.type !== "");
-        return nonCustomReceivers.length === 0;
-      })(),
       style: {
         padding: "8px 16px",
         background: (() => {
-          const nonCustomReceivers = receivers.filter((r) => r.type && r.type !== "custom" && r.type !== "");
-          return nonCustomReceivers.length === 0 ? "#D1D5DB" : "#3B82F6";
+          const configuredReceivers = receivers.filter((r) => typeof r.name === "string" && r.name.trim() !== "");
+          return configuredReceivers.length === 0 ? "#FBBF24" : "#3B82F6";
         })(),
         color: "white",
         border: "none",
         borderRadius: 6,
         cursor: (() => {
-          const nonCustomReceivers = receivers.filter((r) => r.type && r.type !== "custom" && r.type !== "");
-          return nonCustomReceivers.length === 0 ? "not-allowed" : "pointer";
+          const configuredReceivers = receivers.filter((r) => typeof r.name === "string" && r.name.trim() !== "");
+          return configuredReceivers.length === 0 ? "pointer" : "pointer";
         })(),
         fontSize: 14,
         fontWeight: 500
       },
       title: (() => {
-        const nonCustomReceivers = receivers.filter((r) => r.type && r.type !== "custom" && r.type !== "");
-        if (nonCustomReceivers.length === 0) {
-          return "Please select at least one non-custom receiver to generate configuration";
+        const configuredReceivers = receivers.filter((r) => typeof r.name === "string" && r.name.trim() !== "");
+        if (configuredReceivers.length === 0) {
+          return "No receivers configured; generated YAML will be incomplete. Click only if you plan to edit the result manually.";
         }
         return exporters.length === 0 ? "Warning: No exporters configured. Config will be incomplete." : "";
       })()
@@ -6760,6 +7013,7 @@ service:
       const syncStatus2 = configSyncStatus[version.id];
       if (syncStatus2 && version.pushedAt) {
         const remoteStatus = syncStatus2.remoteConfigStatus || "";
+        const hashMatch = syncStatus2.hashMatch;
         const hasError = syncStatus2.remoteConfigError;
         if (remoteStatus.includes("FAILED") || hasError) {
           const errorMsg = syncStatus2.remoteConfigError || "Configuration failed to apply";
