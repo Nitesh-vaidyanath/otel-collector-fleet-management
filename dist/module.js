@@ -2720,7 +2720,8 @@ var PipelineMetricsPanelView = ({
   defaultDatasourceUid = null,
   title = "Custom Metrics Panel",
   onQueriesChange,
-  onDatasourceChange
+  onDatasourceChange,
+  readOnly = false
 }) => {
   const [datasources, setDatasources] = useState([]);
   const [datasourceError, setDatasourceError] = useState(null);
@@ -2732,6 +2733,7 @@ var PipelineMetricsPanelView = ({
   const [lastRunAt, setLastRunAt] = useState(null);
   const [values, setValues] = useState({ ...EMPTY_VALUES });
   const [formattedValues, setFormattedValues] = useState({ ...EMPTY_FORMATS });
+  const autoRunRef = React.useRef(false);
   useEffect(() => {
     if (defaultQueries) {
       setQueries(defaultQueries);
@@ -2851,6 +2853,15 @@ var PipelineMetricsPanelView = ({
   const pipelineTitle = useMemo(() => {
     return `${pipelineType} pipeline`;
   }, [pipelineType]);
+  useEffect(() => {
+    autoRunRef.current = false;
+  }, [pipelineType, selectedDatasource?.uid]);
+  useEffect(() => {
+    if (readOnly && selectedDatasource && !autoRunRef.current) {
+      autoRunRef.current = true;
+      runQueries();
+    }
+  }, [readOnly, selectedDatasource, runQueries]);
   return /* @__PURE__ */ React.createElement("div", { style: { width: "100%" } }, /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -2881,7 +2892,24 @@ var PipelineMetricsPanelView = ({
       " pipeline. Until the OpAMP bridge emits real usage metrics, this is the recommended workaround.",
       datasourceError && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, color: "#B45309" } }, datasourceError)
     ),
-    (!allowDisable || enabled) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#1F2937" } }, "Data source"), /* @__PURE__ */ React.createElement(
+    (!allowDisable || enabled) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, display: "flex", flexDirection: "column", gap: 14 } }, readOnly ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#1F2937" } }, "Data source:\xA0", /* @__PURE__ */ React.createElement("strong", null, selectedDatasource?.name || "Not configured")), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: runQueries,
+        disabled: loading || !selectedDatasource,
+        style: {
+          padding: "6px 12px",
+          borderRadius: 4,
+          border: "none",
+          background: loading ? "#CBD5F5" : "#2563EB",
+          color: "#FFFFFF",
+          fontSize: 12,
+          cursor: loading ? "not-allowed" : "pointer"
+        }
+      },
+      loading ? "Refreshing\u2026" : "Refresh metrics"
+    )) : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#1F2937" } }, "Data source"), /* @__PURE__ */ React.createElement(
       "select",
       {
         value: selectedDatasource?.id ?? "",
@@ -2915,7 +2943,7 @@ var PipelineMetricsPanelView = ({
         }
       },
       loading ? "Running\u2026" : "Run queries"
-    )), /* @__PURE__ */ React.createElement(
+    )), !readOnly && /* @__PURE__ */ React.createElement(
       "div",
       {
         style: {
@@ -3206,6 +3234,46 @@ var normalizeUrl = (rawUrl) => {
   return `${base}${urlWithoutBase}`;
 };
 var rawBackendSrv = getBackendSrv2();
+var TELEMETRY_SETTINGS_ENDPOINT = "/api/plugins/otel-collector-agent-fleet-management/resources/telemetry-settings";
+var PROM_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
+var buildDefaultMetricQueries = () => createDefaultQueries("$pipeline");
+var getDefaultTelemetrySettingsState = () => ({
+  metrics: {
+    enabled: false,
+    datasourceUid: null,
+    queries: buildDefaultMetricQueries()
+  },
+  logs: {
+    enabled: false,
+    datasourceUid: null,
+    query: ""
+  }
+});
+var normalizeTelemetrySettingsState = (incoming) => {
+  const base = getDefaultTelemetrySettingsState();
+  if (!incoming || typeof incoming !== "object") {
+    return base;
+  }
+  const next = {
+    metrics: {
+      enabled: Boolean(incoming.metrics?.enabled),
+      datasourceUid: incoming.metrics?.datasource_uid || incoming.metrics?.datasourceUid || null,
+      queries: buildDefaultMetricQueries()
+    },
+    logs: {
+      enabled: Boolean(incoming.logs?.enabled),
+      datasourceUid: incoming.logs?.datasource_uid || incoming.logs?.datasourceUid || null,
+      query: typeof incoming.logs?.query === "string" ? incoming.logs?.query : ""
+    }
+  };
+  if (incoming.metrics?.queries && typeof incoming.metrics.queries === "object") {
+    next.metrics.queries = {
+      ...next.metrics.queries,
+      ...incoming.metrics.queries
+    };
+  }
+  return next;
+};
 var capabilityOrder = [
   "accepts_remote_config",
   "reports_effective_config",
@@ -3719,6 +3787,12 @@ var App = () => {
   const [agentActivityLog, setAgentActivityLog] = useState2([]);
   const [grafanaOrgName, setGrafanaOrgName] = useState2("");
   const [opampConnectionUrl, setOpampConnectionUrl] = useState2(DEFAULT_OPAMP_WS);
+  const [telemetrySettings, setTelemetrySettings] = useState2(() => getDefaultTelemetrySettingsState());
+  const [telemetryLoading, setTelemetryLoading] = useState2(true);
+  const [telemetrySaving, setTelemetrySaving] = useState2(false);
+  const [telemetryDrawer, setTelemetryDrawer] = useState2({ open: false, mode: "metrics", seed: 0 });
+  const [draftMetricsConfig, setDraftMetricsConfig] = useState2(() => getDefaultTelemetrySettingsState().metrics);
+  const [draftLogsConfig, setDraftLogsConfig] = useState2(() => getDefaultTelemetrySettingsState().logs);
   const [isAdmin, setIsAdmin] = useState2(false);
   const [userContext, setUserContext] = useState2({
     name: "",
@@ -3862,6 +3936,92 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       console.error("Failed to load OpAMP settings:", err);
     }
   }, []);
+  const loadTelemetrySettings2 = useCallback2(async () => {
+    try {
+      const response = await backendSrv.get(TELEMETRY_SETTINGS_ENDPOINT);
+      if (response?.settings) {
+        setTelemetrySettings(normalizeTelemetrySettingsState(response.settings));
+      } else {
+        setTelemetrySettings(getDefaultTelemetrySettingsState());
+      }
+    } catch (err) {
+      console.error("Failed to load telemetry settings:", err);
+      setTelemetrySettings(getDefaultTelemetrySettingsState());
+    } finally {
+      setTelemetryLoading(false);
+    }
+  }, []);
+  const persistTelemetrySettings = useCallback2(async (next) => {
+    setTelemetrySettings(next);
+    setTelemetrySaving(true);
+    try {
+      await backendSrv.post(TELEMETRY_SETTINGS_ENDPOINT, next);
+    } catch (err) {
+      console.error("Failed to save telemetry settings:", err);
+    } finally {
+      setTelemetrySaving(false);
+    }
+  }, []);
+  const openTelemetryConfigurator = useCallback2((mode) => {
+    setTelemetryDrawer({ open: true, mode, seed: Date.now() });
+    setDraftMetricsConfig({
+      ...telemetrySettings.metrics,
+      queries: { ...telemetrySettings.metrics.queries }
+    });
+    setDraftLogsConfig({ ...telemetrySettings.logs });
+  }, [telemetrySettings.metrics, telemetrySettings.logs]);
+  const closeTelemetryConfigurator = useCallback2(() => {
+    setTelemetryDrawer((prev) => ({ ...prev, open: false }));
+  }, []);
+  const handleMetricsToggle = useCallback2((nextEnabled) => {
+    const next = {
+      ...telemetrySettings,
+      metrics: {
+        ...telemetrySettings.metrics,
+        enabled: nextEnabled
+      }
+    };
+    persistTelemetrySettings(next);
+    if (nextEnabled && !telemetrySettings.metrics.datasourceUid) {
+      openTelemetryConfigurator("metrics");
+    }
+  }, [persistTelemetrySettings, telemetrySettings, openTelemetryConfigurator]);
+  const handleLogsToggle = useCallback2((nextEnabled) => {
+    const next = {
+      ...telemetrySettings,
+      logs: {
+        ...telemetrySettings.logs,
+        enabled: nextEnabled
+      }
+    };
+    persistTelemetrySettings(next);
+    if (nextEnabled && !telemetrySettings.logs.datasourceUid) {
+      openTelemetryConfigurator("logs");
+    }
+  }, [persistTelemetrySettings, telemetrySettings, openTelemetryConfigurator]);
+  const handleTelemetryConfigSave = useCallback2((mode) => {
+    if (mode === "metrics") {
+      const next = {
+        ...telemetrySettings,
+        metrics: {
+          ...draftMetricsConfig,
+          queries: { ...draftMetricsConfig.queries },
+          enabled: true
+        }
+      };
+      persistTelemetrySettings(next);
+    } else {
+      const next = {
+        ...telemetrySettings,
+        logs: {
+          ...draftLogsConfig,
+          enabled: true
+        }
+      };
+      persistTelemetrySettings(next);
+    }
+    closeTelemetryConfigurator();
+  }, [telemetrySettings, draftMetricsConfig, draftLogsConfig, persistTelemetrySettings, closeTelemetryConfigurator]);
   const loadUserContext = useCallback2(async () => {
     try {
       const response = await backendSrv.get("/user-role");
@@ -4666,7 +4826,31 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       bridges,
       onPushConfig: handlePushConfig
     }
-  ), activeTab === "monitoring" && /* @__PURE__ */ React2.createElement(MonitoringSection, { agents, bridges })), showDetailsPanel && selectedAgent && /* @__PURE__ */ React2.createElement("div", { style: {
+  ), activeTab === "monitoring" && /* @__PURE__ */ React2.createElement(
+    MonitoringSection,
+    {
+      agents,
+      bridges,
+      telemetrySettings,
+      telemetryLoading,
+      onToggleMetrics: handleMetricsToggle,
+      onToggleLogs: handleLogsToggle,
+      onConfigureTelemetry: openTelemetryConfigurator
+    }
+  )), /* @__PURE__ */ React2.createElement(
+    TelemetryConfigDrawer,
+    {
+      open: telemetryDrawer.open,
+      mode: telemetryDrawer.mode,
+      metricsConfig: draftMetricsConfig,
+      logsConfig: draftLogsConfig,
+      onMetricsChange: setDraftMetricsConfig,
+      onLogsChange: setDraftLogsConfig,
+      onSave: handleTelemetryConfigSave,
+      onClose: closeTelemetryConfigurator,
+      saving: telemetrySaving
+    }
+  ), showDetailsPanel && selectedAgent && /* @__PURE__ */ React2.createElement("div", { style: {
     position: "fixed",
     top: 0,
     right: 0,
@@ -5082,7 +5266,9 @@ var PipelineFlowDiagram = React2.memo(function PipelineFlowDiagram2({
   telemetry,
   agentName,
   agentUid,
-  orgName
+  orgName,
+  metricsSettings,
+  onConfigureMetrics
 }) {
   const pipelineFlows = useMemo2(() => {
     const flows2 = [];
@@ -5203,16 +5389,54 @@ var PipelineFlowDiagram = React2.memo(function PipelineFlowDiagram2({
         border: "#BFDBFE",
         color: "#1D4ED8"
       })),
-      /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 16 } }, /* @__PURE__ */ React2.createElement(
+      /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 16 } }, metricsSettings?.enabled && metricsSettings.datasourceUid ? /* @__PURE__ */ React2.createElement(
         PipelineMetricsPanelView,
         {
+          key: `metrics-${flow.type}-${metricsSettings.datasourceUid}`,
           pipelineType: flow.type,
           agentUid,
           agentName,
           orgName,
-          allowDisable: true,
-          initialEnabled: false
+          allowDisable: false,
+          defaultQueries: metricsSettings.queries && Object.keys(metricsSettings.queries).length > 0 ? metricsSettings.queries : createDefaultQueries(flow.type, agentUid),
+          defaultDatasourceUid: metricsSettings.datasourceUid,
+          readOnly: true
         }
+      ) : /* @__PURE__ */ React2.createElement(
+        "div",
+        {
+          style: {
+            padding: 16,
+            borderRadius: 8,
+            border: "1px dashed #CBD5F5",
+            background: "#F8FAFC",
+            fontSize: 12,
+            color: "#475569",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap"
+          }
+        },
+        /* @__PURE__ */ React2.createElement("span", null, "Metrics overlays are disabled for this pipeline. Enable them to run Prometheus queries against your collector metrics."),
+        /* @__PURE__ */ React2.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: onConfigureMetrics,
+            style: {
+              padding: "6px 12px",
+              borderRadius: 4,
+              border: "none",
+              background: "#2563EB",
+              color: "#FFFFFF",
+              fontSize: 12,
+              cursor: "pointer"
+            }
+          },
+          "Configure metrics"
+        )
       ))
     )),
     /* @__PURE__ */ React2.createElement(
@@ -5234,11 +5458,21 @@ var PipelineFlowDiagram = React2.memo(function PipelineFlowDiagram2({
     )
   ));
 });
-function MonitoringSection({ agents, bridges }) {
+function MonitoringSection({
+  agents,
+  bridges,
+  telemetrySettings,
+  telemetryLoading,
+  onToggleMetrics,
+  onToggleLogs,
+  onConfigureTelemetry
+}) {
   const [selectedAgentUID, setSelectedAgentUID] = useState2("");
   const [monitoringData, setMonitoringData] = useState2(null);
   const [loading, setLoading] = useState2(false);
   const [expandedGroups, setExpandedGroups] = useState2(/* @__PURE__ */ new Set());
+  const metricsSettings = telemetrySettings.metrics;
+  const logsSettings = telemetrySettings.logs;
   useEffect2(() => {
     if (selectedAgentUID) {
       const isBridge = bridges.some((b) => b.agentUid === selectedAgentUID);
@@ -5771,7 +6005,27 @@ function MonitoringSection({ agents, bridges }) {
     width: "100%",
     maxWidth: "100%",
     overflow: "hidden"
-  } }, pipelineConfigString || "No config")))), hasPipelineDiagramData ? /* @__PURE__ */ React2.createElement("div", { style: { width: "100%", display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, "Pipeline Monitoring"), /* @__PURE__ */ React2.createElement(
+  } }, pipelineConfigString || "No config")))), hasPipelineDiagramData ? /* @__PURE__ */ React2.createElement("div", { style: { width: "100%", display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, "Pipeline Monitoring"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12 } }, /* @__PURE__ */ React2.createElement(
+    TelemetryToggleCard,
+    {
+      title: "Metrics overlays",
+      description: "Use Prometheus/Mimir queries to replace synthetic gauges.",
+      enabled: metricsSettings.enabled,
+      disabled: telemetryLoading,
+      onToggle: () => onToggleMetrics(!metricsSettings.enabled),
+      onConfigure: () => onConfigureTelemetry("metrics")
+    }
+  ), /* @__PURE__ */ React2.createElement(
+    TelemetryToggleCard,
+    {
+      title: "Log snapshots",
+      description: "Run Loki queries and display recent collector logs.",
+      enabled: logsSettings.enabled,
+      disabled: telemetryLoading,
+      onToggle: () => onToggleLogs(!logsSettings.enabled),
+      onConfigure: () => onConfigureTelemetry("logs")
+    }
+  )), /* @__PURE__ */ React2.createElement(
     PipelineFlowDiagram,
     {
       config: pipelineConfigString,
@@ -5779,9 +6033,34 @@ function MonitoringSection({ agents, bridges }) {
       telemetry: monitoringData.telemetry || [],
       agentName: monitoringData?.agent?.name || monitoringData?.agent?.agentUid,
       agentUid: monitoringData?.agent?.agentUid,
-      orgName: monitoringData?.agent?.orgName
+      orgName: monitoringData?.agent?.orgName,
+      metricsSettings,
+      onConfigureMetrics: () => onConfigureTelemetry("metrics")
     }
-  )) : /* @__PURE__ */ React2.createElement("div", { style: {
+  ), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 16 } }, logsSettings.enabled && logsSettings.datasourceUid ? /* @__PURE__ */ React2.createElement(
+    LogsPanelView,
+    {
+      datasourceUid: logsSettings.datasourceUid,
+      queryTemplate: logsSettings.query,
+      agentUid: monitoringData?.agent?.agentUid,
+      agentName: monitoringData?.agent?.name,
+      orgName: monitoringData?.agent?.orgName,
+      onConfigure: () => onConfigureTelemetry("logs")
+    }
+  ) : /* @__PURE__ */ React2.createElement(
+    "div",
+    {
+      style: {
+        padding: 16,
+        borderRadius: 8,
+        border: "1px dashed #CBD5F5",
+        background: "#F8FAFC",
+        color: "#475569",
+        fontSize: 12
+      }
+    },
+    "Logs are disabled for this collector. Use the toggle above to enable them and configure a Loki data source."
+  ))) : /* @__PURE__ */ React2.createElement("div", { style: {
     width: "100%",
     padding: 16,
     background: "#FEF3C7",
@@ -5896,6 +6175,9 @@ function ConfigGenerator({ agents, bridges, onPushConfig }) {
     loadTemplates();
     fetchUserRole();
   }, []);
+  useEffect2(() => {
+    loadTelemetrySettings();
+  }, [loadTelemetrySettings]);
   const fetchUserRole = async () => {
     try {
       try {
@@ -8325,6 +8607,372 @@ ${statusInfo.join("\n")}
     setSaveDescription("");
   }, style: { padding: "8px 16px", background: "#6B7280", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React2.createElement("button", { onClick: saveTemplate, style: { padding: "8px 16px", background: "#3B82F6", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Save")))));
 }
+var TelemetryToggleCard = ({ title, description, enabled, disabled, onToggle, onConfigure }) => {
+  return /* @__PURE__ */ React2.createElement(
+    "div",
+    {
+      style: {
+        flex: "1 1 260px",
+        minWidth: 240,
+        padding: 16,
+        borderRadius: 10,
+        border: "1px solid #E5E7EB",
+        background: enabled ? "#EEF2FF" : "#FFFFFF",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10
+      }
+    },
+    /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827" } }, title),
+    /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#4B5563", lineHeight: 1.5 } }, description),
+    /* @__PURE__ */ React2.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("input", { type: "checkbox", checked: enabled, disabled, onChange: onToggle }), enabled ? "Enabled" : "Disabled"),
+    /* @__PURE__ */ React2.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: onConfigure,
+        style: {
+          marginTop: "auto",
+          padding: "6px 10px",
+          borderRadius: 6,
+          border: "1px solid #2563EB",
+          background: enabled ? "#2563EB" : "#FFFFFF",
+          color: enabled ? "#FFFFFF" : "#2563EB",
+          fontSize: 12,
+          cursor: "pointer"
+        }
+      },
+      "Configure"
+    )
+  );
+};
+var TelemetryConfigDrawer = ({
+  open,
+  mode,
+  metricsConfig,
+  logsConfig,
+  onMetricsChange,
+  onLogsChange,
+  onSave,
+  onClose,
+  saving
+}) => {
+  const [datasources, setDatasources] = useState2([]);
+  const [loading, setLoading] = useState2(false);
+  const [error, setError] = useState2(null);
+  useEffect2(() => {
+    if (!open) {
+      setDatasources([]);
+      setError(null);
+      return;
+    }
+    let mounted = true;
+    const fetchDatasources = async () => {
+      setLoading(true);
+      try {
+        const response = await backendSrv.get("/api/datasources");
+        if (!mounted) {
+          return;
+        }
+        const filtered = Array.isArray(response) ? response.filter((item) => mode === "metrics" ? PROM_DATASOURCE_TYPES.has(item.type) : item.type === "loki") : [];
+        setDatasources(
+          filtered.map((item) => ({
+            id: item.id,
+            uid: item.uid,
+            name: item.name,
+            type: item.type
+          }))
+        );
+        setError(filtered.length === 0 ? "No compatible data sources found." : null);
+      } catch (err) {
+        if (!mounted) {
+          return;
+        }
+        setError(err?.message || "Failed to load data sources.");
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+    fetchDatasources();
+    return () => {
+      mounted = false;
+    };
+  }, [open, mode]);
+  if (!open) {
+    return null;
+  }
+  const metricsQueries = metricsConfig.queries || buildDefaultMetricQueries();
+  return /* @__PURE__ */ React2.createElement(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        background: "rgba(15,23,42,0.4)",
+        zIndex: 9999,
+        display: "flex",
+        justifyContent: "flex-end"
+      }
+    },
+    /* @__PURE__ */ React2.createElement(
+      "div",
+      {
+        style: {
+          width: 420,
+          maxWidth: "100%",
+          height: "100%",
+          background: "#FFFFFF",
+          boxShadow: "-12px 0 24px rgba(15,23,42,0.2)",
+          display: "flex",
+          flexDirection: "column"
+        }
+      },
+      /* @__PURE__ */ React2.createElement("div", { style: { padding: 16, borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600 } }, mode === "metrics" ? "Configure Metrics" : "Configure Logs"), /* @__PURE__ */ React2.createElement(
+        "button",
+        {
+          type: "button",
+          onClick: onClose,
+          style: { border: "none", background: "transparent", fontSize: 20, cursor: "pointer", lineHeight: 1 }
+        },
+        "\xD7"
+      )),
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 } }, mode === "metrics" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Prometheus/Mimir datasource and adjust the default queries. Use placeholders like ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), " or ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), "."), /* @__PURE__ */ React2.createElement("label", { style: { fontSize: 12, color: "#1F2937", display: "flex", flexDirection: "column", gap: 6 } }, "Data source", /* @__PURE__ */ React2.createElement(
+        "select",
+        {
+          value: metricsConfig.datasourceUid ?? "",
+          onChange: (e) => onMetricsChange({ ...metricsConfig, datasourceUid: e.target.value || null }),
+          disabled: loading || datasources.length === 0,
+          style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
+        },
+        /* @__PURE__ */ React2.createElement("option", { value: "" }, "Select data source"),
+        datasources.map((ds) => /* @__PURE__ */ React2.createElement("option", { key: ds.uid, value: ds.uid }, ds.name, " (", ds.type, ")"))
+      )), Object.keys(metricsQueries).map((key) => /* @__PURE__ */ React2.createElement("label", { key, style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, key.toUpperCase(), " query", /* @__PURE__ */ React2.createElement(
+        "textarea",
+        {
+          value: metricsQueries[key],
+          rows: 5,
+          onChange: (e) => onMetricsChange({
+            ...metricsConfig,
+            queries: { ...metricsQueries, [key]: e.target.value }
+          }),
+          style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
+        }
+      )))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Loki datasource and supply a query template. Use placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$collector_name"), ", or ", /* @__PURE__ */ React2.createElement("code", null, "$org_name"), "."), /* @__PURE__ */ React2.createElement("label", { style: { fontSize: 12, color: "#1F2937", display: "flex", flexDirection: "column", gap: 6 } }, "Loki data source", /* @__PURE__ */ React2.createElement(
+        "select",
+        {
+          value: logsConfig.datasourceUid ?? "",
+          onChange: (e) => onLogsChange({ ...logsConfig, datasourceUid: e.target.value || null }),
+          disabled: loading || datasources.length === 0,
+          style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
+        },
+        /* @__PURE__ */ React2.createElement("option", { value: "" }, "Select data source"),
+        datasources.map((ds) => /* @__PURE__ */ React2.createElement("option", { key: ds.uid, value: ds.uid }, ds.name, " (", ds.type, ")"))
+      )), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Loki query template", /* @__PURE__ */ React2.createElement(
+        "textarea",
+        {
+          value: logsConfig.query,
+          rows: 6,
+          onChange: (e) => onLogsChange({ ...logsConfig, query: e.target.value }),
+          style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
+        }
+      ))), error && /* @__PURE__ */ React2.createElement("div", { style: { padding: 10, borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", fontSize: 12, color: "#B91C1C" } }, error)),
+      /* @__PURE__ */ React2.createElement("div", { style: { padding: 16, borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 8 } }, /* @__PURE__ */ React2.createElement(
+        "button",
+        {
+          type: "button",
+          onClick: onClose,
+          style: { padding: "8px 16px", borderRadius: 6, border: "1px solid #CBD5F5", background: "#FFFFFF", cursor: "pointer" }
+        },
+        "Cancel"
+      ), /* @__PURE__ */ React2.createElement(
+        "button",
+        {
+          type: "button",
+          onClick: () => onSave(mode),
+          disabled: saving,
+          style: { padding: "8px 16px", borderRadius: 6, border: "none", background: saving ? "#A5B4FC" : "#4F46E5", color: "#FFFFFF", cursor: saving ? "not-allowed" : "pointer" }
+        },
+        saving ? "Saving\u2026" : "Save"
+      ))
+    )
+  );
+};
+var LogsPanelView = ({ datasourceUid, queryTemplate, agentUid, agentName, orgName, onConfigure }) => {
+  const [datasource, setDatasource] = useState2(null);
+  const [loading, setLoading] = useState2(false);
+  const [error, setError] = useState2(null);
+  const [entries, setEntries] = useState2([]);
+  useEffect2(() => {
+    if (!datasourceUid) {
+      setDatasource(null);
+      return;
+    }
+    let mounted = true;
+    const resolve = async () => {
+      try {
+        const response = await backendSrv.get("/api/datasources");
+        if (!mounted) {
+          return;
+        }
+        const match = Array.isArray(response) ? response.find((item) => item.uid === datasourceUid) : null;
+        setDatasource(
+          match ? {
+            id: match.id,
+            uid: match.uid,
+            name: match.name,
+            type: match.type
+          } : null
+        );
+      } catch (err) {
+        if (mounted) {
+          console.error("Failed to resolve Loki datasource", err);
+        }
+      }
+    };
+    resolve();
+    return () => {
+      mounted = false;
+    };
+  }, [datasourceUid]);
+  const buildQuery = () => {
+    if (!queryTemplate) {
+      return "";
+    }
+    return queryTemplate.replace(/\$collector_uid/g, agentUid || "").replace(/\$collector_name/g, agentName || "").replace(/\$org_name/g, orgName || "");
+  };
+  const runQuery = useCallback2(async () => {
+    if (!datasource || !queryTemplate) {
+      setError("Configure a Loki datasource and query template to fetch logs.");
+      return;
+    }
+    const query = buildQuery();
+    if (!query || query.trim() === "") {
+      setError("Query template is empty. Update it via the Configure dialog.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const end = /* @__PURE__ */ new Date();
+      const start = new Date(end.getTime() - 10 * 60 * 1e3);
+      const response = await rawBackendSrv.datasourceRequest({
+        method: "GET",
+        url: `/api/datasources/proxy/${datasource.id}/loki/api/v1/query_range`,
+        params: {
+          query,
+          limit: 50,
+          direction: "backward",
+          start: start.toISOString(),
+          end: end.toISOString()
+        }
+      });
+      const result = response?.data?.data?.result || [];
+      const rows = [];
+      result.forEach((stream) => {
+        const values = stream?.values || [];
+        values.forEach((value) => {
+          if (Array.isArray(value) && value.length >= 2) {
+            const tsNs = Number(value[0]);
+            const tsMs = Number.isFinite(tsNs) ? tsNs / 1e6 : Date.now();
+            rows.push({
+              timestamp: new Date(tsMs).toLocaleString(),
+              line: value[1]
+            });
+          }
+        });
+      });
+      rows.sort((a, b) => a.timestamp < b.timestamp ? 1 : -1);
+      setEntries(rows.slice(0, 50));
+    } catch (err) {
+      console.error("Failed to query Loki", err);
+      setError(err?.data?.message || err?.message || "Failed to query Loki datasource.");
+    } finally {
+      setLoading(false);
+    }
+  }, [datasource, queryTemplate, agentUid, agentName, orgName]);
+  return /* @__PURE__ */ React2.createElement(
+    "div",
+    {
+      style: {
+        padding: 16,
+        borderRadius: 10,
+        border: "1px solid #E5E7EB",
+        background: "#FFFFFF",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12
+      }
+    },
+    /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827" } }, "Recent Logs"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "Data source: ", datasource?.name || "Not configured")), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: runQuery,
+        disabled: loading || !datasource,
+        style: {
+          padding: "6px 12px",
+          borderRadius: 6,
+          border: "none",
+          background: loading ? "#CBD5F5" : "#2563EB",
+          color: "#FFFFFF",
+          fontSize: 12,
+          cursor: loading ? "not-allowed" : "pointer"
+        }
+      },
+      loading ? "Fetching\u2026" : "Refresh logs"
+    ), /* @__PURE__ */ React2.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: onConfigure,
+        style: {
+          padding: "6px 12px",
+          borderRadius: 6,
+          border: "1px solid #E5E7EB",
+          background: "#FFFFFF",
+          fontSize: 12,
+          cursor: "pointer"
+        }
+      },
+      "Configure"
+    ))),
+    error && /* @__PURE__ */ React2.createElement("div", { style: { padding: 10, borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", fontSize: 12, color: "#B91C1C" } }, error),
+    entries.length === 0 ? /* @__PURE__ */ React2.createElement(
+      "div",
+      {
+        style: {
+          padding: 12,
+          borderRadius: 6,
+          border: "1px dashed #CBD5F5",
+          background: "#F8FAFC",
+          fontSize: 12,
+          color: "#475569"
+        }
+      },
+      "No logs fetched yet. Run the query above or update your configuration."
+    ) : /* @__PURE__ */ React2.createElement(
+      "div",
+      {
+        style: {
+          maxHeight: 280,
+          overflowY: "auto",
+          borderRadius: 6,
+          border: "1px solid #E5E7EB",
+          fontFamily: "monospace",
+          fontSize: 12,
+          background: "#0F172A",
+          color: "#F8FAFC"
+        }
+      },
+      entries.map((entry, idx) => /* @__PURE__ */ React2.createElement("div", { key: `${entry.timestamp}-${idx}`, style: { padding: "6px 10px", borderBottom: "1px solid rgba(255,255,255,0.05)" } }, /* @__PURE__ */ React2.createElement("span", { style: { color: "#93C5FD", marginRight: 8 } }, entry.timestamp), /* @__PURE__ */ React2.createElement("span", null, entry.line)))
+    )
+  );
+};
 
 // module.ts
 var plugin = new __GRAFANA_DATA__.AppPlugin().setRootPage(App);

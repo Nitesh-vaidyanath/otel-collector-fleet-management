@@ -88,7 +88,8 @@ var PipelineMetricsPanelView = ({
   defaultDatasourceUid = null,
   title = "Custom Metrics Panel",
   onQueriesChange,
-  onDatasourceChange
+  onDatasourceChange,
+  readOnly = false
 }) => {
   const [datasources, setDatasources] = useState([]);
   const [datasourceError, setDatasourceError] = useState(null);
@@ -100,6 +101,7 @@ var PipelineMetricsPanelView = ({
   const [lastRunAt, setLastRunAt] = useState(null);
   const [values, setValues] = useState({ ...EMPTY_VALUES });
   const [formattedValues, setFormattedValues] = useState({ ...EMPTY_FORMATS });
+  const autoRunRef = React.useRef(false);
   useEffect(() => {
     if (defaultQueries) {
       setQueries(defaultQueries);
@@ -219,6 +221,15 @@ var PipelineMetricsPanelView = ({
   const pipelineTitle = useMemo(() => {
     return `${pipelineType} pipeline`;
   }, [pipelineType]);
+  useEffect(() => {
+    autoRunRef.current = false;
+  }, [pipelineType, selectedDatasource?.uid]);
+  useEffect(() => {
+    if (readOnly && selectedDatasource && !autoRunRef.current) {
+      autoRunRef.current = true;
+      runQueries();
+    }
+  }, [readOnly, selectedDatasource, runQueries]);
   return /* @__PURE__ */ React.createElement("div", { style: { width: "100%" } }, /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -249,7 +260,24 @@ var PipelineMetricsPanelView = ({
       " pipeline. Until the OpAMP bridge emits real usage metrics, this is the recommended workaround.",
       datasourceError && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, color: "#B45309" } }, datasourceError)
     ),
-    (!allowDisable || enabled) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#1F2937" } }, "Data source"), /* @__PURE__ */ React.createElement(
+    (!allowDisable || enabled) && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 14, display: "flex", flexDirection: "column", gap: 14 } }, readOnly ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#1F2937" } }, "Data source:\xA0", /* @__PURE__ */ React.createElement("strong", null, selectedDatasource?.name || "Not configured")), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: runQueries,
+        disabled: loading || !selectedDatasource,
+        style: {
+          padding: "6px 12px",
+          borderRadius: 4,
+          border: "none",
+          background: loading ? "#CBD5F5" : "#2563EB",
+          color: "#FFFFFF",
+          fontSize: 12,
+          cursor: loading ? "not-allowed" : "pointer"
+        }
+      },
+      loading ? "Refreshing\u2026" : "Refresh metrics"
+    )) : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#1F2937" } }, "Data source"), /* @__PURE__ */ React.createElement(
       "select",
       {
         value: selectedDatasource?.id ?? "",
@@ -283,7 +311,7 @@ var PipelineMetricsPanelView = ({
         }
       },
       loading ? "Running\u2026" : "Run queries"
-    )), /* @__PURE__ */ React.createElement(
+    )), !readOnly && /* @__PURE__ */ React.createElement(
       "div",
       {
         style: {

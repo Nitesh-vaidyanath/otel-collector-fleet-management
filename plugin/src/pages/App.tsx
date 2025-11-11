@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
-import { PipelineMetricsPanelView } from '../panels/pipeline/PanelView';
+import { PipelineMetricsPanelView, createDefaultQueries, PipelineMetricQueries, PipelineMetricKey } from '../panels/pipeline/PanelView';
 
 const PLUGIN_ID = 'otel-collector-agent-fleet-management';
 const RESOURCE_ROOT = `/api/plugins/${PLUGIN_ID}/resources`;
@@ -265,6 +265,68 @@ interface Bridge {
 type Tab = 'collectors' | 'configurations' | 'monitoring';
 
 const rawBackendSrv = getBackendSrv();
+
+type MetricsTelemetryConfig = {
+  enabled: boolean;
+  datasourceUid: string | null;
+  queries: PipelineMetricQueries;
+};
+
+type LogsTelemetryConfig = {
+  enabled: boolean;
+  datasourceUid: string | null;
+  query: string;
+};
+
+type FleetTelemetrySettings = {
+  metrics: MetricsTelemetryConfig;
+  logs: LogsTelemetryConfig;
+};
+
+const TELEMETRY_SETTINGS_ENDPOINT = '/api/plugins/otel-collector-agent-fleet-management/resources/telemetry-settings';
+type DatasourceSummary = { id: number; uid: string; name: string; type: string };
+const PROM_DATASOURCE_TYPES = new Set(['prometheus', 'mimir', 'grafana-mimir-datasource', 'thanos']);
+
+const buildDefaultMetricQueries = () => createDefaultQueries('$pipeline');
+
+const getDefaultTelemetrySettingsState = (): FleetTelemetrySettings => ({
+  metrics: {
+    enabled: false,
+    datasourceUid: null,
+    queries: buildDefaultMetricQueries(),
+  },
+  logs: {
+    enabled: false,
+    datasourceUid: null,
+    query: '',
+  },
+});
+
+const normalizeTelemetrySettingsState = (incoming: any): FleetTelemetrySettings => {
+  const base = getDefaultTelemetrySettingsState();
+  if (!incoming || typeof incoming !== 'object') {
+    return base;
+  }
+  const next: FleetTelemetrySettings = {
+    metrics: {
+      enabled: Boolean(incoming.metrics?.enabled),
+      datasourceUid: incoming.metrics?.datasource_uid || incoming.metrics?.datasourceUid || null,
+      queries: buildDefaultMetricQueries(),
+    },
+    logs: {
+      enabled: Boolean(incoming.logs?.enabled),
+      datasourceUid: incoming.logs?.datasource_uid || incoming.logs?.datasourceUid || null,
+      query: typeof incoming.logs?.query === 'string' ? incoming.logs?.query : '',
+    },
+  };
+  if (incoming.metrics?.queries && typeof incoming.metrics.queries === 'object') {
+    next.metrics.queries = {
+      ...next.metrics.queries,
+      ...incoming.metrics.queries,
+    };
+  }
+  return next;
+};
 
 const capabilityOrder = [
   'accepts_remote_config',
@@ -868,6 +930,12 @@ export const App = () => {
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
   const [grafanaOrgName, setGrafanaOrgName] = useState<string>('');
   const [opampConnectionUrl, setOpampConnectionUrl] = useState<string>(DEFAULT_OPAMP_WS);
+  const [telemetrySettings, setTelemetrySettings] = useState<FleetTelemetrySettings>(() => getDefaultTelemetrySettingsState());
+  const [telemetryLoading, setTelemetryLoading] = useState<boolean>(true);
+  const [telemetrySaving, setTelemetrySaving] = useState<boolean>(false);
+  const [telemetryDrawer, setTelemetryDrawer] = useState<{ open: boolean; mode: 'metrics' | 'logs'; seed: number }>({ open: false, mode: 'metrics', seed: 0 });
+  const [draftMetricsConfig, setDraftMetricsConfig] = useState<MetricsTelemetryConfig>(() => getDefaultTelemetrySettingsState().metrics);
+  const [draftLogsConfig, setDraftLogsConfig] = useState<LogsTelemetryConfig>(() => getDefaultTelemetrySettingsState().logs);
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [userContext, setUserContext] = useState<{ name: string; role: string; isAdmin: boolean }>({
@@ -1020,6 +1088,99 @@ export const App = () => {
       console.error('Failed to load OpAMP settings:', err);
     }
   }, []);
+
+  const loadTelemetrySettings = useCallback(async () => {
+    try {
+      const response = await backendSrv.get(TELEMETRY_SETTINGS_ENDPOINT);
+      if (response?.settings) {
+        setTelemetrySettings(normalizeTelemetrySettingsState(response.settings));
+      } else {
+        setTelemetrySettings(getDefaultTelemetrySettingsState());
+      }
+    } catch (err) {
+      console.error('Failed to load telemetry settings:', err);
+      setTelemetrySettings(getDefaultTelemetrySettingsState());
+    } finally {
+      setTelemetryLoading(false);
+    }
+  }, []);
+
+  const persistTelemetrySettings = useCallback(async (next: FleetTelemetrySettings) => {
+    setTelemetrySettings(next);
+    setTelemetrySaving(true);
+    try {
+      await backendSrv.post(TELEMETRY_SETTINGS_ENDPOINT, next);
+    } catch (err) {
+      console.error('Failed to save telemetry settings:', err);
+    } finally {
+      setTelemetrySaving(false);
+    }
+  }, []);
+
+  const openTelemetryConfigurator = useCallback((mode: 'metrics' | 'logs') => {
+    setTelemetryDrawer({ open: true, mode, seed: Date.now() });
+    setDraftMetricsConfig({
+      ...telemetrySettings.metrics,
+      queries: { ...telemetrySettings.metrics.queries },
+    });
+    setDraftLogsConfig({ ...telemetrySettings.logs });
+  }, [telemetrySettings.metrics, telemetrySettings.logs]);
+
+  const closeTelemetryConfigurator = useCallback(() => {
+    setTelemetryDrawer((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const handleMetricsToggle = useCallback((nextEnabled: boolean) => {
+    const next = {
+      ...telemetrySettings,
+      metrics: {
+        ...telemetrySettings.metrics,
+        enabled: nextEnabled,
+      },
+    };
+    persistTelemetrySettings(next);
+    if (nextEnabled && !telemetrySettings.metrics.datasourceUid) {
+      openTelemetryConfigurator('metrics');
+    }
+  }, [persistTelemetrySettings, telemetrySettings, openTelemetryConfigurator]);
+
+  const handleLogsToggle = useCallback((nextEnabled: boolean) => {
+    const next = {
+      ...telemetrySettings,
+      logs: {
+        ...telemetrySettings.logs,
+        enabled: nextEnabled,
+      },
+    };
+    persistTelemetrySettings(next);
+    if (nextEnabled && !telemetrySettings.logs.datasourceUid) {
+      openTelemetryConfigurator('logs');
+    }
+  }, [persistTelemetrySettings, telemetrySettings, openTelemetryConfigurator]);
+
+  const handleTelemetryConfigSave = useCallback((mode: 'metrics' | 'logs') => {
+    if (mode === 'metrics') {
+      const next = {
+        ...telemetrySettings,
+        metrics: {
+          ...draftMetricsConfig,
+          queries: { ...draftMetricsConfig.queries },
+          enabled: true,
+        },
+      };
+      persistTelemetrySettings(next);
+    } else {
+      const next = {
+        ...telemetrySettings,
+        logs: {
+          ...draftLogsConfig,
+          enabled: true,
+        },
+      };
+      persistTelemetrySettings(next);
+    }
+    closeTelemetryConfigurator();
+  }, [telemetrySettings, draftMetricsConfig, draftLogsConfig, persistTelemetrySettings, closeTelemetryConfigurator]);
 
   const loadUserContext = useCallback(async () => {
     try {
@@ -2192,9 +2353,28 @@ export const App = () => {
         )}
 
         {activeTab === 'monitoring' && (
-          <MonitoringSection agents={agents} bridges={bridges} />
+          <MonitoringSection
+            agents={agents}
+            bridges={bridges}
+            telemetrySettings={telemetrySettings}
+            telemetryLoading={telemetryLoading}
+            onToggleMetrics={handleMetricsToggle}
+            onToggleLogs={handleLogsToggle}
+            onConfigureTelemetry={openTelemetryConfigurator}
+          />
         )}
       </div>
+      <TelemetryConfigDrawer
+        open={telemetryDrawer.open}
+        mode={telemetryDrawer.mode}
+        metricsConfig={draftMetricsConfig}
+        logsConfig={draftLogsConfig}
+        onMetricsChange={setDraftMetricsConfig}
+        onLogsChange={setDraftLogsConfig}
+        onSave={handleTelemetryConfigSave}
+        onClose={closeTelemetryConfigurator}
+        saving={telemetrySaving}
+      />
       {/* Details Panel (Slide-in) */}
       {showDetailsPanel && selectedAgent && (
         <div style={{
@@ -3001,6 +3181,8 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   agentName,
   agentUid,
   orgName,
+  metricsSettings,
+  onConfigureMetrics,
 }: {
   config: string;
   pipelines: any[];
@@ -3008,6 +3190,8 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   agentName?: string;
   agentUid?: string;
   orgName?: string;
+  metricsSettings: MetricsTelemetryConfig;
+  onConfigureMetrics: () => void;
 }) {
   const pipelineFlows = useMemo(() => {
     const flows: Array<{ type: string; receivers: string[]; processors: string[]; exporters: string[] }> = [];
@@ -3155,14 +3339,58 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
               })}
             </div>
             <div style={{ marginTop: 16 }}>
-              <PipelineMetricsPanelView
-                pipelineType={flow.type}
-                agentUid={agentUid}
-                agentName={agentName}
-                orgName={orgName}
-                allowDisable
-                initialEnabled={false}
-              />
+              {metricsSettings?.enabled && metricsSettings.datasourceUid ? (
+                <PipelineMetricsPanelView
+                  key={`metrics-${flow.type}-${metricsSettings.datasourceUid}`}
+                  pipelineType={flow.type}
+                  agentUid={agentUid}
+                  agentName={agentName}
+                  orgName={orgName}
+                  allowDisable={false}
+                  defaultQueries={
+                    metricsSettings.queries && Object.keys(metricsSettings.queries).length > 0
+                      ? metricsSettings.queries
+                      : createDefaultQueries(flow.type, agentUid)
+                  }
+                  defaultDatasourceUid={metricsSettings.datasourceUid}
+                  readOnly
+                />
+              ) : (
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 8,
+                    border: '1px dashed #CBD5F5',
+                    background: '#F8FAFC',
+                    fontSize: 12,
+                    color: '#475569',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span>
+                    Metrics overlays are disabled for this pipeline. Enable them to run Prometheus queries against your collector metrics.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onConfigureMetrics}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 4,
+                      border: 'none',
+                      background: '#2563EB',
+                      color: '#FFFFFF',
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Configure metrics
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -3188,11 +3416,29 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
  // Monitoring Section Component
 
 // Monitoring Section Component
-function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Bridge[] }) {
+function MonitoringSection({
+  agents,
+  bridges,
+  telemetrySettings,
+  telemetryLoading,
+  onToggleMetrics,
+  onToggleLogs,
+  onConfigureTelemetry,
+}: {
+  agents: Agent[];
+  bridges: Bridge[];
+  telemetrySettings: FleetTelemetrySettings;
+  telemetryLoading: boolean;
+  onToggleMetrics: (next: boolean) => void;
+  onToggleLogs: (next: boolean) => void;
+  onConfigureTelemetry: (mode: 'metrics' | 'logs') => void;
+}) {
   const [selectedAgentUID, setSelectedAgentUID] = useState('');
   const [monitoringData, setMonitoringData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const metricsSettings = telemetrySettings.metrics;
+  const logsSettings = telemetrySettings.logs;
 
   // Prevent selecting bridges - only collectors can be monitored (bridges don't have pipelines/configs)
   useEffect(() => {
@@ -4252,7 +4498,25 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
                         Pipeline Monitoring
-                </div>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                        <TelemetryToggleCard
+                          title="Metrics overlays"
+                          description="Use Prometheus/Mimir queries to replace synthetic gauges."
+                          enabled={metricsSettings.enabled}
+                          disabled={telemetryLoading}
+                          onToggle={() => onToggleMetrics(!metricsSettings.enabled)}
+                          onConfigure={() => onConfigureTelemetry('metrics')}
+                        />
+                        <TelemetryToggleCard
+                          title="Log snapshots"
+                          description="Run Loki queries and display recent collector logs."
+                          enabled={logsSettings.enabled}
+                          disabled={telemetryLoading}
+                          onToggle={() => onToggleLogs(!logsSettings.enabled)}
+                          onConfigure={() => onConfigureTelemetry('logs')}
+                        />
+                      </div>
                       <PipelineFlowDiagram
                         config={pipelineConfigString}
                         pipelines={monitoringData.pipelines || []}
@@ -4260,7 +4524,34 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                         agentName={monitoringData?.agent?.name || monitoringData?.agent?.agentUid}
                         agentUid={monitoringData?.agent?.agentUid}
                         orgName={monitoringData?.agent?.orgName}
+                        metricsSettings={metricsSettings}
+                        onConfigureMetrics={() => onConfigureTelemetry('metrics')}
                       />
+                      <div style={{ marginTop: 16 }}>
+                        {logsSettings.enabled && logsSettings.datasourceUid ? (
+                          <LogsPanelView
+                            datasourceUid={logsSettings.datasourceUid}
+                            queryTemplate={logsSettings.query}
+                            agentUid={monitoringData?.agent?.agentUid}
+                            agentName={monitoringData?.agent?.name}
+                            orgName={monitoringData?.agent?.orgName}
+                            onConfigure={() => onConfigureTelemetry('logs')}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              padding: 16,
+                              borderRadius: 8,
+                              border: '1px dashed #CBD5F5',
+                              background: '#F8FAFC',
+                              color: '#475569',
+                              fontSize: 12,
+                            }}
+                          >
+                            Logs are disabled for this collector. Use the toggle above to enable them and configure a Loki data source.
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <div style={{
@@ -4414,6 +4705,10 @@ function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; b
     // Get user role from agents API response
     fetchUserRole();
   }, []);
+
+  useEffect(() => {
+    loadTelemetrySettings();
+  }, [loadTelemetrySettings]);
 
   const fetchUserRole = async () => {
     try {
@@ -8120,3 +8415,463 @@ service:
     </div>
   );
 }
+
+type TelemetryToggleCardProps = {
+  title: string;
+  description: string;
+  enabled: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+  onConfigure: () => void;
+};
+
+const TelemetryToggleCard: React.FC<TelemetryToggleCardProps> = ({ title, description, enabled, disabled, onToggle, onConfigure }) => {
+  return (
+    <div
+      style={{
+        flex: '1 1 260px',
+        minWidth: 240,
+        padding: 16,
+        borderRadius: 10,
+        border: '1px solid #E5E7EB',
+        background: enabled ? '#EEF2FF' : '#FFFFFF',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{title}</div>
+      <div style={{ fontSize: 12, color: '#4B5563', lineHeight: 1.5 }}>{description}</div>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937' }}>
+        <input type="checkbox" checked={enabled} disabled={disabled} onChange={onToggle} />
+        {enabled ? 'Enabled' : 'Disabled'}
+      </label>
+      <button
+        type="button"
+        onClick={onConfigure}
+        style={{
+          marginTop: 'auto',
+          padding: '6px 10px',
+          borderRadius: 6,
+          border: '1px solid #2563EB',
+          background: enabled ? '#2563EB' : '#FFFFFF',
+          color: enabled ? '#FFFFFF' : '#2563EB',
+          fontSize: 12,
+          cursor: 'pointer',
+        }}
+      >
+        Configure
+      </button>
+    </div>
+  );
+};
+
+type TelemetryConfigDrawerProps = {
+  open: boolean;
+  mode: 'metrics' | 'logs';
+  metricsConfig: MetricsTelemetryConfig;
+  logsConfig: LogsTelemetryConfig;
+  onMetricsChange: (next: MetricsTelemetryConfig) => void;
+  onLogsChange: (next: LogsTelemetryConfig) => void;
+  onSave: (mode: 'metrics' | 'logs') => void;
+  onClose: () => void;
+  saving: boolean;
+};
+
+const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
+  open,
+  mode,
+  metricsConfig,
+  logsConfig,
+  onMetricsChange,
+  onLogsChange,
+  onSave,
+  onClose,
+  saving,
+}) => {
+  const [datasources, setDatasources] = useState<DatasourceSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setDatasources([]);
+      setError(null);
+      return;
+    }
+    let mounted = true;
+    const fetchDatasources = async () => {
+      setLoading(true);
+      try {
+        const response = await backendSrv.get('/api/datasources');
+        if (!mounted) {
+          return;
+        }
+        const filtered = Array.isArray(response)
+          ? (response as any[]).filter((item) => (mode === 'metrics' ? PROM_DATASOURCE_TYPES.has(item.type) : item.type === 'loki'))
+          : [];
+        setDatasources(
+          filtered.map((item) => ({
+            id: item.id,
+            uid: item.uid,
+            name: item.name,
+            type: item.type,
+          }))
+        );
+        setError(filtered.length === 0 ? 'No compatible data sources found.' : null);
+      } catch (err: any) {
+        if (!mounted) {
+          return;
+        }
+        setError(err?.message || 'Failed to load data sources.');
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+    fetchDatasources();
+    return () => {
+      mounted = false;
+    };
+  }, [open, mode]);
+
+  if (!open) {
+    return null;
+  }
+
+  const metricsQueries = metricsConfig.queries || buildDefaultMetricQueries();
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        background: 'rgba(15,23,42,0.4)',
+        zIndex: 9999,
+        display: 'flex',
+        justifyContent: 'flex-end',
+      }}
+    >
+      <div
+        style={{
+          width: 420,
+          maxWidth: '100%',
+          height: '100%',
+          background: '#FFFFFF',
+          boxShadow: '-12px 0 24px rgba(15,23,42,0.2)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ padding: 16, borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{mode === 'metrics' ? 'Configure Metrics' : 'Configure Logs'}</div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {mode === 'metrics' ? (
+            <>
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                Select a Prometheus/Mimir datasource and adjust the default queries. Use placeholders like <code>$collector_uid</code> or <code>$pipeline</code>.
+              </div>
+              <label style={{ fontSize: 12, color: '#1F2937', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                Data source
+                <select
+                  value={metricsConfig.datasourceUid ?? ''}
+                  onChange={(e) => onMetricsChange({ ...metricsConfig, datasourceUid: e.target.value || null })}
+                  disabled={loading || datasources.length === 0}
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                >
+                  <option value="">Select data source</option>
+                  {datasources.map((ds) => (
+                    <option key={ds.uid} value={ds.uid}>
+                      {ds.name} ({ds.type})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {(Object.keys(metricsQueries) as PipelineMetricKey[]).map((key) => (
+                <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                  {key.toUpperCase()} query
+                  <textarea
+                    value={metricsQueries[key]}
+                    rows={5}
+                    onChange={(e) =>
+                      onMetricsChange({
+                        ...metricsConfig,
+                        queries: { ...metricsQueries, [key]: e.target.value },
+                      })
+                    }
+                    style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                  />
+                </label>
+              ))}
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                Select a Loki datasource and supply a query template. Use placeholders such as <code>$collector_uid</code>, <code>$collector_name</code>, or <code>$org_name</code>.
+              </div>
+              <label style={{ fontSize: 12, color: '#1F2937', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                Loki data source
+                <select
+                  value={logsConfig.datasourceUid ?? ''}
+                  onChange={(e) => onLogsChange({ ...logsConfig, datasourceUid: e.target.value || null })}
+                  disabled={loading || datasources.length === 0}
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                >
+                  <option value="">Select data source</option>
+                  {datasources.map((ds) => (
+                    <option key={ds.uid} value={ds.uid}>
+                      {ds.name} ({ds.type})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                Loki query template
+                <textarea
+                  value={logsConfig.query}
+                  rows={6}
+                  onChange={(e) => onLogsChange({ ...logsConfig, query: e.target.value })}
+                  style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                />
+              </label>
+            </>
+          )}
+          {error && (
+            <div style={{ padding: 10, borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', fontSize: 12, color: '#B91C1C' }}>{error}</div>
+          )}
+        </div>
+        <div style={{ padding: 16, borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #CBD5F5', background: '#FFFFFF', cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(mode)}
+            disabled={saving}
+            style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: saving ? '#A5B4FC' : '#4F46E5', color: '#FFFFFF', cursor: saving ? 'not-allowed' : 'pointer' }}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+type LogsPanelProps = {
+  datasourceUid: string;
+  queryTemplate: string;
+  agentUid?: string;
+  agentName?: string;
+  orgName?: string;
+  onConfigure: () => void;
+};
+
+const LogsPanelView: React.FC<LogsPanelProps> = ({ datasourceUid, queryTemplate, agentUid, agentName, orgName, onConfigure }) => {
+  const [datasource, setDatasource] = useState<DatasourceSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [entries, setEntries] = useState<Array<{ timestamp: string; line: string }>>([]);
+
+  useEffect(() => {
+    if (!datasourceUid) {
+      setDatasource(null);
+      return;
+    }
+    let mounted = true;
+    const resolve = async () => {
+      try {
+        const response = await backendSrv.get('/api/datasources');
+        if (!mounted) {
+          return;
+        }
+        const match = Array.isArray(response) ? (response as any[]).find((item) => item.uid === datasourceUid) : null;
+        setDatasource(
+          match
+            ? {
+                id: match.id,
+                uid: match.uid,
+                name: match.name,
+                type: match.type,
+              }
+            : null
+        );
+      } catch (err) {
+        if (mounted) {
+          console.error('Failed to resolve Loki datasource', err);
+        }
+      }
+    };
+    resolve();
+    return () => {
+      mounted = false;
+    };
+  }, [datasourceUid]);
+
+  const buildQuery = () => {
+    if (!queryTemplate) {
+      return '';
+    }
+    return queryTemplate
+      .replace(/\$collector_uid/g, agentUid || '')
+      .replace(/\$collector_name/g, agentName || '')
+      .replace(/\$org_name/g, orgName || '');
+  };
+
+  const runQuery = useCallback(async () => {
+    if (!datasource || !queryTemplate) {
+      setError('Configure a Loki datasource and query template to fetch logs.');
+      return;
+    }
+    const query = buildQuery();
+    if (!query || query.trim() === '') {
+      setError('Query template is empty. Update it via the Configure dialog.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const end = new Date();
+      const start = new Date(end.getTime() - 10 * 60 * 1000);
+      const response = await rawBackendSrv.datasourceRequest({
+        method: 'GET',
+        url: `/api/datasources/proxy/${datasource.id}/loki/api/v1/query_range`,
+        params: {
+          query,
+          limit: 50,
+          direction: 'backward',
+          start: start.toISOString(),
+          end: end.toISOString(),
+        },
+      });
+      const result = response?.data?.data?.result || [];
+      const rows: Array<{ timestamp: string; line: string }> = [];
+      result.forEach((stream: any) => {
+        const values = stream?.values || [];
+        values.forEach((value: any) => {
+          if (Array.isArray(value) && value.length >= 2) {
+            const tsNs = Number(value[0]);
+            const tsMs = Number.isFinite(tsNs) ? tsNs / 1e6 : Date.now();
+            rows.push({
+              timestamp: new Date(tsMs).toLocaleString(),
+              line: value[1],
+            });
+          }
+        });
+      });
+      rows.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+      setEntries(rows.slice(0, 50));
+    } catch (err: any) {
+      console.error('Failed to query Loki', err);
+      setError(err?.data?.message || err?.message || 'Failed to query Loki datasource.');
+    } finally {
+      setLoading(false);
+    }
+  }, [datasource, queryTemplate, agentUid, agentName, orgName]);
+
+  return (
+    <div
+      style={{
+        padding: 16,
+        borderRadius: 10,
+        border: '1px solid #E5E7EB',
+        background: '#FFFFFF',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>Recent Logs</div>
+          <div style={{ fontSize: 12, color: '#6B7280' }}>Data source: {datasource?.name || 'Not configured'}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={runQuery}
+            disabled={loading || !datasource}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 6,
+              border: 'none',
+              background: loading ? '#CBD5F5' : '#2563EB',
+              color: '#FFFFFF',
+              fontSize: 12,
+              cursor: loading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading ? 'Fetching…' : 'Refresh logs'}
+          </button>
+          <button
+            type="button"
+            onClick={onConfigure}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 6,
+              border: '1px solid #E5E7EB',
+              background: '#FFFFFF',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Configure
+          </button>
+        </div>
+      </div>
+      {error && (
+        <div style={{ padding: 10, borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', fontSize: 12, color: '#B91C1C' }}>{error}</div>
+      )}
+      {entries.length === 0 ? (
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 6,
+            border: '1px dashed #CBD5F5',
+            background: '#F8FAFC',
+            fontSize: 12,
+            color: '#475569',
+          }}
+        >
+          No logs fetched yet. Run the query above or update your configuration.
+        </div>
+      ) : (
+        <div
+          style={{
+            maxHeight: 280,
+            overflowY: 'auto',
+            borderRadius: 6,
+            border: '1px solid #E5E7EB',
+            fontFamily: 'monospace',
+            fontSize: 12,
+            background: '#0F172A',
+            color: '#F8FAFC',
+          }}
+        >
+          {entries.map((entry, idx) => (
+            <div key={`${entry.timestamp}-${idx}`} style={{ padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+              <span style={{ color: '#93C5FD', marginRight: 8 }}>{entry.timestamp}</span>
+              <span>{entry.line}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};

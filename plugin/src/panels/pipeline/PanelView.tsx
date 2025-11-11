@@ -17,6 +17,7 @@ export interface PipelineMetricsPanelViewProps {
   title?: string;
   onQueriesChange?: (queries: PipelineMetricQueries) => void;
   onDatasourceChange?: (datasource: { id: number; uid: string; name: string } | null) => void;
+  readOnly?: boolean;
 }
 
 interface DatasourceSummary {
@@ -121,6 +122,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
   title = 'Custom Metrics Panel',
   onQueriesChange,
   onDatasourceChange,
+  readOnly = false,
 }) => {
   const [datasources, setDatasources] = useState<DatasourceSummary[]>([]);
   const [datasourceError, setDatasourceError] = useState<string | null>(null);
@@ -132,6 +134,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
   const [lastRunAt, setLastRunAt] = useState<number | null>(null);
   const [values, setValues] = useState<QueryResultValues>({ ...EMPTY_VALUES });
   const [formattedValues, setFormattedValues] = useState<QueryResultFormats>({ ...EMPTY_FORMATS });
+  const autoRunRef = React.useRef(false);
 
   useEffect(() => {
     if (defaultQueries) {
@@ -265,6 +268,17 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     return `${pipelineType} pipeline`;
   }, [pipelineType]);
 
+  useEffect(() => {
+    autoRunRef.current = false;
+  }, [pipelineType, selectedDatasource?.uid]);
+
+  useEffect(() => {
+    if (readOnly && selectedDatasource && !autoRunRef.current) {
+      autoRunRef.current = true;
+      runQueries();
+    }
+  }, [readOnly, selectedDatasource, runQueries]);
+
   return (
     <div style={{ width: '100%' }}>
       <div
@@ -312,88 +326,115 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
 
         {(!allowDisable || enabled) && (
           <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
-              <div style={{ fontSize: 12, color: '#1F2937' }}>Data source</div>
-              <select
-                value={selectedDatasource?.id ?? ''}
-                onChange={handleDatasourceChangeInternal}
-                style={{
-                  minWidth: 220,
-                  padding: '6px 10px',
-                  borderRadius: 4,
-                  border: '1px solid #CBD5F5',
-                  fontSize: 12,
-                  color: '#1F2937',
-                  background: '#FFFFFF',
-                }}
-              >
-                <option value="" disabled>
-                  {datasourceError ? 'No compatible data source' : 'Select data source'}
-                </option>
-                {datasources.map((ds) => (
-                  <option key={ds.id} value={ds.id}>
-                    {ds.name} ({ds.type})
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={runQueries}
-                disabled={loading || !selectedDatasource}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 4,
-                  border: 'none',
-                  background: loading ? '#CBD5F5' : '#2563EB',
-                  color: '#FFFFFF',
-                  fontSize: 12,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {loading ? 'Running…' : 'Run queries'}
-              </button>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-                gap: 12,
-              }}
-            >
-              {(Object.keys(queries) as PipelineMetricKey[]).map((key) => (
-                <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: '#1F2937' }}>{METRIC_DEFINITIONS.find((def) => def.key === key)?.label}</div>
-                  <textarea
-                    value={queries[key]}
-                    onChange={(event) => handleQueryChange(key, event.target.value)}
-                    rows={6}
-                    style={{
-                      padding: 8,
-                      borderRadius: 4,
-                      border: '1px solid #CBD5F5',
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      background: '#FFFFFF',
-                      color: '#0F172A',
-                    }}
-                  />
-                  <div style={{ fontSize: 11, color: '#64748B' }}>{METRIC_DEFINITIONS.find((def) => def.key === key)?.helper}</div>
+            {readOnly ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+                <div style={{ fontSize: 12, color: '#1F2937' }}>
+                  Data source:&nbsp;
+                  <strong>{selectedDatasource?.name || 'Not configured'}</strong>
                 </div>
-              ))}
+                <button
+                  type="button"
+                  onClick={runQueries}
+                  disabled={loading || !selectedDatasource}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 4,
+                    border: 'none',
+                    background: loading ? '#CBD5F5' : '#2563EB',
+                    color: '#FFFFFF',
+                    fontSize: 12,
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {loading ? 'Refreshing…' : 'Refresh metrics'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+                <div style={{ fontSize: 12, color: '#1F2937' }}>Data source</div>
+                <select
+                  value={selectedDatasource?.id ?? ''}
+                  onChange={handleDatasourceChangeInternal}
+                  style={{
+                    minWidth: 220,
+                    padding: '6px 10px',
+                    borderRadius: 4,
+                    border: '1px solid #CBD5F5',
+                    fontSize: 12,
+                    color: '#1F2937',
+                    background: '#FFFFFF',
+                  }}
+                >
+                  <option value="" disabled>
+                    {datasourceError ? 'No compatible data source' : 'Select data source'}
+                  </option>
+                  {datasources.map((ds) => (
+                    <option key={ds.id} value={ds.id}>
+                      {ds.name} ({ds.type})
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={runQueries}
+                  disabled={loading || !selectedDatasource}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 4,
+                    border: 'none',
+                    background: loading ? '#CBD5F5' : '#2563EB',
+                    color: '#FFFFFF',
+                    fontSize: 12,
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {loading ? 'Running…' : 'Run queries'}
+                </button>
+              </div>
+            )}
+
+            {!readOnly && (
               <div
                 style={{
-                  padding: 10,
-                  background: '#F8FAFC',
-                  borderRadius: 6,
-                  border: '1px solid #E2E8F0',
-                  fontSize: 11,
-                  color: '#475569',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                  gap: 12,
                 }}
               >
-                <strong>Tip:</strong> Collector <code>{agentName || agentUid || 'unknown'}</code>, pipeline <code>{pipelineType}</code>, org <code>{orgName || 'default'}</code>. Use labels such as <code>service_instance_id</code>, <code>namespace</code>, or <code>cluster</code> to scope the query.
+                {(Object.keys(queries) as PipelineMetricKey[]).map((key) => (
+                  <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#1F2937' }}>{METRIC_DEFINITIONS.find((def) => def.key === key)?.label}</div>
+                    <textarea
+                      value={queries[key]}
+                      onChange={(event) => handleQueryChange(key, event.target.value)}
+                      rows={6}
+                      style={{
+                        padding: 8,
+                        borderRadius: 4,
+                        border: '1px solid #CBD5F5',
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        background: '#FFFFFF',
+                        color: '#0F172A',
+                      }}
+                    />
+                    <div style={{ fontSize: 11, color: '#64748B' }}>{METRIC_DEFINITIONS.find((def) => def.key === key)?.helper}</div>
+                  </div>
+                ))}
+                <div
+                  style={{
+                    padding: 10,
+                    background: '#F8FAFC',
+                    borderRadius: 6,
+                    border: '1px solid #E2E8F0',
+                    fontSize: 11,
+                    color: '#475569',
+                  }}
+                >
+                  <strong>Tip:</strong> Collector <code>{agentName || agentUid || 'unknown'}</code>, pipeline <code>{pipelineType}</code>, org <code>{orgName || 'default'}</code>. Use labels such as <code>service_instance_id</code>, <code>namespace</code>, or <code>cluster</code> to scope the query.
+                </div>
               </div>
-            </div>
+            )}
 
             <div
               style={{
@@ -461,4 +502,3 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     </div>
   );
 };
-

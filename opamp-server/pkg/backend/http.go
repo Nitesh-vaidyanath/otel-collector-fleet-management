@@ -270,6 +270,14 @@ func newAPIMux() *http.ServeMux {
 	})
 	mux.HandleFunc("/stats", wrap(statsHandler))
 	mux.HandleFunc("/component-types", wrap(componentTypesHandler))
+	mux.HandleFunc("/telemetry-settings", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodPost, http.MethodPut:
+			wrap(telemetrySettingsHandler)(w, r)
+		default:
+			methodNotAllowed(w)
+		}
+	})
 	mux.HandleFunc("/logging", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

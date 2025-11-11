@@ -96,6 +96,49 @@ plugin/
 yarn build
 ```
 
+### Frontend Build & Custom Panels
+
+Our Grafana app currently ships two frontend entry points:
+
+1. `src/module.ts` – the main application that renders the fleet UI inside Grafana.
+2. `src/panels/pipeline/module.tsx` – the reusable Pipeline Metrics panel that can be dropped onto any Grafana dashboard.
+
+Because Grafana’s plugin loader expects **AMD/SystemJS** modules, we cannot ship raw ES modules. The build script (`src/scripts/build.js`) runs `esbuild` twice:
+
+| Entry          | Temp Output                                | Final Output (Grafana loads this)                        |
+|----------------|---------------------------------------------|----------------------------------------------------------|
+| `module.ts`    | `dist/public/module.js.tmp`                 | `dist/public/module.js` and `dist/module.js`             |
+| `panels/...`   | `dist/public/panels/pipeline/module.js.tmp` | `dist/public/panels/pipeline/module.js` and copies under `dist/panels/...` |
+
+After esbuild produces an ES module it converts the file to AMD, rewrites imports such as `import React from 'react'` into AMD parameters, and removes `export` statements. Each wrapped module registers a `plugin` object that Grafana can instantiate.
+
+To add another panel or data source module:
+
+1. Create the TS/TSX entry file under `src/panels/**/module.tsx`.
+2. Update the `entries` array in `src/scripts/build.js` with the new path so it gets bundled.
+3. Add an `includes` block to `plugin/src/plugin.json` referencing the compiled path (e.g., `"module": "panels/new-panel/module"`).
+4. Run `npm run build` (or `yarn build` at repo root) so `dist/**/module.js` is regenerated.
+5. Restart Grafana or reload the plugin so it picks up the new AMD bundle.
+
+> Tip: Grafana caches plugin bundles aggressively. If you change only the panel TSX file but forget to rebuild, you’ll see `Cannot use import statement outside a module` errors because Grafana is still trying to load the source file.
+
+### Telemetry Panels (Metrics & Logs)
+
+The **Monitoring** tab can now render real CPU/memory/bandwidth charts and a Loki log tail:
+
+- Metrics use the in-app Pipeline Metrics panel (backed by Prometheus/Mimir queries).
+- Logs use a lightweight Loki query runner.
+- Both are disabled by default until an admin selects a datasource.
+
+Configuration workflow:
+
+1. Open the Monitoring tab, flip the `Metrics overlays` or `Log snapshots` toggle.
+2. A drawer opens on the right where you can pick a datasource and edit the query templates (supports placeholders such as `$collector_uid`, `$pipeline`, `$org_name`).
+3. Save the configuration – settings persist per organization (stored in `telemetry_settings` table) and apply to every agent view.
+4. Re-open the drawer any time via the **Configure** button next to the toggle.
+
+When toggled off, the UI hides the panels entirely; when toggled on without configuration, the prompts guide the user to the drawer.
+
 ### Running E2E Tests
 
 ```bash
@@ -172,4 +215,3 @@ See LICENSE file for details.
 - [Grafana Plugin Development](https://grafana.com/developers/plugin-tools/)
 - [API Specification](../API_SPEC.md)
 - [Backend Configuration](../BACKEND_CONFIG.md)
-

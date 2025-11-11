@@ -30,6 +30,68 @@ type Agent struct {
 	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
 }
 
+type TelemetryMetricsSettings struct {
+	Enabled       bool              `json:"enabled"`
+	DatasourceUID string            `json:"datasource_uid"`
+	Queries       map[string]string `json:"queries"`
+}
+
+type TelemetryLogsSettings struct {
+	Enabled       bool   `json:"enabled"`
+	DatasourceUID string `json:"datasource_uid"`
+	Query         string `json:"query"`
+}
+
+type TelemetrySettings struct {
+	Metrics TelemetryMetricsSettings `json:"metrics"`
+	Logs    TelemetryLogsSettings    `json:"logs"`
+}
+
+func defaultTelemetrySettings() TelemetrySettings {
+	return TelemetrySettings{
+		Metrics: TelemetryMetricsSettings{
+			Enabled:       false,
+			DatasourceUID: "",
+			Queries: map[string]string{
+				"cpu":      "",
+				"memory":   "",
+				"inbound":  "",
+				"outbound": "",
+			},
+		},
+		Logs: TelemetryLogsSettings{
+			Enabled:       false,
+			DatasourceUID: "",
+			Query:         "",
+		},
+	}
+}
+
+func normalizeTelemetrySettings(input TelemetrySettings) TelemetrySettings {
+	settings := defaultTelemetrySettings()
+
+	settings.Metrics.Enabled = input.Metrics.Enabled
+	if strings.TrimSpace(input.Metrics.DatasourceUID) != "" {
+		settings.Metrics.DatasourceUID = strings.TrimSpace(input.Metrics.DatasourceUID)
+	}
+	if len(input.Metrics.Queries) > 0 {
+		settings.Metrics.Queries = map[string]string{}
+		for k, v := range input.Metrics.Queries {
+			settings.Metrics.Queries[k] = v
+		}
+	}
+
+	settings.Logs.Enabled = input.Logs.Enabled
+	if strings.TrimSpace(input.Logs.DatasourceUID) != "" {
+		settings.Logs.DatasourceUID = strings.TrimSpace(input.Logs.DatasourceUID)
+	}
+	if strings.TrimSpace(input.Logs.Query) != "" {
+		settings.Logs.Query = input.Logs.Query
+	}
+
+	return settings
+}
+
 func jsonOK(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -2703,6 +2765,55 @@ func componentTypesHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		}
 
 		jsonOK(w, map[string]any{"ok": true})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func telemetrySettingsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	db := mustDB()
+	defer db.Close()
+
+	switch r.Method {
+	case http.MethodGet:
+		settings := defaultTelemetrySettings()
+		var raw sql.NullString
+		err := db.QueryRow(`SELECT settings_json FROM telemetry_settings WHERE org_id=?`, c.OrgID).Scan(&raw)
+		if err != nil && err != sql.ErrNoRows {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err == nil && raw.Valid && strings.TrimSpace(raw.String) != "" {
+			if unmarshalErr := json.Unmarshal([]byte(raw.String), &settings); unmarshalErr != nil {
+				http.Error(w, fmt.Sprintf("failed to parse telemetry settings: %v", unmarshalErr), 500)
+				return
+			}
+		}
+		jsonOK(w, map[string]any{"settings": settings})
+	case http.MethodPost, http.MethodPut:
+		var incoming TelemetrySettings
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		normalized := normalizeTelemetrySettings(incoming)
+		payload, err := json.Marshal(normalized)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_, err = db.Exec(`
+			INSERT INTO telemetry_settings (org_id, settings_json)
+			VALUES (?, ?)
+			ON DUPLICATE KEY UPDATE
+				settings_json=VALUES(settings_json),
+				updated_at=NOW()
+		`, c.OrgID, string(payload))
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		jsonOK(w, map[string]any{"ok": true, "settings": normalized})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
