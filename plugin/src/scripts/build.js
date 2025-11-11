@@ -8,39 +8,41 @@ const publicDir = path.join(distDir, 'public');
 // Create public directory
 fs.mkdirSync(publicDir, { recursive: true });
 
-// Build module.js for Grafana app plugin
-// Use AMD format with external Grafana dependencies (as per official tutorial)
-esbuild.build({
-  entryPoints: [path.resolve(__dirname, '..', 'module.ts')],
-  bundle: true,
-  format: 'esm', // ES modules format
-  platform: 'browser',
-  sourcemap: true,
-  outfile: path.join(publicDir, 'module.js.tmp'),
-  loader: {
-    '.ts': 'ts',
-    '.tsx': 'tsx',
-    '.css': 'css',
-    '.ttf': 'file',
-    '.woff': 'file',
-    '.woff2': 'file',
-    '.eot': 'file',
-    '.svg': 'file',
-    '.png': 'file',
-    '.jpg': 'file',
-    '.jpeg': 'file',
+const grafanaExternals = ['@grafana/data', '@grafana/runtime', '@grafana/ui', 'react', 'react-dom'];
+const loaders = {
+  '.ts': 'ts',
+  '.tsx': 'tsx',
+  '.css': 'css',
+  '.ttf': 'file',
+  '.woff': 'file',
+  '.woff2': 'file',
+  '.eot': 'file',
+  '.svg': 'file',
+  '.png': 'file',
+  '.jpg': 'file',
+  '.jpeg': 'file',
+};
+
+const entries = [
+  {
+    name: 'app',
+    entry: path.resolve(__dirname, '..', 'module.ts'),
+    tmp: path.join(publicDir, 'module.js.tmp'),
+    out: path.join(publicDir, 'module.js'),
+    copyTargets: [path.join(distDir, 'module.js')],
   },
-  external: ['@grafana/data', '@grafana/runtime', '@grafana/ui', 'react', 'react-dom'],
-  define: { 
-    'process.env.NODE_ENV': '"production"'
-  }
-}).then(() => {
-  // Convert ESM to AMD format that Grafana can load
-  const tmpFile = path.join(publicDir, 'module.js.tmp');
-  const outFile = path.join(publicDir, 'module.js');
-  
-  let code = fs.readFileSync(tmpFile, 'utf8');
-  
+  {
+    name: 'pipeline-panel',
+    entry: path.resolve(__dirname, '..', 'panels', 'pipeline', 'module.tsx'),
+    tmp: path.join(publicDir, 'panels', 'pipeline', 'module.js.tmp'),
+    out: path.join(publicDir, 'panels', 'pipeline', 'module.js'),
+    copyTargets: [path.join(distDir, 'panels', 'pipeline', 'module.js')],
+  },
+];
+
+const ensureDir = (filePath) => fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+const esmToAmd = (code) => {
   // Replace ALL ESM imports with AMD parameters
   // Handle various import patterns:
   // - import { X } from '@grafana/data'
@@ -73,6 +75,7 @@ esbuild.build({
   
   // Replace API calls with AMD params
   code = code.replace(/\bAppPlugin\b/g, '__GRAFANA_DATA__.AppPlugin');
+  code = code.replace(/\bPanelPlugin\b/g, '__GRAFANA_DATA__.PanelPlugin');
   code = code.replace(/\bgetBackendSrv\b/g, '__GRAFANA_RUNTIME__.getBackendSrv');
   
   // Remove ALL export statements (AMD doesn't support them)
@@ -81,22 +84,52 @@ esbuild.build({
   code = code.replace(/export\s+function\s+(\w+)/g, 'function $1'); // export function ...
   code = code.replace(/export\s+default\s+/g, ''); // export default ...
   code = code.replace(/export\s+class\s+/g, 'class '); // export class ...
-  
-  // Wrap in simple AMD define() format
-  const wrapped = `define(["@grafana/data","@grafana/runtime","@grafana/ui","react","react-dom"], function(__GRAFANA_DATA__, __GRAFANA_RUNTIME__, __GRAFANA_UI__, __REACT__, __REACT_DOM__) {
-  ${code}
+  return `define(["@grafana/data","@grafana/runtime","@grafana/ui","react","react-dom"], function(__GRAFANA_DATA__, __GRAFANA_RUNTIME__, __GRAFANA_UI__, __REACT__, __REACT_DOM__) {
+${code}
   return { plugin: plugin };
 });`;
-  
-  fs.writeFileSync(outFile, wrapped);
-  // Also copy to root dist for Grafana's plugin loader (Grafana looks for module.js in plugin root)
-  fs.copyFileSync(outFile, path.join(distDir, 'module.js'));
-  fs.unlinkSync(tmpFile);
-  
-  console.log('✓ Frontend build complete (module.js in SystemJS/AMD format)');
-  console.log(`  - Created: ${outFile}`);
-  console.log(`  - Copied to: ${path.join(distDir, 'module.js')}`);
-}).catch((e) => { 
-  console.error(e); 
-  process.exit(1); 
-});
+};
+
+const buildEntry = async ({ entry, tmp, out, copyTargets, name }) => {
+  ensureDir(tmp);
+  ensureDir(out);
+  await esbuild.build({
+    entryPoints: [entry],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    sourcemap: true,
+    outfile: tmp,
+    loader: loaders,
+    external: grafanaExternals,
+    define: {
+      'process.env.NODE_ENV': '"production"',
+    },
+  });
+
+  let code = fs.readFileSync(tmp, 'utf8');
+  const wrapped = esmToAmd(code);
+
+  fs.writeFileSync(out, wrapped);
+  fs.unlinkSync(tmp);
+
+  if (Array.isArray(copyTargets)) {
+    for (const target of copyTargets) {
+      ensureDir(target);
+      fs.copyFileSync(out, target);
+    }
+  }
+  console.log(`✓ Built ${name} -> ${out}`);
+};
+
+(async () => {
+  try {
+    for (const entry of entries) {
+      await buildEntry(entry);
+    }
+    console.log('✓ Frontend build complete (AMD modules ready)');
+  } catch (e) {
+    console.error(e);
+    process.exit(1);
+  }
+})();
