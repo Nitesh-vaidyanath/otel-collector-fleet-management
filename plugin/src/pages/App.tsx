@@ -4528,7 +4528,7 @@ function MonitoringSection({
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
                         <TelemetryToggleCard
                           title="Metrics overlays"
-                          description="Run Prometheus queries for per-pipeline CPU, memory, and bandwidth."
+                          description="Visualize per-pipeline CPU, memory, and throughput via Prometheus or Mimir."
                           enabled={metricsSettings.enabled}
                           disabled={telemetryLoading}
                           onToggle={() => onToggleMetrics(!metricsSettings.enabled)}
@@ -4536,7 +4536,7 @@ function MonitoringSection({
                         />
                         <TelemetryToggleCard
                           title="Log snapshots"
-                          description="Query recent collector logs from Loki."
+                          description="Use a Loki query template to inspect recent collector logs."
                           enabled={logsSettings.enabled}
                           disabled={telemetryLoading}
                           onToggle={() => onToggleLogs(!logsSettings.enabled)}
@@ -4627,21 +4627,23 @@ const TelemetryToggleCard: React.FC<TelemetryToggleCardProps> = ({ title, descri
   >
     <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{title}</div>
     <div style={{ fontSize: 12, color: '#4B5563', lineHeight: 1.6 }}>{description}</div>
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1F2937' }}>
-      <input type="checkbox" checked={enabled} disabled={disabled} onChange={onToggle} />
-      {enabled ? 'Enabled' : 'Disabled'}
-    </label>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: '#1F2937' }}>
+      <span>Status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></span>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <input type="checkbox" checked={enabled} disabled={disabled} onChange={onToggle} />
+        <span>{enabled ? 'Disable' : 'Enable'}</span>
+      </label>
+    </div>
     <button
       type="button"
       onClick={onConfigure}
       disabled={disabled}
       style={{
-        marginTop: 'auto',
         padding: '6px 12px',
         borderRadius: 6,
         border: '1px solid #2563EB',
-        background: enabled ? '#2563EB' : '#FFFFFF',
-        color: enabled ? '#FFFFFF' : '#2563EB',
+        background: '#2563EB',
+        color: '#FFFFFF',
         fontSize: 12,
         cursor: disabled ? 'not-allowed' : 'pointer',
       }}
@@ -4763,7 +4765,7 @@ const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
           {mode === 'metrics' ? (
             <>
               <div style={{ fontSize: 12, color: '#475569' }}>
-                Select a Prometheus/Mimir datasource and adjust the default queries. Use placeholders like <code>$collector_uid</code> or <code>$pipeline</code>.
+                Adjust the Prometheus/Mimir queries so they match your metric labels (e.g. <code>otelcol_process_cpu_seconds_total</code>, <code>otelcol_process_memory_rss_bytes</code>, <code>otelcol_processor_incoming_items_total</code>, <code>otelcol_processor_outgoing_items_total</code>). Placeholders such as <code>$collector_uid</code> and <code>$pipeline</code> are replaced automatically.
               </div>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Data source
@@ -4806,7 +4808,7 @@ const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
           ) : (
             <>
               <div style={{ fontSize: 12, color: '#475569' }}>
-                Select a Loki data source and provide a query template. Supported placeholders: <code>$collector_uid</code>, <code>$collector_name</code>, <code>$org_name</code>.
+                Provide a Loki query template and adjust its labels to your environment. Supported placeholders: <code>$collector_uid</code>, <code>$collector_name</code>, <code>$org_name</code>.
               </div>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Loki data source

@@ -2646,28 +2646,28 @@ var React = __REACT__.default || __REACT__; var { useCallback, useEffect, useRef
 
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var METRIC_LABELS = [
-  { key: "cpu", label: "CPU Usage", helper: "Return utilisation percentage (0-100)." },
-  { key: "memory", label: "Memory Usage", helper: "Return memory in megabytes." },
-  { key: "inbound", label: "Inbound Bandwidth", helper: "Return inbound throughput in KB/s." },
-  { key: "outbound", label: "Outbound Bandwidth", helper: "Return outbound throughput in KB/s." }
+  { key: "cpu", label: "CPU Usage", helper: "Example metric: otelcol_process_cpu_seconds_total" },
+  { key: "memory", label: "Memory Usage", helper: "Example metric: otelcol_process_memory_rss_bytes" },
+  { key: "inbound", label: "Inbound Throughput", helper: "Example metric: otelcol_processor_incoming_items_total" },
+  { key: "outbound", label: "Outbound Throughput", helper: "Example metric: otelcol_processor_outgoing_items_total" }
 ];
 var buildDefaultMetricQueries = (pipelineType, agentUid) => {
   const safeUid = agentUid && agentUid.trim() !== "" ? agentUid : "$collector_uid";
   const pipelineLabel = pipelineType && pipelineType.trim() !== "" ? pipelineType : "$pipeline";
-  const prefix = "# Adjust selectors to match your metrics";
+  const prefix = "# Adjust selectors to match your collector metrics";
   return {
     cpu: `${prefix}
 # CPU utilisation for ${pipelineLabel}
 sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}"}[5m])) * 100`,
     memory: `${prefix}
 # Resident memory for ${pipelineLabel}
-avg_over_time(otelcol_process_resident_memory_bytes{service_instance_id="${safeUid}"}[5m]) / 1024 / 1024`,
+avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}"}[5m]) / 1024 / 1024`,
     inbound: `${prefix}
-# Inbound throughput for ${pipelineLabel}
-sum(rate(otelcol_processor_batch_batch_send_size_sum{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m])) / 1024`,
+# Items accepted into ${pipelineLabel}
+sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`,
     outbound: `${prefix}
-# Outbound throughput for ${pipelineLabel}
-sum(rate(otelcol_exporter_sent_bytes{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m])) / 1024`
+# Items emitted from ${pipelineLabel}
+sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`
   };
 };
 var extractPrometheusValue = (response) => {
@@ -5930,7 +5930,7 @@ function MonitoringSection({
     TelemetryToggleCard,
     {
       title: "Metrics overlays",
-      description: "Run Prometheus queries for per-pipeline CPU, memory, and bandwidth.",
+      description: "Visualize per-pipeline CPU, memory, and throughput via Prometheus or Mimir.",
       enabled: metricsSettings.enabled,
       disabled: telemetryLoading,
       onToggle: () => onToggleMetrics(!metricsSettings.enabled),
@@ -5940,7 +5940,7 @@ function MonitoringSection({
     TelemetryToggleCard,
     {
       title: "Log snapshots",
-      description: "Query recent collector logs from Loki.",
+      description: "Use a Loki query template to inspect recent collector logs.",
       enabled: logsSettings.enabled,
       disabled: telemetryLoading,
       onToggle: () => onToggleLogs(!logsSettings.enabled),
@@ -6001,7 +6001,7 @@ var TelemetryToggleCard = ({ title, description, enabled, disabled, onToggle, on
   },
   /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, fontWeight: 600, color: "#111827" } }, title),
   /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#4B5563", lineHeight: 1.6 } }, description),
-  /* @__PURE__ */ React2.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 8, fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("input", { type: "checkbox", checked: enabled, disabled, onChange: onToggle }), enabled ? "Enabled" : "Disabled"),
+  /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("span", null, "Status: ", /* @__PURE__ */ React2.createElement("strong", null, enabled ? "Enabled" : "Disabled")), /* @__PURE__ */ React2.createElement("label", { style: { display: "inline-flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React2.createElement("input", { type: "checkbox", checked: enabled, disabled, onChange: onToggle }), /* @__PURE__ */ React2.createElement("span", null, enabled ? "Disable" : "Enable"))),
   /* @__PURE__ */ React2.createElement(
     "button",
     {
@@ -6009,12 +6009,11 @@ var TelemetryToggleCard = ({ title, description, enabled, disabled, onToggle, on
       onClick: onConfigure,
       disabled,
       style: {
-        marginTop: "auto",
         padding: "6px 12px",
         borderRadius: 6,
         border: "1px solid #2563EB",
-        background: enabled ? "#2563EB" : "#FFFFFF",
-        color: enabled ? "#FFFFFF" : "#2563EB",
+        background: "#2563EB",
+        color: "#FFFFFF",
         fontSize: 12,
         cursor: disabled ? "not-allowed" : "pointer"
       }
@@ -6114,7 +6113,7 @@ var TelemetryConfigDrawer = ({
         },
         "\xD7"
       )),
-      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 } }, mode === "metrics" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Prometheus/Mimir datasource and adjust the default queries. Use placeholders like ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), " or ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), "."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Data source", /* @__PURE__ */ React2.createElement(
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 } }, mode === "metrics" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Adjust the Prometheus/Mimir queries so they match your metric labels (e.g. ", /* @__PURE__ */ React2.createElement("code", null, "otelcol_process_cpu_seconds_total"), ", ", /* @__PURE__ */ React2.createElement("code", null, "otelcol_process_memory_rss_bytes"), ", ", /* @__PURE__ */ React2.createElement("code", null, "otelcol_processor_incoming_items_total"), ", ", /* @__PURE__ */ React2.createElement("code", null, "otelcol_processor_outgoing_items_total"), "). Placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), " and ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), " are replaced automatically."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Data source", /* @__PURE__ */ React2.createElement(
         "select",
         {
           value: metricsConfig.datasourceUid ?? "",
@@ -6138,7 +6137,7 @@ var TelemetryConfigDrawer = ({
           }),
           style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
         }
-      )))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Loki data source and provide a query template. Supported placeholders: ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$collector_name"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$org_name"), "."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Loki data source", /* @__PURE__ */ React2.createElement(
+      )))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Provide a Loki query template and adjust its labels to your environment. Supported placeholders: ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$collector_name"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$org_name"), "."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Loki data source", /* @__PURE__ */ React2.createElement(
         "select",
         {
           value: logsConfig.datasourceUid ?? "",

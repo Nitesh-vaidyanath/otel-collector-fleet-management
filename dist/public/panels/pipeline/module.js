@@ -16,28 +16,28 @@ var React = __REACT__.default || __REACT__; var { useCallback, useEffect, useRef
 
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var METRIC_LABELS = [
-  { key: "cpu", label: "CPU Usage", helper: "Return utilisation percentage (0-100)." },
-  { key: "memory", label: "Memory Usage", helper: "Return memory in megabytes." },
-  { key: "inbound", label: "Inbound Bandwidth", helper: "Return inbound throughput in KB/s." },
-  { key: "outbound", label: "Outbound Bandwidth", helper: "Return outbound throughput in KB/s." }
+  { key: "cpu", label: "CPU Usage", helper: "Example metric: otelcol_process_cpu_seconds_total" },
+  { key: "memory", label: "Memory Usage", helper: "Example metric: otelcol_process_memory_rss_bytes" },
+  { key: "inbound", label: "Inbound Throughput", helper: "Example metric: otelcol_processor_incoming_items_total" },
+  { key: "outbound", label: "Outbound Throughput", helper: "Example metric: otelcol_processor_outgoing_items_total" }
 ];
 var buildDefaultMetricQueries = (pipelineType, agentUid) => {
   const safeUid = agentUid && agentUid.trim() !== "" ? agentUid : "$collector_uid";
   const pipelineLabel = pipelineType && pipelineType.trim() !== "" ? pipelineType : "$pipeline";
-  const prefix = "# Adjust selectors to match your metrics";
+  const prefix = "# Adjust selectors to match your collector metrics";
   return {
     cpu: `${prefix}
 # CPU utilisation for ${pipelineLabel}
 sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}"}[5m])) * 100`,
     memory: `${prefix}
 # Resident memory for ${pipelineLabel}
-avg_over_time(otelcol_process_resident_memory_bytes{service_instance_id="${safeUid}"}[5m]) / 1024 / 1024`,
+avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}"}[5m]) / 1024 / 1024`,
     inbound: `${prefix}
-# Inbound throughput for ${pipelineLabel}
-sum(rate(otelcol_processor_batch_batch_send_size_sum{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m])) / 1024`,
+# Items accepted into ${pipelineLabel}
+sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`,
     outbound: `${prefix}
-# Outbound throughput for ${pipelineLabel}
-sum(rate(otelcol_exporter_sent_bytes{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m])) / 1024`
+# Items emitted from ${pipelineLabel}
+sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`
   };
 };
 var extractPrometheusValue = (response) => {
