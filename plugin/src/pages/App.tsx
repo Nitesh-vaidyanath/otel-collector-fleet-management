@@ -253,6 +253,8 @@ const detectGrafanaTransport = (): GrafanaTransport => {
 
 const grafanaTransport = detectGrafanaTransport();
 
+const GRAFANA_CORE_ENDPOINTS = ['/api/datasources', '/api/frontend', '/api/search', '/api/ruler'];
+
 const normalizeUrl = (rawUrl: string): string => {
   if (!rawUrl) {
     if (!isRunningInGrafana) {
@@ -262,6 +264,10 @@ const normalizeUrl = (rawUrl: string): string => {
   }
 
   if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+    return rawUrl;
+  }
+
+  if (GRAFANA_CORE_ENDPOINTS.some((prefix) => rawUrl.startsWith(prefix))) {
     return rawUrl;
   }
 

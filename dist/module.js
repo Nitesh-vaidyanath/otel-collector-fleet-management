@@ -3140,6 +3140,7 @@ var detectGrafanaTransport = () => {
   return coerce(window.__OTEL_FLEET_TRANSPORT__) || coerce(new URLSearchParams(window.location.search).get("transport")) || coerce(stored) || "proxy";
 };
 var grafanaTransport = detectGrafanaTransport();
+var GRAFANA_CORE_ENDPOINTS = ["/api/datasources", "/api/frontend", "/api/search", "/api/ruler"];
 var normalizeUrl = (rawUrl) => {
   if (!rawUrl) {
     if (!isRunningInGrafana) {
@@ -3148,6 +3149,9 @@ var normalizeUrl = (rawUrl) => {
     return grafanaTransport === "proxy" ? PROXY_PREFIX : RESOURCE_PREFIX;
   }
   if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+    return rawUrl;
+  }
+  if (GRAFANA_CORE_ENDPOINTS.some((prefix) => rawUrl.startsWith(prefix))) {
     return rawUrl;
   }
   const base = !isRunningInGrafana ? STANDALONE_PREFIX : grafanaTransport === "proxy" ? PROXY_PREFIX : RESOURCE_PREFIX;
