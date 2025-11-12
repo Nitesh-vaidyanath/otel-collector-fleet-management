@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import * as React from 'react';
+const { useCallback, useEffect, useMemo, useState, useRef } = React;
 import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
 
 export type PipelineMetricKey = 'cpu' | 'memory' | 'inbound' | 'outbound';
