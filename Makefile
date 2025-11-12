@@ -36,10 +36,13 @@ build-backend:
 	@mkdir -p dist
 	@echo "  - Building for linux/amd64"
 	@cd opamp-server && GOOS=linux GOARCH=amd64 go build -o ../dist/plugin_linux_amd64 ./pkg/backend
+	@echo "  - Building for linux/arm64"
+	@cd opamp-server && GOOS=linux GOARCH=arm64 go build -o ../dist/plugin_linux_arm64 ./pkg/backend
 	@echo "  - Creating symlinks"
-	@cd dist && rm -f plugin _linux_amd64 && \
+	@cd dist && rm -f plugin _linux_amd64 _linux_arm64 && \
 		ln -sf plugin_linux_amd64 plugin && \
-		ln -sf plugin_linux_amd64 _linux_amd64
+		ln -sf plugin_linux_amd64 _linux_amd64 && \
+		ln -sf plugin_linux_arm64 _linux_arm64
 	@echo "✓ Backend build complete"
 
 build-frontend:

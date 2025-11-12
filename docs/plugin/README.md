@@ -56,7 +56,7 @@ See [Backend Configuration Guide](../BACKEND_CONFIG.md) for detailed configurati
 # provisioning/plugins/otel-collector-agent-fleet-management.yaml
 apiVersion: 1
 
-plugins:
+ plugins:
   - name: otel-collector-agent-fleet-management
     type: app
     enabled: true
@@ -70,6 +70,31 @@ plugins:
     secureJsonData:
       dbPassword: your_password_here
 ```
+
+## Telemetry overlays
+
+The Monitoring tab can render live usage data straight from your observability stack.
+
+### Metrics overlays & stage throughput
+
+1. Click **Configure metrics overlays**.
+2. Pick a Prometheus/Mimir datasource.
+3. Adjust the default queries to match your labels (placeholders such as `$collector_uid`, `$pipeline`, and `$stage` are replaced automatically).
+4. The defaults target the builtin collector metrics that every agent exposes:
+   - `otelcol_process_cpu_seconds_total`, `otelcol_process_memory_rss_bytes`
+   - `otelcol_processor_incoming_items_total`, `otelcol_processor_outgoing_items_total`
+   - `otelcol_receiver_accepted_log_records_total`, `otelcol_receiver_failed_log_records_total`
+   - `otelcol_exporter_sent_log_records_total`, `otelcol_exporter_send_failed_log_records_total`
+
+When enabled, each pipeline card displays CPU/memory/throughput gauges plus per-stage Inbound/Outbound chips for every receiver, processor, and exporter.
+
+### Log snapshots
+
+1. Open **Configure log snapshots**.
+2. Select a Loki datasource and provide a query template (supports `$collector_uid`, `$collector_name`, `$org_name`).
+3. The Monitoring tab fetches the latest 50 log lines on demand.
+
+If no datasource is configured, the UI shows a friendly placeholder and a quick link to the configuration drawer.
 
 ## Project Structure
 
@@ -172,4 +197,3 @@ See LICENSE file for details.
 - [Grafana Plugin Development](https://grafana.com/developers/plugin-tools/)
 - [API Specification](../API_SPEC.md)
 - [Backend Configuration](../BACKEND_CONFIG.md)
-

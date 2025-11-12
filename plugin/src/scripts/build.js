@@ -5,98 +5,140 @@ const fs = require('fs');
 const distDir = path.resolve(__dirname, '..', '..', '..', 'dist');
 const publicDir = path.join(distDir, 'public');
 
-// Create public directory
-fs.mkdirSync(publicDir, { recursive: true });
+const grafanaExternals = ['@grafana/data', '@grafana/runtime', '@grafana/ui', 'react', 'react-dom'];
+const loaders = {
+  '.ts': 'ts',
+  '.tsx': 'tsx',
+  '.css': 'css',
+  '.ttf': 'file',
+  '.woff': 'file',
+  '.woff2': 'file',
+  '.eot': 'file',
+  '.svg': 'file',
+  '.png': 'file',
+  '.jpg': 'file',
+  '.jpeg': 'file',
+};
 
-// Build module.js for Grafana app plugin
-// Use AMD format with external Grafana dependencies (as per official tutorial)
-esbuild.build({
-  entryPoints: [path.resolve(__dirname, '..', 'module.ts')],
-  bundle: true,
-  format: 'esm', // ES modules format
-  platform: 'browser',
-  sourcemap: true,
-  outfile: path.join(publicDir, 'module.js.tmp'),
-  loader: {
-    '.ts': 'ts',
-    '.tsx': 'tsx',
-    '.css': 'css',
-    '.ttf': 'file',
-    '.woff': 'file',
-    '.woff2': 'file',
-    '.eot': 'file',
-    '.svg': 'file',
-    '.png': 'file',
-    '.jpg': 'file',
-    '.jpeg': 'file',
+const entries = [
+  {
+    name: 'app',
+    entry: path.resolve(__dirname, '..', 'module.ts'),
+    outRelative: 'module.js',
+    copyTarget: path.join(distDir, 'module.js'),
   },
-  external: ['@grafana/data', '@grafana/runtime', '@grafana/ui', 'react', 'react-dom'],
-  define: { 
-    'process.env.NODE_ENV': '"production"'
-  }
-}).then(() => {
-  // Convert ESM to AMD format that Grafana can load
-  const tmpFile = path.join(publicDir, 'module.js.tmp');
-  const outFile = path.join(publicDir, 'module.js');
-  
-  let code = fs.readFileSync(tmpFile, 'utf8');
-  
-  // Replace ALL ESM imports with AMD parameters
-  // Handle various import patterns:
-  // - import { X } from '@grafana/data'
-  // - import X, { Y } from 'react'
-  // - import * as X from 'react'
-  
-  // Remove Grafana imports (they'll come from AMD params)
+  {
+    name: 'pipeline-panel',
+    entry: path.resolve(__dirname, '..', 'panels', 'pipeline', 'module.tsx'),
+    outRelative: path.join('panels', 'pipeline', 'module.js'),
+    copyTarget: path.join(distDir, 'panels', 'pipeline', 'module.js'),
+  },
+];
+
+const ensureDir = (filePath) => fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+const transformToAmd = (code) => {
   code = code.replace(/import\s+\{[^}]*\}\s+from\s+['"]@grafana\/data['"];?/g, '');
   code = code.replace(/import\s+\{[^}]*\}\s+from\s+['"]@grafana\/runtime['"];?/g, '');
   code = code.replace(/import\s+\{[^}]*\}\s+from\s+['"]@grafana\/ui['"];?/g, '');
-  
-  // Handle React imports: import React, { useEffect, useState } from "react"
-  // Grafana's React module might export React directly or as default
-  code = code.replace(/import\s+React\s*,\s*\{([^}]+)\}\s+from\s+['"]react['"];?/g, 
-    (match, hooks) => {
-      const hookNames = hooks.split(',').map(h => h.trim()).join(', ');
-      // Try both __REACT__ directly and __REACT__.default
-      return `var React = __REACT__.default || __REACT__; var { ${hookNames} } = __REACT__;`;
-    });
-  
-  // Handle default React import only: import React from "react"
+
+  code = code.replace(/import\s+React\s*,\s*\{([^}]+)\}\s+from\s+['"]react['"];?/g, (_, hooks) => {
+    const parts = hooks
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .map((h) => {
+        const [orig, alias] = h.split(/\s+as\s+/i).map((p) => p && p.trim());
+        return alias ? `${orig}: ${alias}` : orig;
+      })
+      .join(', ');
+    return `var React = __REACT__.default || __REACT__; var { ${parts} } = __REACT__;`;
+  });
+  code = code.replace(/import\s+\{([^}]+)\}\s+from\s+['"]react['"];?/g, (_, hooks) => {
+    const parts = hooks
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .map((h) => {
+        const [orig, alias] = h.split(/\s+as\s+/i).map((p) => p && p.trim());
+        return alias ? `${orig}: ${alias}` : orig;
+      })
+      .join(', ');
+    return `var { ${parts} } = __REACT__;`;
+  });
   code = code.replace(/import\s+(\w+)\s+from\s+['"]react['"];?/g, 'var $1 = __REACT__.default || __REACT__;');
-  
-  // Handle namespace imports: import * as X from "react"
   code = code.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]react['"];?/g, 'var $1 = __REACT__;');
   code = code.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]react-dom['"];?/g, 'var $1 = __REACT_DOM__;');
-  
-  // Remove any remaining react-dom imports
   code = code.replace(/import\s+[^;]+from\s+['"]react-dom['"];?/g, '');
-  
-  // Replace API calls with AMD params
+  code = code.replace(/^\s*import\s+.*?;?\s*$/gm, '');
+
   code = code.replace(/\bAppPlugin\b/g, '__GRAFANA_DATA__.AppPlugin');
-  code = code.replace(/\bgetBackendSrv\b/g, '__GRAFANA_RUNTIME__.getBackendSrv');
-  
-  // Remove ALL export statements (AMD doesn't support them)
-  code = code.replace(/export\s+\{([^}]+)\};?/g, ''); // export { plugin };
-  code = code.replace(/export\s+const\s+(\w+)\s*=/g, 'var $1 ='); // export const plugin = ...
-  code = code.replace(/export\s+function\s+(\w+)/g, 'function $1'); // export function ...
-  code = code.replace(/export\s+default\s+/g, ''); // export default ...
-  code = code.replace(/export\s+class\s+/g, 'class '); // export class ...
-  
-  // Wrap in simple AMD define() format
-  const wrapped = `define(["@grafana/data","@grafana/runtime","@grafana/ui","react","react-dom"], function(__GRAFANA_DATA__, __GRAFANA_RUNTIME__, __GRAFANA_UI__, __REACT__, __REACT_DOM__) {
-  ${code}
+  code = code.replace(/\bPanelPlugin\b/g, '__GRAFANA_DATA__.PanelPlugin');
+  code = code.replace(/\bgetBackendSrv\d*\b/g, '__GRAFANA_RUNTIME__.getBackendSrv');
+  code = code.replace(/\bgetDataSourceSrv\d*\b/g, '__GRAFANA_RUNTIME__.getDataSourceSrv');
+
+  code = code.replace(/export\s+\{[^}]+\};?/g, '');
+  code = code.replace(/export\s+const\s+(\w+)\s*=/g, 'var $1 =');
+  code = code.replace(/export\s+function\s+(\w+)/g, 'function $1');
+  code = code.replace(/export\s+default\s+/g, '');
+  code = code.replace(/export\s+class\s+/g, 'class ');
+
+  return `define(["@grafana/data","@grafana/runtime","@grafana/ui","react","react-dom"], function(__GRAFANA_DATA__, __GRAFANA_RUNTIME__, __GRAFANA_UI__, __REACT__, __REACT_DOM__) {
+__REACT__ = (__REACT__ && __REACT__.__esModule && __REACT__.default) ? __REACT__.default : __REACT__;
+__REACT_DOM__ = (__REACT_DOM__ && __REACT_DOM__.__esModule && __REACT_DOM__.default) ? __REACT_DOM__.default : __REACT_DOM__;
+var React2 = __REACT__;
+var ReactDOM2 = __REACT_DOM__;
+var useState2 = React2.useState ? React2.useState.bind(React2) : void 0;
+var useEffect2 = React2.useEffect ? React2.useEffect.bind(React2) : void 0;
+var useMemo2 = React2.useMemo ? React2.useMemo.bind(React2) : void 0;
+var useCallback2 = React2.useCallback ? React2.useCallback.bind(React2) : void 0;
+${code}
   return { plugin: plugin };
 });`;
-  
-  fs.writeFileSync(outFile, wrapped);
-  // Also copy to root dist for Grafana's plugin loader (Grafana looks for module.js in plugin root)
-  fs.copyFileSync(outFile, path.join(distDir, 'module.js'));
-  fs.unlinkSync(tmpFile);
-  
-  console.log('✓ Frontend build complete (module.js in SystemJS/AMD format)');
-  console.log(`  - Created: ${outFile}`);
-  console.log(`  - Copied to: ${path.join(distDir, 'module.js')}`);
-}).catch((e) => { 
-  console.error(e); 
-  process.exit(1); 
-});
+};
+
+const buildEntry = async ({ entry, outRelative, copyTarget, name }) => {
+  const outPath = path.join(publicDir, outRelative);
+  ensureDir(outPath);
+  const tmpPath = `${outPath}.tmp`;
+
+  await esbuild.build({
+    entryPoints: [entry],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    sourcemap: true,
+    outfile: tmpPath,
+    loader: loaders,
+    external: grafanaExternals,
+    define: {
+      'process.env.NODE_ENV': '"production"',
+    },
+  });
+
+  const code = fs.readFileSync(tmpPath, 'utf8');
+  const wrapped = transformToAmd(code);
+  fs.writeFileSync(outPath, wrapped);
+  fs.unlinkSync(tmpPath);
+
+  ensureDir(copyTarget);
+  fs.copyFileSync(outPath, copyTarget);
+
+  console.log(`✓ Built ${name} -> ${outPath}`);
+  if (copyTarget !== outPath) {
+    console.log(`  ↳ Copied to ${copyTarget}`);
+  }
+};
+
+(async () => {
+  try {
+    fs.mkdirSync(publicDir, { recursive: true });
+    for (const entry of entries) {
+      await buildEntry(entry);
+    }
+    console.log('✓ Frontend build complete (AMD bundles ready)');
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+})();

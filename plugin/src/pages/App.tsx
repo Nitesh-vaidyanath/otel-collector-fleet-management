@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
 import * as yaml from 'js-yaml';
+import { PipelineMetricsPanelView, PipelineMetricQueries, PipelineMetricKey, buildDefaultMetricQueries } from '../components/PipelineMetricsPanelView';
 
 const PLUGIN_ID = 'otel-collector-agent-fleet-management';
 const RESOURCE_ROOT = `/api/plugins/${PLUGIN_ID}/resources`;
@@ -10,6 +11,120 @@ const PROXY_PREFIX = `/api/plugin-proxy/${PLUGIN_ID}/plugin-api`;
 const STANDALONE_PREFIX = '/plugin-api';
 
 const DEFAULT_OPAMP_WS = 'ws://localhost:4321/v1/opamp';
+
+type StageQueryPair = {
+  inbound: string;
+  outbound: string;
+};
+
+type StageQueryKey = 'receivers' | 'processors' | 'exporters';
+
+const STAGE_KEYS: StageQueryKey[] = ['receivers', 'processors', 'exporters'];
+
+type StageMetricTemplates = {
+  receivers: StageQueryPair;
+  processors: StageQueryPair;
+  exporters: StageQueryPair;
+};
+
+type MetricsTelemetryConfig = {
+  enabled: boolean;
+  datasourceUid: string | null;
+  queries: PipelineMetricQueries;
+  stageQueries: StageMetricTemplates;
+};
+
+type LogsTelemetryConfig = {
+  enabled: boolean;
+  datasourceUid: string | null;
+  query: string;
+};
+
+type FleetTelemetrySettings = {
+  metrics: MetricsTelemetryConfig;
+  logs: LogsTelemetryConfig;
+};
+
+const TELEMETRY_SETTINGS_ENDPOINT = 'telemetry-settings';
+const LOGS_QUERY_PLACEHOLDER = `{service_instance_id="$collector_uid"}`;
+const SUPPORTED_LOKI_TYPES = new Set(['loki']);
+
+const buildDefaultStageQueries = (): StageMetricTemplates => ({
+  receivers: {
+    inbound: 'sum(rate(otelcol_receiver_accepted_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))',
+    outbound: 'sum(rate(otelcol_receiver_failed_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))',
+  },
+  processors: {
+    inbound: 'sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))',
+    outbound: 'sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))',
+  },
+  exporters: {
+    inbound: 'sum(rate(otelcol_exporter_send_failed_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m])) + sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))',
+    outbound: 'sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))',
+  },
+});
+
+const cloneStageQueries = (incoming?: Partial<Record<StageQueryKey, Partial<StageQueryPair>>> | null): StageMetricTemplates => {
+  const defaults = buildDefaultStageQueries();
+  const normalize = (key: StageQueryKey): StageQueryPair => {
+    const candidate = (incoming && incoming[key]) || {};
+    const inbound = typeof candidate.inbound === 'string' && candidate.inbound.trim() !== '' ? candidate.inbound : defaults[key].inbound;
+    const outbound = typeof candidate.outbound === 'string' && candidate.outbound.trim() !== '' ? candidate.outbound : defaults[key].outbound;
+    return { inbound, outbound };
+  };
+  return {
+    receivers: normalize('receivers'),
+    processors: normalize('processors'),
+    exporters: normalize('exporters'),
+  };
+};
+
+const getDefaultTelemetrySettingsState = (): FleetTelemetrySettings => ({
+  metrics: {
+    enabled: false,
+    datasourceUid: null,
+    queries: buildDefaultMetricQueries('$pipeline'),
+    stageQueries: buildDefaultStageQueries(),
+  },
+  logs: {
+    enabled: false,
+    datasourceUid: null,
+    query: LOGS_QUERY_PLACEHOLDER,
+  },
+});
+
+const normalizeTelemetrySettingsState = (incoming: any): FleetTelemetrySettings => {
+  const defaults = getDefaultTelemetrySettingsState();
+  if (!incoming || typeof incoming !== 'object') {
+    return defaults;
+  }
+
+  const metrics: MetricsTelemetryConfig = {
+    enabled: Boolean(incoming.metrics?.enabled),
+    datasourceUid: typeof incoming.metrics?.datasourceUid === 'string' ? incoming.metrics.datasourceUid : (typeof incoming.metrics?.datasource_uid === 'string' ? incoming.metrics.datasource_uid : null),
+    queries: { ...defaults.metrics.queries },
+    stageQueries: cloneStageQueries(incoming.metrics?.stageQueries || incoming.metrics?.stage_queries || null),
+  };
+
+  if (incoming.metrics?.queries && typeof incoming.metrics.queries === 'object') {
+    Object.entries(incoming.metrics.queries).forEach(([key, value]) => {
+      if (typeof value === 'string' && (key as PipelineMetricKey) && value.trim() !== '') {
+        metrics.queries[key as PipelineMetricKey] = value;
+      }
+    });
+  }
+
+  const logs: LogsTelemetryConfig = {
+    enabled: Boolean(incoming.logs?.enabled),
+    datasourceUid: typeof incoming.logs?.datasourceUid === 'string' ? incoming.logs.datasourceUid : (typeof incoming.logs?.datasource_uid === 'string' ? incoming.logs.datasource_uid : null),
+    query: typeof incoming.logs?.query === 'string' && incoming.logs.query.trim() !== '' ? incoming.logs.query : LOGS_QUERY_PLACEHOLDER,
+  };
+
+  return {
+    metrics,
+    logs,
+  };
+};
 
 const normalizeOpampPath = (pathname?: string | null): string => {
   if (!pathname || pathname.trim() === '' || pathname === '/') {
@@ -186,6 +301,8 @@ const detectGrafanaTransport = (): GrafanaTransport => {
 
 const grafanaTransport = detectGrafanaTransport();
 
+const GRAFANA_CORE_ENDPOINTS = ['/api/datasources', '/api/frontend', '/api/search', '/api/ruler'];
+
 const normalizeUrl = (rawUrl: string): string => {
   if (!rawUrl) {
     if (!isRunningInGrafana) {
@@ -195,6 +312,10 @@ const normalizeUrl = (rawUrl: string): string => {
   }
 
   if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+    return rawUrl;
+  }
+
+  if (GRAFANA_CORE_ENDPOINTS.some((prefix) => rawUrl.startsWith(prefix))) {
     return rawUrl;
   }
 
@@ -867,6 +988,143 @@ export const App = () => {
   const [agentActivityLog, setAgentActivityLog] = useState<any[]>([]);
   const [grafanaOrgName, setGrafanaOrgName] = useState<string>('');
   const [opampConnectionUrl, setOpampConnectionUrl] = useState<string>(DEFAULT_OPAMP_WS);
+  const [telemetrySettings, setTelemetrySettings] = useState<FleetTelemetrySettings>(getDefaultTelemetrySettingsState());
+  const [telemetryLoading, setTelemetryLoading] = useState<boolean>(true);
+  const [telemetrySaving, setTelemetrySaving] = useState<boolean>(false);
+  const [telemetryDrawer, setTelemetryDrawer] = useState<{ open: boolean; mode: 'metrics' | 'logs' }>({ open: false, mode: 'metrics' });
+  const [draftMetricsConfig, setDraftMetricsConfig] = useState<MetricsTelemetryConfig>(() => getDefaultTelemetrySettingsState().metrics);
+  const [draftLogsConfig, setDraftLogsConfig] = useState<LogsTelemetryConfig>(() => getDefaultTelemetrySettingsState().logs);
+  const [telemetryDatasourceHints, setTelemetryDatasourceHints] = useState<{ metrics?: string; logs?: string }>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolve = async (uid: string | null | undefined, key: 'metrics' | 'logs') => {
+      if (!uid || uid.trim() === '') {
+        if (!cancelled) {
+          setTelemetryDatasourceHints((prev) => ({ ...prev, [key]: undefined }));
+        }
+        return;
+      }
+      try {
+        const ds = await backendSrv.get<{ name?: string }>(`/api/datasources/uid/${encodeURIComponent(uid)}`);
+        if (!cancelled) {
+          const label = typeof ds?.name === 'string' && ds.name.trim() !== '' ? ds.name : uid;
+          setTelemetryDatasourceHints((prev) => ({ ...prev, [key]: label }));
+        }
+      } catch (err) {
+        console.error('Failed to resolve datasource name', err);
+        if (!cancelled) {
+          setTelemetryDatasourceHints((prev) => ({ ...prev, [key]: uid }));
+        }
+      }
+    };
+
+    resolve(telemetrySettings.metrics.datasourceUid, 'metrics');
+    resolve(telemetrySettings.logs.datasourceUid, 'logs');
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendSrv, telemetrySettings.logs.datasourceUid, telemetrySettings.metrics.datasourceUid]);
+
+  const openTelemetryConfigurator = useCallback((mode: 'metrics' | 'logs') => {
+    setTelemetryDrawer({ open: true, mode });
+    setDraftMetricsConfig({
+      ...telemetrySettings.metrics,
+      queries: { ...telemetrySettings.metrics.queries },
+      stageQueries: cloneStageQueries(telemetrySettings.metrics.stageQueries),
+    });
+    setDraftLogsConfig({ ...telemetrySettings.logs });
+  }, [telemetrySettings]);
+
+  const closeTelemetryConfigurator = useCallback(() => {
+    setTelemetryDrawer((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const loadTelemetrySettings = useCallback(async () => {
+    setTelemetryLoading(true);
+    try {
+      const response = await backendSrv.get<{ settings?: any }>(TELEMETRY_SETTINGS_ENDPOINT);
+      if (response && typeof response === 'object' && response.settings) {
+        setTelemetrySettings(normalizeTelemetrySettingsState(response.settings));
+      } else {
+        setTelemetrySettings(getDefaultTelemetrySettingsState());
+      }
+    } catch (err) {
+      console.error('Failed to load telemetry settings', err);
+      setTelemetrySettings(getDefaultTelemetrySettingsState());
+    } finally {
+      setTelemetryLoading(false);
+    }
+  }, []);
+
+  const persistTelemetrySettings = useCallback(async (next: FleetTelemetrySettings) => {
+    setTelemetrySettings(next);
+    setTelemetrySaving(true);
+    try {
+      await backendSrv.post(TELEMETRY_SETTINGS_ENDPOINT, next);
+    } catch (err) {
+      console.error('Failed to save telemetry settings', err);
+    } finally {
+      setTelemetrySaving(false);
+    }
+  }, []);
+
+  const handleTelemetryConfigSave = useCallback((mode: 'metrics' | 'logs') => {
+    if (mode === 'metrics') {
+      const next: FleetTelemetrySettings = {
+        ...telemetrySettings,
+        metrics: {
+          ...draftMetricsConfig,
+          enabled: true,
+          datasourceUid: draftMetricsConfig.datasourceUid ? draftMetricsConfig.datasourceUid : null,
+          queries: { ...draftMetricsConfig.queries },
+          stageQueries: cloneStageQueries(draftMetricsConfig.stageQueries),
+        },
+      };
+      persistTelemetrySettings(next);
+    } else {
+      const next: FleetTelemetrySettings = {
+        ...telemetrySettings,
+        logs: {
+          ...draftLogsConfig,
+          enabled: true,
+          datasourceUid: draftLogsConfig.datasourceUid ? draftLogsConfig.datasourceUid : null,
+          query: draftLogsConfig.query && draftLogsConfig.query.trim() !== '' ? draftLogsConfig.query : LOGS_QUERY_PLACEHOLDER,
+        },
+      };
+      persistTelemetrySettings(next);
+    }
+    closeTelemetryConfigurator();
+  }, [draftLogsConfig, draftMetricsConfig, closeTelemetryConfigurator, persistTelemetrySettings, telemetrySettings]);
+
+  const handleMetricsToggle = useCallback((nextEnabled: boolean) => {
+    const next: FleetTelemetrySettings = {
+      ...telemetrySettings,
+      metrics: {
+        ...telemetrySettings.metrics,
+        enabled: nextEnabled,
+      },
+    };
+    persistTelemetrySettings(next);
+    if (nextEnabled && (!telemetrySettings.metrics.datasourceUid || telemetrySettings.metrics.datasourceUid.trim() === '')) {
+      openTelemetryConfigurator('metrics');
+    }
+  }, [openTelemetryConfigurator, persistTelemetrySettings, telemetrySettings]);
+
+  const handleLogsToggle = useCallback((nextEnabled: boolean) => {
+    const next: FleetTelemetrySettings = {
+      ...telemetrySettings,
+      logs: {
+        ...telemetrySettings.logs,
+        enabled: nextEnabled,
+      },
+    };
+    persistTelemetrySettings(next);
+    if (nextEnabled && (!telemetrySettings.logs.datasourceUid || telemetrySettings.logs.datasourceUid.trim() === '')) {
+      openTelemetryConfigurator('logs');
+    }
+  }, [openTelemetryConfigurator, persistTelemetrySettings, telemetrySettings]);
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [userContext, setUserContext] = useState<{ name: string; role: string; isAdmin: boolean }>({
@@ -1074,13 +1332,14 @@ export const App = () => {
     const init = async () => {
       await loadGrafanaOrgContext();
       await loadUserContext();
+      await loadTelemetrySettings();
       await fetchAgents();
     };
     init();
     loadOpampSettings();
     const interval = setInterval(fetchAgents, 10000);
     return () => clearInterval(interval);
-  }, [loadGrafanaOrgContext, loadUserContext, loadOpampSettings]);
+  }, [loadGrafanaOrgContext, loadTelemetrySettings, loadUserContext, loadOpampSettings]);
 
   useEffect(() => {
     if (!currentOrgName && grafanaOrgName) {
@@ -2190,10 +2449,30 @@ export const App = () => {
           />
         )}
 
-        {activeTab === 'monitoring' && (
-          <MonitoringSection agents={agents} bridges={bridges} />
+          {activeTab === 'monitoring' && (
+           <MonitoringSection
+             agents={agents}
+             bridges={bridges}
+             telemetrySettings={telemetrySettings}
+             telemetryLoading={telemetryLoading}
+             onToggleMetrics={handleMetricsToggle}
+             onToggleLogs={handleLogsToggle}
+             telemetryDatasourceHints={telemetryDatasourceHints}
+             onConfigureTelemetry={openTelemetryConfigurator}
+           />
         )}
       </div>
+       <TelemetryConfigDrawer
+         open={telemetryDrawer.open}
+         mode={telemetryDrawer.mode}
+         metricsConfig={draftMetricsConfig}
+         logsConfig={draftLogsConfig}
+         onMetricsChange={setDraftMetricsConfig}
+         onLogsChange={setDraftLogsConfig}
+         onSave={handleTelemetryConfigSave}
+         onClose={closeTelemetryConfigurator}
+         saving={telemetrySaving}
+       />
       {/* Details Panel (Slide-in) */}
       {showDetailsPanel && selectedAgent && (
         <div style={{
@@ -2993,14 +3272,318 @@ export const App = () => {
   );
 };
 // Pipeline Flow Diagram Component - Memoized to prevent re-renders when only telemetry changes
+type StageMetricsRailProps = {
+  flowType: string;
+  receivers: string[];
+  processors: string[];
+  exporters: string[];
+  metricsSettings: MetricsTelemetryConfig;
+  agentUid?: string;
+  onConfigureMetrics: () => void;
+};
+
+type StageMetricsGroupProps = {
+  kind: StageQueryKey;
+  stages: string[];
+  pipelineType: string;
+  datasource: { id: number; uid: string; name: string } | null;
+  templates: StageMetricTemplates;
+  agentUid?: string;
+};
+
+const STAGE_SUMMARY: Record<StageQueryKey, { title: string; color: string; border: string; description: string }> = {
+  receivers: {
+    title: 'Receivers',
+    color: '#047857',
+    border: '#6EE7B7',
+    description: 'Monitors traffic entering each receiver and any drops/refusals.',
+  },
+  processors: {
+    title: 'Processors',
+    color: '#B45309',
+    border: '#FCD34D',
+    description: 'Observes items entering and exiting each processor in the pipeline.',
+  },
+  exporters: {
+    title: 'Exporters',
+    color: '#1D4ED8',
+    border: '#BFDBFE',
+    description: 'Shows attempted vs. successful sends for each exporter.',
+  },
+};
+
+const STAGE_QUERY_HINTS: Record<StageQueryKey, string> = {
+  receivers: 'Defaults use otelcol_receiver_accepted_log_records_total and otelcol_receiver_failed_log_records_total filtered by $stage and $pipeline.',
+  processors: 'Defaults rely on otelcol_processor_incoming_items_total and otelcol_processor_outgoing_items_total per processor.',
+  exporters: 'Defaults combine otelcol_exporter_sent_log_records_total with otelcol_exporter_send_failed_log_records_total for each exporter.',
+};
+
+const escapeSelectorValue = (value: string) => value.replace(/"/g, '\\"');
+
+const extractPrometheusSample = (payload: any): number | null => {
+  if (!payload || payload.status !== 'success') {
+    return null;
+  }
+  const data = payload.data;
+  if (!data) {
+    return null;
+  }
+  if (data.resultType === 'scalar' && Array.isArray(data.result) && data.result.length >= 2) {
+    const numeric = parseFloat(data.result[1]);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  if (data.resultType === 'vector' && Array.isArray(data.result)) {
+    const aggregated = data.result.reduce((acc: number, sample: any) => {
+      if (!sample || !Array.isArray(sample.value) || sample.value.length < 2) {
+        return acc;
+      }
+      const numeric = parseFloat(sample.value[1]);
+      if (!Number.isFinite(numeric)) {
+        return acc;
+      }
+      return acc + numeric;
+    }, 0);
+    return Number.isFinite(aggregated) ? aggregated : null;
+  }
+  return null;
+};
+
+const formatStageRate = (value: number | null): string => {
+  if (value === null || Number.isNaN(value)) {
+    return '—';
+  }
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)} M rec/s`;
+  }
+  if (abs >= 1_000) {
+    return `${(value / 1_000).toFixed(1)} k rec/s`;
+  }
+  return `${value.toFixed(1)} rec/s`;
+};
+
+const StageMetricsRail: React.FC<StageMetricsRailProps> = ({ flowType, receivers, processors, exporters, metricsSettings, agentUid, onConfigureMetrics }) => {
+  const datasourceUid = metricsSettings.datasourceUid;
+  const [datasource, setDatasource] = useState<{ id: number; uid: string; name: string } | null>(null);
+  const [dsError, setDsError] = useState<string | null>(null);
+  const [loadingDatasource, setLoadingDatasource] = useState(false);
+
+  useEffect(() => {
+    if (!datasourceUid) {
+      setDatasource(null);
+      setDsError('Select a Prometheus or Mimir datasource to populate per-stage metrics.');
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setLoadingDatasource(true);
+      try {
+        const ds = await backendSrv.get<{ id: number; uid: string; name: string }>(`/api/datasources/uid/${encodeURIComponent(datasourceUid)}`);
+        if (!cancelled) {
+          setDatasource(ds ?? null);
+          setDsError(null);
+        }
+      } catch (err: any) {
+        console.error('Failed to resolve datasource metadata', err);
+        if (!cancelled) {
+          setDatasource(null);
+          setDsError(err?.message || 'Failed to resolve datasource metadata');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingDatasource(false);
+        }
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [datasourceUid]);
+
+  const templates = metricsSettings.stageQueries || buildDefaultStageQueries();
+  const totalComponents = receivers.length + processors.length + exporters.length;
+  if (totalComponents === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{ marginTop: 16, padding: 16, borderRadius: 12, border: '1px solid #E5E7EB', background: '#FFFFFF', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>Per-stage throughput ({flowType})</div>
+          <div style={{ fontSize: 12, color: '#6B7280' }}>Each card runs the configured inbound/outbound queries with $stage and $pipeline placeholders.</div>
+        </div>
+        {!datasource && (
+          <button
+            type="button"
+            onClick={onConfigureMetrics}
+            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #2563EB', background: '#2563EB', color: '#FFFFFF', fontSize: 12, cursor: 'pointer' }}
+          >
+            Configure datasource
+          </button>
+        )}
+      </div>
+      {dsError && (
+        <div style={{ border: '1px solid #FCD34D', background: '#FEF3C7', color: '#92400E', fontSize: 12, borderRadius: 8, padding: 10 }}>
+          {dsError}
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+        <StageMetricsGroup kind="receivers" stages={receivers} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} />
+        <StageMetricsGroup kind="processors" stages={processors} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} />
+        <StageMetricsGroup kind="exporters" stages={exporters} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} />
+      </div>
+      {loadingDatasource && (
+        <div style={{ fontSize: 11, color: '#6B7280' }}>Resolving datasource metadata…</div>
+      )}
+    </div>
+  );
+};
+
+const StageMetricsGroup: React.FC<StageMetricsGroupProps> = ({ kind, stages, pipelineType, datasource, templates, agentUid }) => {
+  const [values, setValues] = useState<Record<string, { inbound: string; outbound: string }>>({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+
+  const template = templates[kind] || buildDefaultStageQueries()[kind];
+
+  const applyPlaceholders = useCallback((rawQuery: string, stageName: string) => {
+    if (!rawQuery || rawQuery.trim() === '') {
+      return '';
+    }
+    const resolvedCollector = agentUid && agentUid.trim() !== '' ? escapeSelectorValue(agentUid) : '$collector_uid';
+    const resolvedPipeline = pipelineType && pipelineType.trim() !== '' ? escapeSelectorValue(pipelineType) : '$pipeline';
+    const resolvedStage = stageName && stageName.trim() !== '' ? escapeSelectorValue(stageName) : '$stage';
+    return rawQuery
+      .replace(/\$collector_uid/g, resolvedCollector)
+      .replace(/\$pipeline/g, resolvedPipeline)
+      .replace(/\$stage/g, resolvedStage);
+  }, [agentUid, pipelineType]);
+
+  const executeQuery = useCallback(async (query: string, now: number) => {
+    if (!datasource || !query || query.trim() === '') {
+      return null;
+    }
+    const response = await rawBackendSrv.datasourceRequest({
+      method: 'GET',
+      url: `/api/datasources/proxy/${datasource.id}/api/v1/query`,
+      params: { query, time: now },
+    });
+    return extractPrometheusSample(response?.data);
+  }, [datasource]);
+
+  const runQueries = useCallback(async () => {
+    if (!datasource || stages.length === 0) {
+      setValues({});
+      setLastUpdated(null);
+      setError(stages.length === 0 ? null : 'Datasource not ready');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const next: Record<string, { inbound: string; outbound: string }> = {};
+      for (const stageName of stages) {
+        const inboundQuery = applyPlaceholders(template.inbound || '', stageName);
+        const outboundQuery = applyPlaceholders(template.outbound || '', stageName);
+        const inboundValue = inboundQuery ? await executeQuery(inboundQuery, now) : null;
+        const outboundValue = outboundQuery ? await executeQuery(outboundQuery, now) : null;
+        next[stageName] = {
+          inbound: formatStageRate(inboundValue),
+          outbound: formatStageRate(outboundValue),
+        };
+      }
+      setValues(next);
+      setLastUpdated(Date.now());
+    } catch (err: any) {
+      console.error('Stage metrics query failed', err);
+      setError(err?.data?.message || err?.message || 'Query failed. Adjust selectors and try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [datasource, stages, template, applyPlaceholders, executeQuery]);
+
+  useEffect(() => {
+    if (!datasource || stages.length === 0) {
+      return;
+    }
+    runQueries();
+    const interval = setInterval(runQueries, 60000);
+    return () => clearInterval(interval);
+  }, [datasource, stages, runQueries]);
+
+  const palette = STAGE_SUMMARY[kind];
+
+  return (
+    <div style={{ border: `1px solid ${palette.border}`, borderRadius: 10, padding: 14, background: '#FFFFFF', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: palette.color }}>{palette.title} ({stages.length})</div>
+      <div style={{ fontSize: 11, color: '#6B7280' }}>{palette.description}</div>
+      {stages.length === 0 ? (
+        <div style={{ fontSize: 12, color: '#6B7280' }}>None configured in this pipeline.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {stages.map((stage) => (
+            <div key={`${kind}-${stage}`} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>{stage}</div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 120px' }}>
+                  <div style={{ fontSize: 11, color: '#6B7280' }}>Inbound</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>{values[stage]?.inbound ?? '—'}</div>
+                </div>
+                <div style={{ flex: '1 1 120px' }}>
+                  <div style={{ fontSize: 11, color: '#6B7280' }}>Outbound</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>{values[stage]?.outbound ?? '—'}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, fontSize: 11, color: '#6B7280' }}>
+        <span>Last updated: {lastUpdated ? new Date(lastUpdated).toLocaleTimeString() : 'Not run yet'}</span>
+        <button
+          type="button"
+          onClick={runQueries}
+          disabled={loading || !datasource || stages.length === 0}
+          style={{
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid #CBD5F5',
+            background: loading ? '#E5E7EB' : '#F8FAFC',
+            cursor: loading || !datasource || stages.length === 0 ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {loading ? 'Running…' : 'Refresh'}
+        </button>
+      </div>
+      {error && (
+        <div style={{ fontSize: 11, color: '#B91C1C', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: 8 }}>{error}</div>
+      )}
+    </div>
+  );
+};
+
 const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   config,
   pipelines,
   telemetry,
+  agentName,
+  agentUid,
+  orgName,
+  metricsSettings,
+  onConfigureMetrics,
 }: {
   config: string;
   pipelines: any[];
   telemetry: any[];
+  agentName?: string;
+  agentUid?: string;
+  orgName?: string;
+  metricsSettings: MetricsTelemetryConfig;
+  onConfigureMetrics: () => void;
 }) {
   const pipelineFlows = useMemo(() => {
     const flows: Array<{ type: string; receivers: string[]; processors: string[]; exporters: string[] }> = [];
@@ -3107,9 +3690,9 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
             lineHeight: 1.6,
           }}
         >
-          {hasTelemetryUsage
-            ? 'Usage telemetry has started to arrive from this collector. Detailed CPU/memory charts will appear here once they are wired into the UI.'
-            : 'The collector has not reported usage telemetry via OpAMP yet. Configure the agent to report own metrics or scrape it with your preferred monitoring stack to visualise CPU, memory, and throughput.'}
+        {hasTelemetryUsage
+          ? 'Usage telemetry is arriving from this collector. Enable the metrics overlay to pull CPU/memory gauges and per-stage throughput cards from your Prometheus/Mimir datasource.'
+          : 'The collector has not reported usage telemetry via OpAMP yet. Configure the agent to report own metrics or scrape it with your preferred monitoring stack to visualise CPU, memory, and throughput.'}
         </div>
 
         {flows.map((flow) => (
@@ -3147,6 +3730,70 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
                 color: '#1D4ED8',
               })}
             </div>
+            {metricsSettings?.enabled && (
+              <StageMetricsRail
+                flowType={flow.type}
+                receivers={flow.receivers}
+                processors={flow.processors}
+                exporters={flow.exporters}
+                metricsSettings={metricsSettings}
+                agentUid={agentUid}
+                onConfigureMetrics={onConfigureMetrics}
+              />
+            )}
+            <div style={{ marginTop: 16 }}>
+              {metricsSettings?.enabled && metricsSettings.datasourceUid ? (
+                <PipelineMetricsPanelView
+                  key={`${flow.type}-${metricsSettings.datasourceUid}`}
+                  pipelineType={flow.type}
+                  agentUid={agentUid}
+                  agentName={agentName}
+                  orgName={orgName}
+                  allowDisable={false}
+                  initialEnabled
+                  defaultQueries={
+                    metricsSettings.queries && Object.keys(metricsSettings.queries).length > 0
+                      ? metricsSettings.queries
+                      : buildDefaultMetricQueries(flow.type, agentUid)
+                  }
+                  defaultDatasourceUid={metricsSettings.datasourceUid}
+                  readOnly
+                />
+              ) : (
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 8,
+                    border: '1px dashed #CBD5F5',
+                    background: '#F8FAFC',
+                    fontSize: 12,
+                    color: '#475569',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span>Metrics overlays are disabled for this pipeline. Configure a Prometheus-compatible datasource to enable live usage charts.</span>
+                  <button
+                    type="button"
+                    onClick={onConfigureMetrics}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 4,
+                      border: 'none',
+                      background: '#2563EB',
+                      color: '#FFFFFF',
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Configure metrics
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         ))}
 
@@ -3171,11 +3818,31 @@ const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
  // Monitoring Section Component
 
 // Monitoring Section Component
-function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Bridge[] }) {
+function MonitoringSection({
+  agents,
+  bridges,
+  telemetrySettings,
+  telemetryLoading,
+  onToggleMetrics,
+  onToggleLogs,
+  telemetryDatasourceHints,
+  onConfigureTelemetry,
+}: {
+  agents: Agent[];
+  bridges: Bridge[];
+  telemetrySettings: FleetTelemetrySettings;
+  telemetryLoading: boolean;
+  onToggleMetrics: (next: boolean) => void;
+  onToggleLogs: (next: boolean) => void;
+  telemetryDatasourceHints: { metrics?: string; logs?: string };
+  onConfigureTelemetry: (mode: 'metrics' | 'logs') => void;
+}) {
   const [selectedAgentUID, setSelectedAgentUID] = useState('');
   const [monitoringData, setMonitoringData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const metricsSettings = telemetrySettings?.metrics ?? getDefaultTelemetrySettingsState().metrics;
+  const logsSettings = telemetrySettings?.logs ?? getDefaultTelemetrySettingsState().logs;
 
   // Prevent selecting bridges - only collectors can be monitored (bridges don't have pipelines/configs)
   useEffect(() => {
@@ -4235,12 +4902,61 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
                     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
                         Pipeline Monitoring
-                </div>
-                      <PipelineFlowDiagram 
+                      </div>
+                      <div style={{
+                        fontSize: 12,
+                        color: '#4B5563',
+                        background: '#EFF6FF',
+                        border: '1px solid #BFDBFE',
+                        borderRadius: 8,
+                        padding: 12,
+                        lineHeight: 1.5,
+                      }}>
+                        Native OpAMP bridge/agent telemetry (reports_own_metrics) is not yet available for discovered collectors.
+                        Until upstream support lands, these toggles let you pull CPU, memory, bandwidth, and logs via Grafana data sources instead.
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                        <TelemetryToggleCard
+                          title="Metrics overlays"
+                          description="Visualize per-pipeline CPU, memory, and throughput via Prometheus or Mimir."
+                          enabled={metricsSettings.enabled}
+                          disabled={telemetryLoading}
+                          datasourceLabel={metricsSettings.datasourceUid ? `Datasource: ${telemetryDatasourceHints.metrics || metricsSettings.datasourceUid}` : 'Datasource: not configured'}
+                          footerNote="Applies to both the pipeline cards and the per-stage throughput chips."
+                          onToggle={() => onToggleMetrics(!metricsSettings.enabled)}
+                          onConfigure={() => onConfigureTelemetry('metrics')}
+                        />
+                        <TelemetryToggleCard
+                          title="Log snapshots"
+                          description="Use a Loki query template to inspect recent collector logs."
+                          enabled={logsSettings.enabled}
+                          disabled={telemetryLoading}
+                          datasourceLabel={logsSettings.datasourceUid ? `Datasource: ${telemetryDatasourceHints.logs || logsSettings.datasourceUid}` : 'Datasource: not configured'}
+                          footerNote="Fetches up to 50 log lines from the configured Loki datasource."
+                          onToggle={() => onToggleLogs(!logsSettings.enabled)}
+                          onConfigure={() => onConfigureTelemetry('logs')}
+                        />
+                      </div>
+                  <PipelineFlowDiagram 
                         config={pipelineConfigString}
                         pipelines={monitoringData.pipelines || []}
                         telemetry={monitoringData.telemetry || []}
+                        agentName={monitoringData?.agent?.name || monitoringData?.agent?.agentUid}
+                        agentUid={monitoringData?.agent?.agentUid}
+                        orgName={monitoringData?.agent?.orgName}
+                        metricsSettings={metricsSettings}
+                        onConfigureMetrics={() => onConfigureTelemetry('metrics')}
                       />
+                      <div style={{ marginTop: 16 }}>
+                        <LogsPanelView
+                          settings={logsSettings}
+                          enabled={logsSettings.enabled}
+                          agentUid={monitoringData?.agent?.agentUid}
+                          agentName={monitoringData?.agent?.name}
+                          orgName={monitoringData?.agent?.orgName}
+                          onConfigure={() => onConfigureTelemetry('logs')}
+                        />
+                      </div>
                     </div>
                   ) : (
                     <div style={{
@@ -4279,6 +4995,551 @@ function MonitoringSection({ agents, bridges }: { agents: Agent[]; bridges: Brid
     </div>
   );
 }
+
+type TelemetryToggleCardProps = {
+  title: string;
+  description: string;
+  enabled: boolean;
+  disabled?: boolean;
+  datasourceLabel?: string;
+  footerNote?: string;
+  onToggle: () => void;
+  onConfigure: () => void;
+};
+
+const TelemetryToggleCard: React.FC<TelemetryToggleCardProps> = ({ title, description, enabled, disabled, datasourceLabel, footerNote, onToggle, onConfigure }) => (
+  <div
+    style={{
+      flex: '1 1 280px',
+      minWidth: 260,
+      padding: 16,
+      borderRadius: 10,
+      border: '1px solid #E5E7EB',
+      background: enabled ? '#EEF2FF' : '#FFFFFF',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12,
+    }}
+  >
+    <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{title}</div>
+    <div style={{ fontSize: 12, color: '#4B5563', lineHeight: 1.6 }}>{description}</div>
+    {datasourceLabel && (
+      <div style={{ fontSize: 12, color: '#1F2937', fontWeight: 500 }}>{datasourceLabel}</div>
+    )}
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: '#1F2937', flexWrap: 'wrap', gap: 8 }}>
+      <span>Status: <strong>{enabled ? 'Enabled' : 'Disabled'}</strong></span>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <input type="checkbox" checked={enabled} disabled={disabled} onChange={onToggle} />
+        <span>{enabled ? 'Disable' : 'Enable'}</span>
+      </label>
+    </div>
+    <button
+      type="button"
+      onClick={onConfigure}
+      disabled={disabled}
+      style={{
+        padding: '6px 12px',
+        borderRadius: 6,
+        border: '1px solid #2563EB',
+        background: disabled ? '#BFDBFE' : '#2563EB',
+        color: disabled ? '#1D4ED8' : '#FFFFFF',
+        fontSize: 12,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        transition: 'background 0.2s ease',
+      }}
+    >
+      Configure
+    </button>
+    {footerNote && (
+      <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1.4 }}>{footerNote}</div>
+    )}
+  </div>
+);
+
+type TelemetryConfigDrawerProps = {
+  open: boolean;
+  mode: 'metrics' | 'logs';
+  metricsConfig: MetricsTelemetryConfig;
+  logsConfig: LogsTelemetryConfig;
+  onMetricsChange: (next: MetricsTelemetryConfig) => void;
+  onLogsChange: (next: LogsTelemetryConfig) => void;
+  onSave: (mode: 'metrics' | 'logs') => void;
+  onClose: () => void;
+  saving: boolean;
+};
+
+const PROM_DATASOURCE_TYPES = new Set(['prometheus', 'mimir', 'grafana-mimir-datasource', 'thanos']);
+const LOKI_DATASOURCE_TYPES = new Set(['loki']);
+
+const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
+  open,
+  mode,
+  metricsConfig,
+  logsConfig,
+  onMetricsChange,
+  onLogsChange,
+  onSave,
+  onClose,
+  saving,
+}) => {
+  const [datasources, setDatasources] = useState<Array<{ id: number; uid: string; name: string; type: string }>>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleStageQueryChange = (key: StageQueryKey, field: keyof StageQueryPair, value: string) => {
+    onMetricsChange({
+      ...metricsConfig,
+      stageQueries: {
+        ...metricsConfig.stageQueries,
+        [key]: {
+          ...metricsConfig.stageQueries[key],
+          [field]: value,
+        },
+      },
+    });
+  };
+
+  const handleStageReset = (key: StageQueryKey) => {
+    const defaults = buildDefaultStageQueries();
+    onMetricsChange({
+      ...metricsConfig,
+      stageQueries: {
+        ...metricsConfig.stageQueries,
+        [key]: {
+          ...defaults[key],
+        },
+      },
+    });
+  };
+
+  useEffect(() => {
+    if (!open) {
+      setDatasources([]);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    const loadDatasources = async () => {
+      setLoading(true);
+      try {
+        const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources');
+        if (cancelled) {
+          return;
+        }
+        const filtered = Array.isArray(response)
+          ? response.filter((ds) => (mode === 'metrics' ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)))
+          : [];
+        setDatasources(filtered);
+        setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
+      } catch (err: any) {
+        if (!cancelled) {
+          console.error('Failed to load data sources', err);
+          setError(err?.message || 'Failed to load data sources.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    loadDatasources();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        background: 'rgba(15,23,42,0.45)',
+        zIndex: 9999,
+        display: 'flex',
+        justifyContent: 'flex-end',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          width: 420,
+          maxWidth: '100%',
+          height: '100%',
+          background: '#FFFFFF',
+          boxShadow: '-12px 0 24px rgba(15,23,42,0.2)',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={{ padding: 16, borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{mode === 'metrics' ? 'Configure metrics overlay' : 'Configure log snapshots'}</div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}
+            aria-label="Close telemetry configuration"
+          >
+            ×
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {mode === 'metrics' ? (
+            <>
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                Select a Prometheus/Mimir datasource and adjust the default queries to match your labels. Placeholders like <code>$collector_uid</code>, <code>$pipeline</code>, and <code>$stage</code> are substituted at runtime.
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                Data source
+                <select
+                  value={metricsConfig.datasourceUid ?? ''}
+                  onChange={(event) =>
+                    onMetricsChange({
+                      ...metricsConfig,
+                      datasourceUid: event.target.value || null,
+                    })
+                  }
+                  disabled={loading || datasources.length === 0}
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                >
+                  <option value="">Select datasource</option>
+                  {datasources.map((ds) => (
+                    <option key={ds.uid} value={ds.uid}>
+                      {ds.name} ({ds.type})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {(Object.keys(metricsConfig.queries) as PipelineMetricKey[]).map((key) => (
+                <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                  {key.toUpperCase()} query
+                  <textarea
+                    value={metricsConfig.queries[key]}
+                    rows={5}
+                    onChange={(event) =>
+                      onMetricsChange({
+                        ...metricsConfig,
+                        queries: { ...metricsConfig.queries, [key]: event.target.value },
+                      })
+                    }
+                    style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                  />
+                </label>
+              ))}
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#111827', marginTop: 4 }}>Per-stage throughput templates</div>
+              <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.5 }}>
+                These queries power the inbound/outbound chips for each receiver, processor, and exporter. Use placeholders such as <code>$collector_uid</code>, <code>$pipeline</code>, and <code>$stage</code> to interpolate the active component names.
+              </div>
+              {STAGE_KEYS.map((key) => (
+                <div key={`stage-query-${key}`} style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>{STAGE_SUMMARY[key].title}</div>
+                    <button
+                      type="button"
+                      onClick={() => handleStageReset(key)}
+                      style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #CBD5F5', background: '#FFFFFF', fontSize: 11, cursor: 'pointer' }}
+                    >
+                      Reset to defaults
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#6B7280' }}>{STAGE_QUERY_HINTS[key]}</div>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                    Inbound query
+                    <textarea
+                      value={metricsConfig.stageQueries[key].inbound}
+                      rows={4}
+                      onChange={(event) => handleStageQueryChange(key, 'inbound', event.target.value)}
+                      style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                    Outbound query
+                    <textarea
+                      value={metricsConfig.stageQueries[key].outbound}
+                      rows={4}
+                      onChange={(event) => handleStageQueryChange(key, 'outbound', event.target.value)}
+                      style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                    />
+                  </label>
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: '#475569' }}>
+                Provide a Loki query template and adjust its labels to your environment. Supported placeholders: <code>$collector_uid</code>, <code>$collector_name</code>, <code>$org_name</code>.
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                Loki data source
+                <select
+                  value={logsConfig.datasourceUid ?? ''}
+                  onChange={(event) =>
+                    onLogsChange({
+                      ...logsConfig,
+                      datasourceUid: event.target.value || null,
+                    })
+                  }
+                  disabled={loading || datasources.length === 0}
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                >
+                  <option value="">Select datasource</option>
+                  {datasources.map((ds) => (
+                    <option key={ds.uid} value={ds.uid}>
+                      {ds.name} ({ds.type})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                Loki query template
+                <textarea
+                  value={logsConfig.query}
+                  rows={6}
+                  onChange={(event) => onLogsChange({ ...logsConfig, query: event.target.value })}
+                  style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                />
+              </label>
+            </>
+          )}
+          {error && (
+            <div style={{ padding: 10, borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', fontSize: 12, color: '#B91C1C' }}>{error}</div>
+          )}
+        </div>
+        <div style={{ padding: 16, borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #CBD5F5', background: '#FFFFFF', cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(mode)}
+            disabled={saving}
+            style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: saving ? '#A5B4FC' : '#4F46E5', color: '#FFFFFF', cursor: saving ? 'not-allowed' : 'pointer' }}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+type LogsPanelProps = {
+  settings: LogsTelemetryConfig;
+  enabled: boolean;
+  agentUid?: string;
+  agentName?: string;
+  orgName?: string;
+  onConfigure: () => void;
+};
+
+const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, agentUid, agentName, orgName, onConfigure }) => {
+  const [datasource, setDatasource] = useState<{ id: number; uid: string; name: string; type: string } | null>(null);
+  const [entries, setEntries] = useState<Array<{ ts: string; line: string }>>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolveDatasource = async () => {
+      if (!settings.datasourceUid) {
+        setDatasource(null);
+        return;
+      }
+      try {
+        const list = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources');
+        if (!cancelled) {
+          setDatasource(Array.isArray(list) ? list.find((ds) => ds.uid === settings.datasourceUid) || null : null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to load data sources', err);
+        }
+      }
+    };
+    resolveDatasource();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.datasourceUid]);
+
+  const buildQuery = useCallback(() => {
+    const template = settings.query || LOGS_QUERY_PLACEHOLDER;
+    return template
+      .replace(/\$collector_uid/g, agentUid || '')
+      .replace(/\$collector_name/g, agentName || '')
+      .replace(/\$org_name/g, orgName || '');
+  }, [settings.query, agentUid, agentName, orgName]);
+
+  const fetchLogs = useCallback(async () => {
+    if (!datasource) {
+      setError('Select a Loki datasource to fetch logs.');
+      return;
+    }
+    const query = buildQuery();
+    if (!query || query.trim() === '') {
+      setError('Query template is empty. Update the configuration.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const end = new Date();
+      const start = new Date(end.getTime() - 10 * 60 * 1000);
+      const response = await rawBackendSrv.datasourceRequest({
+        method: 'GET',
+        url: `/api/datasources/proxy/${datasource.id}/loki/api/v1/query_range`,
+        params: {
+          query,
+          limit: 50,
+          direction: 'backward',
+          start: start.toISOString(),
+          end: end.toISOString(),
+        },
+      });
+      const result = response?.data?.data?.result || [];
+      const rows: Array<{ ts: string; line: string }> = [];
+      result.forEach((stream: any) => {
+        const values = stream?.values || [];
+        values.forEach((value: any) => {
+          if (Array.isArray(value) && value.length >= 2) {
+            const ts = Number(value[0]);
+            const tsMs = Number.isFinite(ts) ? ts / 1e6 : Date.now();
+            rows.push({
+              ts: new Date(tsMs).toLocaleString(),
+              line: value[1],
+            });
+          }
+        });
+      });
+      rows.sort((a, b) => (a.ts < b.ts ? 1 : -1));
+      setEntries(rows.slice(0, 50));
+    } catch (err: any) {
+      console.error('Failed to query Loki', err);
+      setError(err?.data?.message || err?.message || 'Failed to query Loki datasource.');
+    } finally {
+      setLoading(false);
+    }
+  }, [datasource, buildQuery]);
+
+  if (!enabled) {
+    return (
+      <div
+        style={{
+          padding: 16,
+          borderRadius: 8,
+          border: '1px dashed #CBD5F5',
+          background: '#F8FAFC',
+          color: '#475569',
+          fontSize: 12,
+        }}
+      >
+        Log snapshots are disabled. Enable them above and configure a Loki data source to view recent collector logs.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        borderRadius: 8,
+        border: '1px solid #E2E8F0',
+        padding: 16,
+        background: '#FFFFFF',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>Recent logs</div>
+          <div style={{ fontSize: 12, color: '#6B7280' }}>{datasource ? `Datasource: ${datasource.name}` : 'Datasource not configured'}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={fetchLogs}
+            disabled={loading || !datasource}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 6,
+              border: 'none',
+              background: loading || !datasource ? '#CBD5F5' : '#2563EB',
+              color: '#FFFFFF',
+              fontSize: 12,
+              cursor: loading || !datasource ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading ? 'Fetching…' : 'Refresh logs'}
+          </button>
+          <button
+            type="button"
+            onClick={onConfigure}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 6,
+              border: '1px solid #E5E7EB',
+              background: '#FFFFFF',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            Configure
+          </button>
+        </div>
+      </div>
+      {error && (
+        <div style={{ padding: 10, borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', fontSize: 12, color: '#B91C1C' }}>{error}</div>
+      )}
+      {entries.length === 0 ? (
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 6,
+            border: '1px dashed #CBD5F5',
+            background: '#F8FAFC',
+            fontSize: 12,
+            color: '#475569',
+          }}
+        >
+          No log entries fetched yet. Click “Refresh logs” to query the configured Loki datasource.
+        </div>
+      ) : (
+        <div
+          style={{
+            maxHeight: 260,
+            overflowY: 'auto',
+            borderRadius: 6,
+            border: '1px solid #E2E8F0',
+            fontFamily: 'monospace',
+            fontSize: 12,
+            background: '#0F172A',
+            color: '#E2E8F0',
+          }}
+        >
+          {entries.map((entry, idx) => (
+            <div key={`${entry.ts}-${idx}`} style={{ padding: '6px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+              <span style={{ color: '#93C5FD', marginRight: 8 }}>{entry.ts}</span>
+              <span>{entry.line}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Config Generator Component (BindPlane-style)
 function ConfigGenerator({ agents, bridges, onPushConfig }: { agents: Agent[]; bridges: Bridge[]; onPushConfig: (uid: string, config: string) => void }) {
   const [receivers, setReceivers] = useState<any[]>([]);
@@ -7156,7 +8417,7 @@ service:
                                   try {
                                     const resp = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/configs/${version.id}`);
                                     await onPushConfig(selectedAgentUID, resp.config);
-                                    alert('✅ Configuration pushed successfully! Monitoring sync status...');
+                                    alert('✅ Configuration pushed. Watch the collector health badge for status updates.');
                                     if (selectedAgentUID) {
                                       await loadConfigVersions(selectedAgentUID);
                                     }
@@ -7190,25 +8451,25 @@ service:
                                   ✓ Pushed at {new Date(version.pushedAt).toLocaleString()}
                                   {version.pushedBy && ` by ${version.pushedBy}`}
                                 </div>
-                                {(() => {
-                                  const syncStatus = configSyncStatus[version.id];
-                                  if (!syncStatus) {
-                                    return (
-                                      <span style={{ 
-                                        padding: '4px 10px', 
-                                        background: '#6B7280', 
-                                        color: 'white', 
-                                        borderRadius: 4, 
-                                        fontSize: 11, 
-                                        fontWeight: 500,
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: 6
-                                      }}>
-                                        ⏳ Checking sync status...
-                                      </span>
-                                    );
-                                  }
+                            {(() => {
+                              const syncStatus = configSyncStatus[version.id];
+                              if (!syncStatus) {
+                                return (
+                                  <span style={{ 
+                                    padding: '4px 10px', 
+                                    background: '#6B7280', 
+                                    color: 'white', 
+                                    borderRadius: 4, 
+                                    fontSize: 11, 
+                                    fontWeight: 500,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 6
+                                  }}>
+                                    ⏳ Checking sync status...
+                                  </span>
+                                );
+                              }
                                   
                                   const remoteStatus = syncStatus.remoteConfigStatus || '';
                                   const hashMatch = syncStatus.hashMatch;
@@ -7286,95 +8547,24 @@ service:
                                     );
                                   } else {
                                     return (
-                                      <span style={{ 
-                                        padding: '4px 10px', 
-                                        background: '#6B7280', 
-                                        color: 'white', 
+                                      <div style={{ 
+                                        padding: '6px 10px', 
+                                        background: '#F3F4F6', 
+                                        color: '#374151', 
                                         borderRadius: 4, 
-                                        fontSize: 11, 
-                                        fontWeight: 500,
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: 6
+                                        fontSize: 11,
+                                        lineHeight: 1.5
                                       }}>
-                                        ⏳ Waiting for agent...
-                                      </span>
+                                        Agent has not reported a RemoteConfigStatus yet. After pushing, track the collector health badge in the roster (green = applied, red = offline).
+                                      </div>
                                     );
                                   }
                                 })()}
+                                <div style={{ fontSize: 11, color: '#6B7280', marginTop: 6 }}>
+                                  After pushing, watch the collector health indicator under the Collectors tab. Green means the agent is healthy, red means it needs attention.
+                                </div>
                               </div>
                             )}
-                            <button
-                              onClick={async () => {
-                                try {
-                                  if (!selectedAgentUID || selectedAgentUID.trim() === '') {
-                                    alert('❌ Please select an agent first');
-                                    return;
-                                  }
-                                  
-                                  console.log('Checking sync status for agent:', selectedAgentUID);
-                                  
-                                  // Force refresh status from backend
-                                  const endpoint = `/api/plugins/otel-collector-agent-fleet-management/resources/agents/${encodeURIComponent(selectedAgentUID)}/current-config`;
-                                  console.log('Calling endpoint:', endpoint);
-                                  
-                                  const currentConfigResp: any = await backendSrv.get(endpoint);
-                                  console.log('Received response:', currentConfigResp);
-                                  
-                                  // Update configSyncStatus state for all pushed configs to refresh UI
-                                  const pushedConfigs = configVersions.filter((v: any) => v.pushedAt);
-                                  for (const cfg of pushedConfigs) {
-                                    setConfigSyncStatus((prev) => ({ ...prev, [cfg.id]: currentConfigResp }));
-                                  }
-                                  
-                                  const statusInfo: string[] = [];
-                                  if (currentConfigResp.remoteConfigStatus) {
-                                    let statusDisplay = currentConfigResp.remoteConfigStatus;
-                                    // Make status more readable
-                                    if (statusDisplay.includes('UNSET') || statusDisplay === 'RemoteConfigStatuses_UNSET') {
-                                      statusDisplay = '⚠️ Not Reported Yet (Agent needs to send status)';
-                                    } else if (statusDisplay.includes('APPLIED') || statusDisplay === 'RemoteConfigStatuses_APPLIED') {
-                                      statusDisplay = '✅ Applied Successfully';
-                                    } else if (statusDisplay.includes('APPLYING') || statusDisplay === 'RemoteConfigStatuses_APPLYING') {
-                                      statusDisplay = '⏳ Applying Now';
-                                    } else if (statusDisplay.includes('FAILED') || statusDisplay === 'RemoteConfigStatuses_FAILED') {
-                                      statusDisplay = '❌ Failed to Apply';
-                                    }
-                                    statusInfo.push(`Status: ${statusDisplay}`);
-                                  } else {
-                                    statusInfo.push(`Status: ⚠️ Not Reported (Agent may not have sent RemoteConfigStatus yet)`);
-                                  }
-                                  if (currentConfigResp.hashMatch !== undefined) {
-                                    statusInfo.push(`Hash Match: ${currentConfigResp.hashMatch ? '✅ YES (Config Synced)' : '❌ NO (Config Not Synced Yet)'}`);
-                                    if (!currentConfigResp.hashMatch && currentConfigResp.remoteConfigHash) {
-                                      statusInfo.push(`Agent Reported Hash: ${currentConfigResp.remoteConfigHash.substring(0, 16)}...`);
-                                    }
-                                  }
-                                  if (currentConfigResp.lastStatusReport) {
-                                    statusInfo.push(`Last Report: ${new Date(currentConfigResp.lastStatusReport).toLocaleString()}`);
-                                  }
-                                  if (currentConfigResp.remoteConfigError) {
-                                    statusInfo.push(`⚠️ Error: ${currentConfigResp.remoteConfigError}`);
-                                  }
-                                  if (statusInfo.length === 0) {
-                                    alert('⚠️ No sync status available yet.\n\nThe agent may not have reported its RemoteConfigStatus.\n\nThis could mean:\n• Agent is still connecting/initializing\n• Agent hasn\'t received a config push yet\n• Agent doesn\'t support RemoteConfigStatus reporting\n\nCheck agent logs for more details.');
-                                  } else {
-                                    alert(`📊 Config Sync Status for Agent ${selectedAgentUID}:\n\n${statusInfo.join('\n')}\n\n💡 What does this mean?\n• "Not Reported Yet": Agent hasn't sent status (may be initializing)\n• "Hash Match = NO": Agent received config but hasn't applied it yet\n• Check agent logs to see if config was accepted/applied`);
-                                  }
-                                } catch (err: any) {
-                                  console.error('Failed to check sync status:', err);
-                                  const errorMsg = err.data?.message || err.message || err.statusText || 'Unknown error';
-                                  if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError')) {
-                                    alert('❌ Failed to check sync status: Network error\n\nPossible causes:\n• Backend server is not running\n• Agent UID is invalid or missing\n• CORS configuration issue\n\nPlease check:\n1. Is the backend server running?\n2. Did you select a valid agent?\n3. Check browser console for more details');
-                                  } else {
-                                    alert('Failed to check sync status: ' + errorMsg);
-                                  }
-                                }
-                              }}
-                              style={{ padding: '6px 14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 500 }}
-                            >
-                              🔍 Verify Sync Status
-                            </button>
                           </div>
                         )}
                         {version.approvalStatus === 'pending' && (
