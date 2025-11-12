@@ -31,10 +31,22 @@ type Agent struct {
 	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
 }
 
+type StageMetricPair struct {
+	Inbound  string `json:"inbound"`
+	Outbound string `json:"outbound"`
+}
+
+type StageMetricTemplates struct {
+	Receivers  StageMetricPair `json:"receivers"`
+	Processors StageMetricPair `json:"processors"`
+	Exporters  StageMetricPair `json:"exporters"`
+}
+
 type MetricsTelemetryConfig struct {
-	Enabled       bool              `json:"enabled"`
-	DatasourceUID string            `json:"datasourceUid,omitempty"`
-	Queries       map[string]string `json:"queries"`
+	Enabled       bool                 `json:"enabled"`
+	DatasourceUID string               `json:"datasourceUid,omitempty"`
+	Queries       map[string]string    `json:"queries"`
+	StageQueries  StageMetricTemplates `json:"stageQueries"`
 }
 
 type LogsTelemetryConfig struct {
@@ -51,9 +63,26 @@ type TelemetrySettings struct {
 func defaultMetricQueries() map[string]string {
 	return map[string]string{
 		"cpu":      `sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="$collector_uid"}[5m])) * 100`,
-		"memory":   `avg_over_time(otelcol_process_resident_memory_bytes{service_instance_id="$collector_uid"}[5m]) / 1024 / 1024`,
-		"inbound":  `sum(rate(otelcol_processor_batch_batch_send_size_sum{service_instance_id="$collector_uid", pipeline="$pipeline"}[5m])) / 1024`,
-		"outbound": `sum(rate(otelcol_exporter_sent_bytes{service_instance_id="$collector_uid", pipeline="$pipeline"}[5m])) / 1024`,
+		"memory":   `avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="$collector_uid"}[5m]) / 1024 / 1024`,
+		"inbound":  `sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pipeline="$pipeline"}[5m]))`,
+		"outbound": `sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pipeline="$pipeline"}[5m]))`,
+	}
+}
+
+func defaultStageMetricQueries() StageMetricTemplates {
+	return StageMetricTemplates{
+		Receivers: StageMetricPair{
+			Inbound:  `sum(rate(otelcol_receiver_accepted_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))`,
+			Outbound: `sum(rate(otelcol_receiver_failed_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))`,
+		},
+		Processors: StageMetricPair{
+			Inbound:  `sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))`,
+			Outbound: `sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))`,
+		},
+		Exporters: StageMetricPair{
+			Inbound:  `sum(rate(otelcol_exporter_send_failed_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m])) + sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))`,
+			Outbound: `sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))`,
+		},
 	}
 }
 
@@ -65,6 +94,7 @@ func defaultTelemetrySettings() TelemetrySettings {
 			Enabled:       false,
 			DatasourceUID: "",
 			Queries:       defaultMetricQueries(),
+			StageQueries:  defaultStageMetricQueries(),
 		},
 		Logs: LogsTelemetryConfig{
 			Enabled:       false,
@@ -88,6 +118,28 @@ func normalizeTelemetrySettings(settings *TelemetrySettings) {
 		if val == "" {
 			settings.Metrics.Queries[key] = fallback
 		}
+	}
+
+	defaultStage := defaultStageMetricQueries()
+	normalizePair := func(current StageMetricPair, fallback StageMetricPair) StageMetricPair {
+		inbound := strings.TrimSpace(current.Inbound)
+		if inbound == "" {
+			inbound = fallback.Inbound
+		}
+		outbound := strings.TrimSpace(current.Outbound)
+		if outbound == "" {
+			outbound = fallback.Outbound
+		}
+		return StageMetricPair{
+			Inbound:  inbound,
+			Outbound: outbound,
+		}
+	}
+
+	settings.Metrics.StageQueries = StageMetricTemplates{
+		Receivers:  normalizePair(settings.Metrics.StageQueries.Receivers, defaultStage.Receivers),
+		Processors: normalizePair(settings.Metrics.StageQueries.Processors, defaultStage.Processors),
+		Exporters:  normalizePair(settings.Metrics.StageQueries.Exporters, defaultStage.Exporters),
 	}
 
 	settings.Metrics.DatasourceUID = strings.TrimSpace(settings.Metrics.DatasourceUID)
