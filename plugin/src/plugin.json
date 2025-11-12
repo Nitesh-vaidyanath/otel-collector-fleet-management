@@ -2,6 +2,7 @@
   "type": "app",
   "name": "OTel Collector Agent Fleet Management",
   "id": "otel-collector-agent-fleet-management",
+  "module": "module",
   "info": {
     "author": {
       "name": "Nitesh Vaidyanath",
@@ -46,6 +47,12 @@
       "role": "Viewer",
       "addToNav": true,
       "defaultNav": true
+    },
+    {
+      "type": "panel",
+      "name": "Pipeline Metrics Panel",
+      "module": "panels/pipeline/module",
+      "path": "pipeline-metrics-panel"
     }
   ],
   "routes": [

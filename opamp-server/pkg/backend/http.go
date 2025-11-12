@@ -81,6 +81,16 @@ func newAPIMux() *http.ServeMux {
 
 	mux.HandleFunc("/health", wrap(healthHandler))
 	mux.HandleFunc("/settings", wrap(settingsHandler))
+	mux.HandleFunc("/telemetry-settings", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			wrap(telemetrySettingsGetHandler)(w, r)
+		case http.MethodPost:
+			rbac(RoleEditor, telemetrySettingsPostHandler)(w, r)
+		default:
+			methodNotAllowed(w)
+		}
+	})
 	mux.HandleFunc("/user-role", wrap(userRoleHandler))
 	mux.HandleFunc("/organizations", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

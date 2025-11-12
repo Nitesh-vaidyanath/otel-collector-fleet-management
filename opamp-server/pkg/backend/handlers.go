@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -28,6 +29,119 @@ type Agent struct {
 	LastSeen     *string                `json:"lastSeen,omitempty"`
 	Labels       map[string]string      `json:"labels,omitempty"`
 	Capabilities map[string]interface{} `json:"capabilities,omitempty"`
+}
+
+type MetricsTelemetryConfig struct {
+	Enabled       bool              `json:"enabled"`
+	DatasourceUID string            `json:"datasourceUid,omitempty"`
+	Queries       map[string]string `json:"queries"`
+}
+
+type LogsTelemetryConfig struct {
+	Enabled       bool   `json:"enabled"`
+	DatasourceUID string `json:"datasourceUid,omitempty"`
+	Query         string `json:"query"`
+}
+
+type TelemetrySettings struct {
+	Metrics MetricsTelemetryConfig `json:"metrics"`
+	Logs    LogsTelemetryConfig    `json:"logs"`
+}
+
+func defaultMetricQueries() map[string]string {
+	return map[string]string{
+		"cpu":      `sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="$collector_uid"}[5m])) * 100`,
+		"memory":   `avg_over_time(otelcol_process_resident_memory_bytes{service_instance_id="$collector_uid"}[5m]) / 1024 / 1024`,
+		"inbound":  `sum(rate(otelcol_processor_batch_batch_send_size_sum{service_instance_id="$collector_uid", pipeline="$pipeline"}[5m])) / 1024`,
+		"outbound": `sum(rate(otelcol_exporter_sent_bytes{service_instance_id="$collector_uid", pipeline="$pipeline"}[5m])) / 1024`,
+	}
+}
+
+const defaultLogsQueryTemplate = `{service_instance_id="$collector_uid"}`
+
+func defaultTelemetrySettings() TelemetrySettings {
+	return TelemetrySettings{
+		Metrics: MetricsTelemetryConfig{
+			Enabled:       false,
+			DatasourceUID: "",
+			Queries:       defaultMetricQueries(),
+		},
+		Logs: LogsTelemetryConfig{
+			Enabled:       false,
+			DatasourceUID: "",
+			Query:         defaultLogsQueryTemplate,
+		},
+	}
+}
+
+func normalizeTelemetrySettings(settings *TelemetrySettings) {
+	if settings == nil {
+		return
+	}
+
+	if settings.Metrics.Queries == nil {
+		settings.Metrics.Queries = map[string]string{}
+	}
+	defaultQueries := defaultMetricQueries()
+	for key, fallback := range defaultQueries {
+		val := strings.TrimSpace(settings.Metrics.Queries[key])
+		if val == "" {
+			settings.Metrics.Queries[key] = fallback
+		}
+	}
+
+	settings.Metrics.DatasourceUID = strings.TrimSpace(settings.Metrics.DatasourceUID)
+	settings.Logs.DatasourceUID = strings.TrimSpace(settings.Logs.DatasourceUID)
+	settings.Logs.Query = strings.TrimSpace(settings.Logs.Query)
+	if settings.Logs.Query == "" {
+		settings.Logs.Query = defaultLogsQueryTemplate
+	}
+}
+
+func loadTelemetrySettings(orgID int64) (TelemetrySettings, error) {
+	result := defaultTelemetrySettings()
+
+	db := mustDB()
+	defer db.Close()
+
+	row := db.QueryRow(`SELECT settings_json FROM telemetry_settings WHERE org_id=?`, orgID)
+	var settingsJSON sql.NullString
+	if err := row.Scan(&settingsJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return result, nil
+		}
+		return result, err
+	}
+
+	if settingsJSON.Valid && strings.TrimSpace(settingsJSON.String) != "" {
+		if err := json.Unmarshal([]byte(settingsJSON.String), &result); err != nil {
+			// fall back to defaults on parse error
+			result = defaultTelemetrySettings()
+		}
+	}
+
+	normalizeTelemetrySettings(&result)
+	return result, nil
+}
+
+func saveTelemetrySettings(orgID int64, settings TelemetrySettings) error {
+	normalizeTelemetrySettings(&settings)
+
+	payload, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+
+	db := mustDB()
+	defer db.Close()
+
+	_, err = db.Exec(`
+		INSERT INTO telemetry_settings (org_id, settings_json)
+		VALUES (?, ?)
+		ON DUPLICATE KEY UPDATE
+			settings_json=VALUES(settings_json),
+			updated_at=NOW()`, orgID, string(payload))
+	return err
 }
 
 func jsonOK(w http.ResponseWriter, v any) {
@@ -76,6 +190,39 @@ func userRoleHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		"orgName":         c.OrgName,
 		"grafanaOrgID":    c.GrafanaOrgID,
 		"grafanaOrgName":  c.GrafanaOrgName,
+	})
+}
+
+func telemetrySettingsGetHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	settings, err := loadTelemetrySettings(c.OrgID)
+	if err != nil {
+		log.Printf("failed to load telemetry settings for org %d: %v", c.OrgID, err)
+		writeJSONError(w, http.StatusInternalServerError, "failed to load telemetry settings")
+		return
+	}
+	jsonOK(w, map[string]any{
+		"settings": settings,
+	})
+}
+
+func telemetrySettingsPostHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
+	defer r.Body.Close()
+
+	var payload TelemetrySettings
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid telemetry settings payload")
+		return
+	}
+
+	if err := saveTelemetrySettings(c.OrgID, payload); err != nil {
+		log.Printf("failed to save telemetry settings for org %d: %v", c.OrgID, err)
+		writeJSONError(w, http.StatusInternalServerError, "failed to save telemetry settings")
+		return
+	}
+
+	jsonOK(w, map[string]any{
+		"ok":       true,
+		"settings": payload,
 	})
 }
 
