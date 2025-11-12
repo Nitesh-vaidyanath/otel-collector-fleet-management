@@ -8,10 +8,11 @@ var useEffect2 = React2.useEffect ? React2.useEffect.bind(React2) : void 0;
 var useMemo2 = React2.useMemo ? React2.useMemo.bind(React2) : void 0;
 var useCallback2 = React2.useCallback ? React2.useCallback.bind(React2) : void 0;
 // panels/pipeline/module.tsx
+var React2 = __REACT__.default || __REACT__;
 
 
 // components/PipelineMetricsPanelView.tsx
-
+var React = __REACT__.default || __REACT__; var { useCallback, useEffect, useRef, useState } = __REACT__;
 
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var METRIC_LABELS = [

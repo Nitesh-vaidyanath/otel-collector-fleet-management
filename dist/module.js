@@ -9,8 +9,8 @@ var useMemo2 = React2.useMemo ? React2.useMemo.bind(React2) : void 0;
 var useCallback2 = React2.useCallback ? React2.useCallback.bind(React2) : void 0;
 // module.ts
 
-// pages/App.tsx
 
+// pages/App.tsx
 
 // node_modules/rxjs/dist/esm5/internal/util/createErrorClass.js
 function createErrorClass(createImpl) {
@@ -2642,7 +2642,7 @@ var safeLoadAll = renamed("safeLoadAll", "loadAll");
 var safeDump = renamed("safeDump", "dump");
 
 // components/PipelineMetricsPanelView.tsx
-
+var React = __REACT__.default || __REACT__; var { useCallback, useEffect, useRef, useState } = __REACT__;
 
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var METRIC_LABELS = [
@@ -5918,7 +5918,15 @@ function MonitoringSection({
     width: "100%",
     maxWidth: "100%",
     overflow: "hidden"
-  } }, pipelineConfigString || "No config")))), hasPipelineDiagramData ? /* @__PURE__ */ React2.createElement("div", { style: { width: "100%", display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, "Pipeline Monitoring"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12 } }, /* @__PURE__ */ React2.createElement(
+  } }, pipelineConfigString || "No config")))), hasPipelineDiagramData ? /* @__PURE__ */ React2.createElement("div", { style: { width: "100%", display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, "Pipeline Monitoring"), /* @__PURE__ */ React2.createElement("div", { style: {
+    fontSize: 12,
+    color: "#4B5563",
+    background: "#EFF6FF",
+    border: "1px solid #BFDBFE",
+    borderRadius: 8,
+    padding: 12,
+    lineHeight: 1.5
+  } }, "Native OpAMP bridge/agent telemetry (reports_own_metrics) is not yet available for discovered collectors. Until upstream support lands, these toggles let you pull CPU, memory, bandwidth, and logs via Grafana data sources instead."), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 12 } }, /* @__PURE__ */ React2.createElement(
     TelemetryToggleCard,
     {
       title: "Metrics overlays",

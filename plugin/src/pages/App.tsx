@@ -4513,6 +4513,18 @@ function MonitoringSection({
                       <div style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>
                         Pipeline Monitoring
                       </div>
+                      <div style={{
+                        fontSize: 12,
+                        color: '#4B5563',
+                        background: '#EFF6FF',
+                        border: '1px solid #BFDBFE',
+                        borderRadius: 8,
+                        padding: 12,
+                        lineHeight: 1.5,
+                      }}>
+                        Native OpAMP bridge/agent telemetry (reports_own_metrics) is not yet available for discovered collectors.
+                        Until upstream support lands, these toggles let you pull CPU, memory, bandwidth, and logs via Grafana data sources instead.
+                      </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
                         <TelemetryToggleCard
                           title="Metrics overlays"

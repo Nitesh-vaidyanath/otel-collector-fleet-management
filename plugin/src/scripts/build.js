@@ -38,19 +38,39 @@ const entries = [
 const ensureDir = (filePath) => fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
 const transformToAmd = (code) => {
-  code = code.replace(/^\s*import\s+.*?;?\s*$/gm, '');
   code = code.replace(/import\s+\{[^}]*\}\s+from\s+['"]@grafana\/data['"];?/g, '');
   code = code.replace(/import\s+\{[^}]*\}\s+from\s+['"]@grafana\/runtime['"];?/g, '');
   code = code.replace(/import\s+\{[^}]*\}\s+from\s+['"]@grafana\/ui['"];?/g, '');
 
   code = code.replace(/import\s+React\s*,\s*\{([^}]+)\}\s+from\s+['"]react['"];?/g, (_, hooks) => {
-    const hookNames = hooks.split(',').map((h) => h.trim()).join(', ');
-    return `var React = __REACT__.default || __REACT__; var { ${hookNames} } = __REACT__;`;
+    const parts = hooks
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .map((h) => {
+        const [orig, alias] = h.split(/\s+as\s+/i).map((p) => p && p.trim());
+        return alias ? `${orig}: ${alias}` : orig;
+      })
+      .join(', ');
+    return `var React = __REACT__.default || __REACT__; var { ${parts} } = __REACT__;`;
+  });
+  code = code.replace(/import\s+\{([^}]+)\}\s+from\s+['"]react['"];?/g, (_, hooks) => {
+    const parts = hooks
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean)
+      .map((h) => {
+        const [orig, alias] = h.split(/\s+as\s+/i).map((p) => p && p.trim());
+        return alias ? `${orig}: ${alias}` : orig;
+      })
+      .join(', ');
+    return `var { ${parts} } = __REACT__;`;
   });
   code = code.replace(/import\s+(\w+)\s+from\s+['"]react['"];?/g, 'var $1 = __REACT__.default || __REACT__;');
   code = code.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]react['"];?/g, 'var $1 = __REACT__;');
   code = code.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]react-dom['"];?/g, 'var $1 = __REACT_DOM__;');
   code = code.replace(/import\s+[^;]+from\s+['"]react-dom['"];?/g, '');
+  code = code.replace(/^\s*import\s+.*?;?\s*$/gm, '');
 
   code = code.replace(/\bAppPlugin\b/g, '__GRAFANA_DATA__.AppPlugin');
   code = code.replace(/\bPanelPlugin\b/g, '__GRAFANA_DATA__.PanelPlugin');
