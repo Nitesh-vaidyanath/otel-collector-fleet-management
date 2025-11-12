@@ -2457,6 +2457,7 @@ export const App = () => {
              telemetryLoading={telemetryLoading}
              onToggleMetrics={handleMetricsToggle}
              onToggleLogs={handleLogsToggle}
+             telemetryDatasourceHints={telemetryDatasourceHints}
              onConfigureTelemetry={openTelemetryConfigurator}
            />
         )}
@@ -3824,6 +3825,7 @@ function MonitoringSection({
   telemetryLoading,
   onToggleMetrics,
   onToggleLogs,
+  telemetryDatasourceHints,
   onConfigureTelemetry,
 }: {
   agents: Agent[];
@@ -3832,6 +3834,7 @@ function MonitoringSection({
   telemetryLoading: boolean;
   onToggleMetrics: (next: boolean) => void;
   onToggleLogs: (next: boolean) => void;
+  telemetryDatasourceHints: { metrics?: string; logs?: string };
   onConfigureTelemetry: (mode: 'metrics' | 'logs') => void;
 }) {
   const [selectedAgentUID, setSelectedAgentUID] = useState('');

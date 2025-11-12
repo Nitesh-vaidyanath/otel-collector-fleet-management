@@ -3731,7 +3731,7 @@ var App = () => {
   const [telemetryDrawer, setTelemetryDrawer] = useState2({ open: false, mode: "metrics" });
   const [draftMetricsConfig, setDraftMetricsConfig] = useState2(() => getDefaultTelemetrySettingsState().metrics);
   const [draftLogsConfig, setDraftLogsConfig] = useState2(() => getDefaultTelemetrySettingsState().logs);
-  const [telemetryDatasourceHints2, setTelemetryDatasourceHints] = useState2({});
+  const [telemetryDatasourceHints, setTelemetryDatasourceHints] = useState2({});
   useEffect2(() => {
     let cancelled = false;
     const resolve = async (uid, key) => {
@@ -4809,6 +4809,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       telemetryLoading,
       onToggleMetrics: handleMetricsToggle,
       onToggleLogs: handleLogsToggle,
+      telemetryDatasourceHints,
       onConfigureTelemetry: openTelemetryConfigurator
     }
   )), /* @__PURE__ */ React2.createElement(
@@ -5653,6 +5654,7 @@ function MonitoringSection({
   telemetryLoading,
   onToggleMetrics,
   onToggleLogs,
+  telemetryDatasourceHints,
   onConfigureTelemetry
 }) {
   const [selectedAgentUID, setSelectedAgentUID] = useState2("");
