@@ -4,7 +4,7 @@ version: "3.9"
 services:
   mysql:
     image: mysql:8.0
-    container_name: grafana_mysql
+    container_name: mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root

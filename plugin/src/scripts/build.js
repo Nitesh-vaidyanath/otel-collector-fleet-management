@@ -72,6 +72,14 @@ const transformToAmd = (code) => {
   code = code.replace(/import\s+[^;]+from\s+['"]react-dom['"];?/g, '');
   code = code.replace(/^\s*import\s+.*?;?\s*$/gm, '');
 
+  // Replace esbuild-generated React variable names (React10, React11, etc.) with React2
+  code = code.replace(/\bReact\d+\b/g, 'React2');
+  // Replace esbuild-generated React hook variable names (useState8, useEffect8, etc.) with their numbered versions
+  code = code.replace(/\buseState\d+\b/g, 'useState2');
+  code = code.replace(/\buseEffect\d+\b/g, 'useEffect2');
+  code = code.replace(/\buseMemo\d+\b/g, 'useMemo2');
+  code = code.replace(/\buseCallback\d+\b/g, 'useCallback2');
+  
   code = code.replace(/\bAppPlugin\b/g, '__GRAFANA_DATA__.AppPlugin');
   code = code.replace(/\bPanelPlugin\b/g, '__GRAFANA_DATA__.PanelPlugin');
   code = code.replace(/\bgetBackendSrv\d*\b/g, '__GRAFANA_RUNTIME__.getBackendSrv');

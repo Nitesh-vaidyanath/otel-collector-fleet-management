@@ -17,7 +17,7 @@ DB_PASSWORD="${DB_PASSWORD:-grafana123}"
 DB_NAME="${DB_NAME:-grafana_agents}"
 
 # Check if running via docker-compose
-if docker compose ps mysql 2>/dev/null | grep -q "running"; then
+if docker compose ps grafana_mysql 2>/dev/null | grep -q "running"; then
     echo -e "${GREEN}Using Docker MySQL container${NC}"
     for migration in opamp-server/pkg/migrations/*.sql; do
         if [ -f "$migration" ]; then
