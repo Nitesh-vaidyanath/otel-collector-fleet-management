@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 
 export type PipelineMetricKey = 'cpu' | 'memory' | 'inbound' | 'outbound';
@@ -26,6 +26,8 @@ export interface DatasourceSummary {
   name: string;
   type: string;
 }
+
+const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
 const SUPPORTED_METRICS_DATASOURCES = new Set(['prometheus', 'mimir', 'grafana-mimir-datasource', 'thanos']);
 
