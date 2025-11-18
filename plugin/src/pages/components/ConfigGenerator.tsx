@@ -10,6 +10,7 @@ import {
   builtinExporterTemplates,
   inferComponentType,
 } from '../utils/components';
+import { getStatusBadge } from '../utils/helpers';
 
 export function ConfigGenerator({ 
   agents, 

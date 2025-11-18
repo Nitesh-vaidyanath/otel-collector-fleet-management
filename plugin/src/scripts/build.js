@@ -75,10 +75,23 @@ const transformToAmd = (code) => {
   // Replace esbuild-generated React variable names (React10, React11, etc.) with React2
   code = code.replace(/\bReact\d+\b/g, 'React2');
   // Replace esbuild-generated React hook variable names (useState8, useEffect8, etc.) with their numbered versions
-  code = code.replace(/\buseState\d+\b/g, 'useState2');
-  code = code.replace(/\buseEffect\d+\b/g, 'useEffect2');
-  code = code.replace(/\buseMemo\d+\b/g, 'useMemo2');
-  code = code.replace(/\buseCallback\d+\b/g, 'useCallback2');
+  // Match any useXxxN pattern and replace with useXxx2
+  code = code.replace(/\b(use[A-Z][a-zA-Z]*)\d+\b/g, (match, hookName) => {
+    // Map to the hook version defined in the AMD wrapper, or fallback to React2.hookName
+    const hookMap = {
+      useState: 'useState2',
+      useEffect: 'useEffect2',
+      useMemo: 'useMemo2',
+      useCallback: 'useCallback2',
+      useRef: 'useRef2',
+      useReducer: 'useReducer2',
+      useContext: 'useContext2',
+      useLayoutEffect: 'useLayoutEffect2',
+      useImperativeHandle: 'useImperativeHandle2',
+      useId: 'useId2',
+    };
+    return hookMap[hookName] || `React2.${hookName}`;
+  });
   
   code = code.replace(/\bAppPlugin\b/g, '__GRAFANA_DATA__.AppPlugin');
   code = code.replace(/\bPanelPlugin\b/g, '__GRAFANA_DATA__.PanelPlugin');
@@ -100,6 +113,12 @@ var useState2 = React2.useState ? React2.useState.bind(React2) : void 0;
 var useEffect2 = React2.useEffect ? React2.useEffect.bind(React2) : void 0;
 var useMemo2 = React2.useMemo ? React2.useMemo.bind(React2) : void 0;
 var useCallback2 = React2.useCallback ? React2.useCallback.bind(React2) : void 0;
+var useRef2 = React2.useRef ? React2.useRef.bind(React2) : void 0;
+var useReducer2 = React2.useReducer ? React2.useReducer.bind(React2) : void 0;
+var useContext2 = React2.useContext ? React2.useContext.bind(React2) : void 0;
+var useLayoutEffect2 = React2.useLayoutEffect ? React2.useLayoutEffect.bind(React2) : void 0;
+var useImperativeHandle2 = React2.useImperativeHandle ? React2.useImperativeHandle.bind(React2) : void 0;
+var useId2 = React2.useId ? React2.useId.bind(React2) : void 0;
 ${code}
   return { plugin: plugin };
 });`;
