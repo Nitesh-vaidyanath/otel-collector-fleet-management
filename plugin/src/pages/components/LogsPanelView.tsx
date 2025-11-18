@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 import { LOGS_QUERY_PLACEHOLDER } from '../constants';
 import type { LogsTelemetryConfig } from '../types';
 
 const rawBackendSrv = getBackendSrv();
+
+const { useState, useEffect, useCallback } = React;
 
 export type LogsPanelProps = {
   settings: LogsTelemetryConfig;
@@ -213,4 +215,3 @@ export const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, age
     </div>
   );
 };
-

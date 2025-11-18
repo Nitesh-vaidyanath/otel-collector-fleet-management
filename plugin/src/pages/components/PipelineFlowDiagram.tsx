@@ -1,8 +1,10 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import * as yaml from 'js-yaml';
 import { PipelineMetricsPanelView, buildDefaultMetricQueries } from '../../components/PipelineMetricsPanelView';
 import type { MetricsTelemetryConfig } from '../types';
 import { StageMetricsRail } from './StageMetricsRail';
+
+const { useMemo } = React;
 
 export const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   config,

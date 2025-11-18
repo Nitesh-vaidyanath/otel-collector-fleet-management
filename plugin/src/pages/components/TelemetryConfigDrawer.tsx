@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import type { MetricsTelemetryConfig, LogsTelemetryConfig, StageQueryKey, StageQueryPair } from '../types';
 import { PipelineMetricKey } from '../../components/PipelineMetricsPanelView';
 import { STAGE_KEYS } from '../constants';
@@ -25,6 +25,8 @@ const runtimeMode = detectRuntimeMode();
 const isRunningInGrafana = runtimeMode === 'grafana';
 const grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
 const backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
+
+const { useState, useEffect } = React;
 
 export type TelemetryConfigDrawerProps = {
   open: boolean;
@@ -300,4 +302,3 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
     </div>
   );
 };
-

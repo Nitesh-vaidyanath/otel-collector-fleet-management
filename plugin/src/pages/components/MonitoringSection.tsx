@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React from 'react';
 import type { Agent, Bridge, FleetTelemetrySettings } from '../types';
 import { getDefaultTelemetrySettingsState } from '../utils/telemetry';
 import { normalizeTelemetryItems, getStatusBadge } from '../utils/helpers';
@@ -13,6 +13,8 @@ const runtimeMode = detectRuntimeMode();
 const isRunningInGrafana = runtimeMode === 'grafana';
 const grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
 const backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
+
+const { useState, useEffect, useMemo } = React;
 
 export function MonitoringSection({
   agents,

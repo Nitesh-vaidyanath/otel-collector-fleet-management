@@ -7,13 +7,21 @@ var useState2 = React2.useState ? React2.useState.bind(React2) : void 0;
 var useEffect2 = React2.useEffect ? React2.useEffect.bind(React2) : void 0;
 var useMemo2 = React2.useMemo ? React2.useMemo.bind(React2) : void 0;
 var useCallback2 = React2.useCallback ? React2.useCallback.bind(React2) : void 0;
+var useRef2 = React2.useRef ? React2.useRef.bind(React2) : void 0;
+var useReducer2 = React2.useReducer ? React2.useReducer.bind(React2) : void 0;
+var useContext2 = React2.useContext ? React2.useContext.bind(React2) : void 0;
+var useLayoutEffect2 = React2.useLayoutEffect ? React2.useLayoutEffect.bind(React2) : void 0;
+var useImperativeHandle2 = React2.useImperativeHandle ? React2.useImperativeHandle.bind(React2) : void 0;
+var useId2 = React2.useId ? React2.useId.bind(React2) : void 0;
 // module.ts
 
 
 // pages/App.tsx
+var React2 = __REACT__.default || __REACT__;
+
 
 // pages/components/ConfigGenerator.tsx
-var React = __REACT__.default || __REACT__; var { useState, useEffect, useCallback } = __REACT__;
+var React2 = __REACT__.default || __REACT__;
 
 // node_modules/js-yaml/dist/js-yaml.mjs
 function isNothing(subject) {
@@ -2834,7 +2842,47 @@ var inferComponentType = (category, name, config) => {
   return "custom";
 };
 
+// pages/utils/helpers.tsx
+var React = __REACT__.default || __REACT__;
+var normalizeTelemetryItems = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items.map((item) => {
+    const payload = item?.data ?? item ?? {};
+    return {
+      recorded_at: item?.recorded_at || item?.reported_at || payload?.recorded_at || payload?.reported_at || null,
+      cpu_percent: payload?.cpu_percent ?? null,
+      memory_bytes: payload?.memory_bytes ?? null,
+      inbound_bandwidth_kbps: payload?.inbound_bandwidth_kbps ?? null,
+      outbound_bandwidth_kbps: payload?.outbound_bandwidth_kbps ?? null,
+      pipelines: payload?.pipelines ?? payload?.pipelines_json ?? null
+    };
+  });
+};
+var getStatusBadge = (status) => {
+  const styles = {
+    online: { bg: "#10B981", color: "white", icon: "\u25CF" },
+    offline: { bg: "#EF4444", color: "white", icon: "\u25CF" },
+    degraded: { bg: "#F59E0B", color: "white", icon: "\u26A0" },
+    unknown: { bg: "#6B7280", color: "white", icon: "\u25CF" }
+  };
+  const s = styles[status] || styles.unknown;
+  return /* @__PURE__ */ React.createElement("span", { style: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    borderRadius: 12,
+    fontSize: 12,
+    fontWeight: 500,
+    background: s.bg,
+    color: s.color
+  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 8 } }, s.icon), status);
+};
+
 // pages/components/ConfigGenerator.tsx
+var { useState, useEffect, useMemo, useCallback } = React2;
 function ConfigGenerator({
   agents,
   bridges,
@@ -3750,14 +3798,14 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
   const renderComponentEditor = (comp, type2, index) => {
     const key = `${type2}-${index}`;
     const isExpanded = expandedComponents.has(key);
-    return /* @__PURE__ */ React.createElement("div", { key: index, style: { marginBottom: 12, border: "1px solid #E5E7EB", borderRadius: 6, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: {
+    return /* @__PURE__ */ React2.createElement("div", { key: index, style: { marginBottom: 12, border: "1px solid #E5E7EB", borderRadius: 6, overflow: "hidden" } }, /* @__PURE__ */ React2.createElement("div", { style: {
       padding: 12,
       background: isExpanded ? "#F9FAFB" : "white",
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center",
       cursor: "pointer"
-    }, onClick: () => toggleExpand(key) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 2 } }, comp.name || `${type2}_${index + 1}`), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, comp.type)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, /* @__PURE__ */ React.createElement(
+    }, onClick: () => toggleExpand(key) }, /* @__PURE__ */ React2.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 2 } }, comp.name || `${type2}_${index + 1}`), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, comp.type)), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: (e) => {
@@ -3776,7 +3824,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         }
       },
       "Delete"
-    ), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: "#6B7280" } }, isExpanded ? "\u25BC" : "\u25B6"))), isExpanded && /* @__PURE__ */ React.createElement("div", { style: { padding: 12, background: "white", borderTop: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Name"), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 14, color: "#6B7280" } }, isExpanded ? "\u25BC" : "\u25B6"))), isExpanded && /* @__PURE__ */ React2.createElement("div", { style: { padding: 12, background: "white", borderTop: "1px solid #E5E7EB" } }, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Name"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "text",
@@ -3784,15 +3832,15 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         onChange: (e) => updateComponent(type2, index, { name: e.target.value }),
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Type"), /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Type"), /* @__PURE__ */ React2.createElement(
       "select",
       {
         value: comp.type,
         onChange: (e) => changeComponentType(type2, index, e.target.value),
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       },
-      getTypesForCategory(type2).map((t) => /* @__PURE__ */ React.createElement("option", { key: t.value, value: t.value }, t.label))
-    )), comp.type === "otlp" && type2 === "receiver" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "gRPC Endpoint"), /* @__PURE__ */ React.createElement(
+      getTypesForCategory(type2).map((t) => /* @__PURE__ */ React2.createElement("option", { key: t.value, value: t.value }, t.label))
+    )), comp.type === "otlp" && type2 === "receiver" && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "gRPC Endpoint"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "text",
@@ -3806,7 +3854,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         },
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "HTTP Endpoint"), /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "HTTP Endpoint"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "text",
@@ -3820,7 +3868,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         },
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    ))), comp.type === "otlp" && type2 === "exporter" && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Endpoint"), /* @__PURE__ */ React.createElement(
+    ))), comp.type === "otlp" && type2 === "exporter" && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Endpoint"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "text",
@@ -3828,7 +3876,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         onChange: (e) => updateComponent(type2, index, { endpoint: e.target.value }),
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    )), comp.type === "batch" && type2 === "processor" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Batch Size"), /* @__PURE__ */ React.createElement(
+    )), comp.type === "batch" && type2 === "processor" && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Batch Size"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "number",
@@ -3836,7 +3884,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         onChange: (e) => updateComponent(type2, index, { send_batch_size: parseInt(e.target.value) || 1024 }),
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Timeout"), /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Timeout"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "text",
@@ -3845,7 +3893,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         placeholder: "10s, 1m, etc",
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    ))), comp.type === "memory_limiter" && type2 === "processor" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Limit (MiB)"), /* @__PURE__ */ React.createElement(
+    ))), comp.type === "memory_limiter" && type2 === "processor" && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Limit (MiB)"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "number",
@@ -3853,7 +3901,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         onChange: (e) => updateComponent(type2, index, { limit_mib: parseInt(e.target.value) || 512 }),
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Spike Limit (MiB)"), /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Spike Limit (MiB)"), /* @__PURE__ */ React2.createElement(
       "input",
       {
         type: "number",
@@ -3861,7 +3909,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         onChange: (e) => updateComponent(type2, index, { spike_limit_mib: parseInt(e.target.value) || 128 }),
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13 }
       }
-    ))), comp.type === "filelog" && type2 === "receiver" && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Include Paths (one per line, glob patterns)"), /* @__PURE__ */ React.createElement(
+    ))), comp.type === "filelog" && type2 === "receiver" && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Include Paths (one per line, glob patterns)"), /* @__PURE__ */ React2.createElement(
       "textarea",
       {
         value: Array.isArray(comp.include) ? comp.include.join("\n") : comp.include || "",
@@ -3873,7 +3921,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         rows: 4,
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
       }
-    )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Exclude Paths (one per line, glob patterns)"), /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Exclude Paths (one per line, glob patterns)"), /* @__PURE__ */ React2.createElement(
       "textarea",
       {
         value: Array.isArray(comp.exclude) ? comp.exclude.join("\n") : comp.exclude || "",
@@ -3885,7 +3933,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         rows: 4,
         style: { width: "100%", padding: "6px 8px", border: "1px solid #D1D5DB", borderRadius: 4, fontSize: 13, fontFamily: "monospace" }
       }
-    ))), comp.type === "custom" ? /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: 12, background: "#FEF3C7", borderRadius: 6, border: "2px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 8, color: "#92400E" } }, "\u2699\uFE0F Custom YAML Configuration", comp._isExtension && comp._sectionName && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, marginLeft: 8, color: "#78350F", fontWeight: 400 } }, "(Extension: ", comp._sectionName, ")")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#78350F", marginBottom: 8 } }, comp._isExtension ? /* @__PURE__ */ React.createElement(React.Fragment, null, `This is a custom section (like extensions) that doesn't fit into standard receivers/processors/exporters. It will be preserved in the generated config as the "`, comp._sectionName, '" section.') : /* @__PURE__ */ React.createElement(React.Fragment, null, 'Enter your complete component configuration in YAML format. The component name "', comp.name || `${type2}_${index + 1}`, '" will be added automatically in the generated config.')), /* @__PURE__ */ React.createElement(
+    ))), comp.type === "custom" ? /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, padding: 12, background: "#FEF3C7", borderRadius: 6, border: "2px solid #FCD34D" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 8, color: "#92400E" } }, "\u2699\uFE0F Custom YAML Configuration", comp._isExtension && comp._sectionName && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, marginLeft: 8, color: "#78350F", fontWeight: 400 } }, "(Extension: ", comp._sectionName, ")")), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#78350F", marginBottom: 8 } }, comp._isExtension ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, `This is a custom section (like extensions) that doesn't fit into standard receivers/processors/exporters. It will be preserved in the generated config as the "`, comp._sectionName, '" section.') : /* @__PURE__ */ React2.createElement(React2.Fragment, null, 'Enter your complete component configuration in YAML format. The component name "', comp.name || `${type2}_${index + 1}`, '" will be added automatically in the generated config.')), /* @__PURE__ */ React2.createElement(
       "textarea",
       {
         value: comp.customYaml || "",
@@ -3916,9 +3964,9 @@ headers:
           resize: "vertical"
         }
       }
-    ), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#92400E", marginTop: 8 } }, "\u{1F4A1} ", /* @__PURE__ */ React.createElement("strong", null, "Tip:"), " This YAML will be merged into the final OpenTelemetry Collector configuration as-is. Make sure the syntax is valid YAML.")) : (
+    ), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#92400E", marginTop: 8 } }, "\u{1F4A1} ", /* @__PURE__ */ React2.createElement("strong", null, "Tip:"), " This YAML will be merged into the final OpenTelemetry Collector configuration as-is. Make sure the syntax is valid YAML.")) : (
       /* Raw YAML Editor for non-custom types (Advanced) */
-      /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: 8, background: "#F9FAFB", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 11, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Advanced: Edit Full YAML Config"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginBottom: 8 } }, "Edit the complete component configuration. Changes here override the form fields above."), /* @__PURE__ */ React.createElement(
+      /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, padding: 8, background: "#F9FAFB", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 11, fontWeight: 500, marginBottom: 4, color: "#6B7280" } }, "Advanced: Edit Full YAML Config"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 10, color: "#9CA3AF", marginBottom: 8 } }, "Edit the complete component configuration. Changes here override the form fields above."), /* @__PURE__ */ React2.createElement(
         "textarea",
         {
           value: dump(comp, { indent: 2, lineWidth: -1, skipInvalid: true }),
@@ -3947,13 +3995,13 @@ headers:
       ))
     )));
   };
-  return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: {
+  return /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     border: "1px solid #E5E7EB",
     padding: 24,
     boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" } }, "Configuration Builder"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+  } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" } }, "Configuration Builder"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => setShowComponentTypeManager(true),
@@ -3969,14 +4017,14 @@ headers:
       }
     },
     "\u2699\uFE0F Manage Component Types"
-  ))), savedTemplates.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20, padding: 12, background: "#F3F4F6", borderRadius: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 8, color: "#6B7280" } }, "Saved Templates"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, savedTemplates.map((t) => /* @__PURE__ */ React.createElement("div", { key: t.id, style: { display: "flex", gap: 4, alignItems: "center", padding: "6px 12px", background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500 } }, t.name), /* @__PURE__ */ React.createElement(
+  ))), savedTemplates.length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 20, padding: 12, background: "#F3F4F6", borderRadius: 6 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 8, color: "#6B7280" } }, "Saved Templates"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } }, savedTemplates.map((t) => /* @__PURE__ */ React2.createElement("div", { key: t.id, style: { display: "flex", gap: 4, alignItems: "center", padding: "6px 12px", background: "white", borderRadius: 4, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 13, fontWeight: 500 } }, t.name), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => loadTemplate(t),
       style: { padding: "2px 8px", background: "#3B82F6", color: "white", border: "none", borderRadius: 3, cursor: "pointer", fontSize: 11 }
     },
     "Load"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => deleteTemplate(t.id),
@@ -3992,7 +4040,7 @@ headers:
       }
     },
     deletingTemplateId === t.id ? "Deleting..." : "\xD7"
-  ))))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 12, color: "#111827" } }, "\u{1F527} Configuration Mode"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 16 } }, /* @__PURE__ */ React.createElement(
+  ))))), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 12, color: "#111827" } }, "\u{1F527} Configuration Mode"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 12, marginBottom: 16 } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -4020,7 +4068,7 @@ headers:
       }
     },
     "\u{1F4DD} Form-based Editor"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -4042,12 +4090,12 @@ headers:
       }
     },
     "\u26A1 Raw YAML Editor (Direct)"
-  )), useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: 12, background: "#FEF3C7", borderRadius: 6, border: "2px solid #FCD34D" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 4, color: "#92400E" } }, "\u26A1 Raw YAML Mode Active"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#78350F" } }, "You can directly edit the OpenTelemetry Collector YAML configuration. This will bypass the form-based editor and sync directly to the agent after approval."))), !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F0F9FF", borderRadius: 6, border: "1px solid #93C5FD" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 12, color: "#1E40AF" } }, "\u{1F4CA} Select Telemetry Signals"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 24, flexWrap: "wrap" } }, ["logs", "metrics", "traces"].map((signal) => {
+  )), useRawYAML && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, padding: 12, background: "#FEF3C7", borderRadius: 6, border: "2px solid #FCD34D" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 4, color: "#92400E" } }, "\u26A1 Raw YAML Mode Active"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#78350F" } }, "You can directly edit the OpenTelemetry Collector YAML configuration. This will bypass the form-based editor and sync directly to the agent after approval."))), !useRawYAML && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F0F9FF", borderRadius: 6, border: "1px solid #93C5FD" } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 12, color: "#1E40AF" } }, "\u{1F4CA} Select Telemetry Signals"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 24, flexWrap: "wrap" } }, ["logs", "metrics", "traces"].map((signal) => {
     const availableSignals = getAvailableSignals();
     const isAvailable = availableSignals[signal];
     const isSelected = selectedSignals[signal];
     const signalLabel = signal.charAt(0).toUpperCase() + signal.slice(1);
-    return /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React2.createElement(
       "label",
       {
         key: signal,
@@ -4066,7 +4114,7 @@ headers:
           color: isSelected ? "#1E40AF" : "#6B7280"
         }
       },
-      /* @__PURE__ */ React.createElement(
+      /* @__PURE__ */ React2.createElement(
         "input",
         {
           type: "checkbox",
@@ -4080,10 +4128,10 @@ headers:
           style: { cursor: isAvailable ? "pointer" : "not-allowed" }
         }
       ),
-      /* @__PURE__ */ React.createElement("span", null, signalLabel),
-      !isAvailable && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#9CA3AF", marginLeft: 4 } }, "(not compatible)")
+      /* @__PURE__ */ React2.createElement("span", null, signalLabel),
+      !isAvailable && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, color: "#9CA3AF", marginLeft: 4 } }, "(not compatible)")
     );
-  })), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, fontSize: 11, color: "#6B7280" } }, (() => {
+  })), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, fontSize: 11, color: "#6B7280" } }, (() => {
     const available = getAvailableSignals();
     const availableCount = Object.values(available).filter((v) => v).length;
     if (availableCount === 0) {
@@ -4094,13 +4142,13 @@ headers:
       return "\u26A0\uFE0F Please select at least one signal to generate a configuration.";
     }
     return `\u2139\uFE0F ${selectedCount} signal(s) selected. Only compatible signals are enabled based on your component selection.`;
-  })())), !useRawYAML && false, !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F3F4F6", borderRadius: 6, border: "1px solid #D1D5DB", color: "#4B5563", fontSize: 12 } }, "\u2139\uFE0F Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector's ", /* @__PURE__ */ React.createElement("code", null, "spec.config"), " that OpAMP can push."), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#111827" } }, "\u{1F4CD} Select Agent / Collector (Required for saving configuration)"), bridges.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, padding: "10px 12px", background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D", fontSize: 12, color: "#92400E" } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Note:"), " Bridges are management agents and cannot receive collector configurations. Only collectors are shown below."), bridges.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
+  })())), !useRawYAML && false, !useRawYAML && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F3F4F6", borderRadius: 6, border: "1px solid #D1D5DB", color: "#4B5563", fontSize: 12 } }, "\u2139\uFE0F Deployment (CRD) settings must be updated directly in Kubernetes. This generator only manages the collector's ", /* @__PURE__ */ React2.createElement("code", null, "spec.config"), " that OpAMP can push."), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6, border: "1px solid #E5E7EB" } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 8, color: "#111827" } }, "\u{1F4CD} Select Agent / Collector (Required for saving configuration)"), bridges.length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 12, padding: "10px 12px", background: "#FEF3C7", borderRadius: 4, border: "1px solid #FCD34D", fontSize: 12, color: "#92400E" } }, "\u26A0\uFE0F ", /* @__PURE__ */ React2.createElement("strong", null, "Note:"), " Bridges are management agents and cannot receive collector configurations. Only collectors are shown below."), bridges.length > 0 ? /* @__PURE__ */ React2.createElement("div", { style: { border: "1px solid #D1D5DB", borderRadius: 6, background: "white", maxHeight: "400px", overflowY: "auto" } }, bridges.map((bridge) => {
     const bridgeCollectors = bridge.collectors || [];
     const isExpanded = expandedGroups.has(`config-${bridge.agentUid}`);
     if (bridgeCollectors.length === 0) {
       return null;
     }
-    return /* @__PURE__ */ React.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React2.createElement("div", { key: bridge.agentUid, style: { borderBottom: "1px solid #E5E7EB" } }, /* @__PURE__ */ React2.createElement(
       "div",
       {
         onClick: () => {
@@ -4128,9 +4176,9 @@ headers:
           e.currentTarget.style.background = isExpanded ? "#F3F4F6" : "#F9FAFB";
         }
       },
-      /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", width: 20 } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
-      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, color: "#6B7280", fontSize: 12 } }, bridge.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#9CA3AF" } }, "(Bridge - Management Agent)"), bridge.namespace && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""))
-    ), isExpanded && bridgeCollectors.map((collector) => /* @__PURE__ */ React.createElement(
+      /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", width: 20 } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 600, color: "#6B7280", fontSize: 12 } }, bridge.name), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#9CA3AF" } }, "(Bridge - Management Agent)"), bridge.namespace && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""))
+    ), isExpanded && bridgeCollectors.map((collector) => /* @__PURE__ */ React2.createElement(
       "div",
       {
         key: collector.agentUid,
@@ -4159,8 +4207,8 @@ headers:
           }
         }
       },
-      /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 500, color: "#111827" } }, collector.name), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Collector)"), collector.labels?.["k8s.namespace"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels?.["k8s.crd_name"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#FEF3C7", color: "#92400E", borderRadius: 3 } }, "crd: ", collector.labels["k8s.crd_name"]), collector.labels?.["k8s.cluster"] && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", collector.labels["k8s.cluster"]), getStatusBadge(collector.status), collector.version && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", collector.version)),
-      /* @__PURE__ */ React.createElement(
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 500, color: "#111827" } }, collector.name), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Collector)"), collector.labels?.["k8s.namespace"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels?.["k8s.crd_name"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#FEF3C7", color: "#92400E", borderRadius: 3 } }, "crd: ", collector.labels["k8s.crd_name"]), collector.labels?.["k8s.cluster"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", collector.labels["k8s.cluster"]), getStatusBadge(collector.status), collector.version && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", collector.version)),
+      /* @__PURE__ */ React2.createElement(
         "button",
         {
           onClick: (e) => {
@@ -4185,11 +4233,11 @@ headers:
     const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
     const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
     return !isBridge && !isBridgeCollector;
-  }).length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { padding: "12px 16px", background: "#F9FAFB", borderTop: "2px solid #E5E7EB", fontWeight: 600, fontSize: 12, color: "#6B7280" } }, "Standalone Agents"), agents.filter((a) => {
+  }).length > 0 && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { padding: "12px 16px", background: "#F9FAFB", borderTop: "2px solid #E5E7EB", fontWeight: 600, fontSize: 12, color: "#6B7280" } }, "Standalone Agents"), agents.filter((a) => {
     const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
     const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
     return !isBridge && !isBridgeCollector;
-  }).map((agent) => /* @__PURE__ */ React.createElement(
+  }).map((agent) => /* @__PURE__ */ React2.createElement(
     "div",
     {
       key: agent.agentUid,
@@ -4205,8 +4253,8 @@ headers:
         borderTop: "1px solid #E5E7EB"
       }
     },
-    /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", null, agent.name || agent.agentUid), getStatusBadge(agent.status), agent.version && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", agent.version)),
-    /* @__PURE__ */ React.createElement(
+    /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React2.createElement("span", null, agent.name || agent.agentUid), getStatusBadge(agent.status), agent.version && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", agent.version)),
+    /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: (e) => {
@@ -4225,7 +4273,7 @@ headers:
       },
       selectedAgentUID === agent.agentUid ? "\u2713 Selected" : "Select"
     )
-  )))) : /* @__PURE__ */ React.createElement(
+  )))) : /* @__PURE__ */ React2.createElement(
     "select",
     {
       value: selectedAgentUID,
@@ -4239,30 +4287,30 @@ headers:
         background: selectedAgentUID ? "white" : "#FEF3C7"
       }
     },
-    /* @__PURE__ */ React.createElement("option", { value: "" }, agents.length === 0 ? "-- No agents available --" : "-- Select an agent/collector first --"),
-    agents.map((a) => /* @__PURE__ */ React.createElement("option", { key: a.agentUid, value: a.agentUid }, a.name || a.agentUid, " (", a.status, ") ", a.version ? `v${a.version}` : ""))
+    /* @__PURE__ */ React2.createElement("option", { value: "" }, agents.length === 0 ? "-- No agents available --" : "-- Select an agent/collector first --"),
+    agents.map((a) => /* @__PURE__ */ React2.createElement("option", { key: a.agentUid, value: a.agentUid }, a.name || a.agentUid, " (", a.status, ") ", a.version ? `v${a.version}` : ""))
   ), (() => {
     const selectedIsBridge = bridges.some((b) => b.agentUid === selectedAgentUID);
     if (!selectedAgentUID) {
-      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#78350F", padding: 8, background: "#FEF3C7", borderRadius: 4 } }, "\u26A0\uFE0F ", /* @__PURE__ */ React.createElement("strong", null, "Important:"), " You must select a collector before generating or saving a configuration. Bridges are management agents and cannot receive collector configurations.");
+      return /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#78350F", padding: 8, background: "#FEF3C7", borderRadius: 4 } }, "\u26A0\uFE0F ", /* @__PURE__ */ React2.createElement("strong", null, "Important:"), " You must select a collector before generating or saving a configuration. Bridges are management agents and cannot receive collector configurations.");
     }
     if (selectedIsBridge) {
-      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#991B1B", padding: 8, background: "#FEE2E2", borderRadius: 4 } }, "\u274C ", /* @__PURE__ */ React.createElement("strong", null, "Error:"), " Bridges cannot receive collector configurations. Please select a collector instead.");
+      return /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#991B1B", padding: 8, background: "#FEE2E2", borderRadius: 4 } }, "\u274C ", /* @__PURE__ */ React2.createElement("strong", null, "Error:"), " Bridges cannot receive collector configurations. Please select a collector instead.");
     }
-    return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#065F46", padding: 8, background: "#D1FAE5", borderRadius: 4 } }, "\u2713 Collector selected. You can now generate, edit, and save configurations for this collector.");
-  })()), !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#3B82F6" } }, "Receivers (", receivers.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("receiver"), style: { padding: "4px 8px", background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), receivers.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No receivers added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, receivers.map((rec, idx) => renderComponentEditor(rec, "receiver", idx)))), /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#10B981" } }, "Processors (", processors.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("processor"), style: { padding: "4px 8px", background: "#10B981", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), processors.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No processors added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, processors.map((proc, idx) => renderComponentEditor(proc, "processor", idx)))), /* @__PURE__ */ React.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#F59E0B" } }, "Exporters (", exporters.length, ")"), /* @__PURE__ */ React.createElement("button", { onClick: () => addComponent("exporter"), style: { padding: "4px 8px", background: "#F59E0B", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), exporters.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No exporters added") : /* @__PURE__ */ React.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, exporters.map((exp, idx) => {
+    return /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 8, fontSize: 12, color: "#065F46", padding: 8, background: "#D1FAE5", borderRadius: 4 } }, "\u2713 Collector selected. You can now generate, edit, and save configurations for this collector.");
+  })()), !useRawYAML && /* @__PURE__ */ React2.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 } }, /* @__PURE__ */ React2.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#3B82F6" } }, "Receivers (", receivers.length, ")"), /* @__PURE__ */ React2.createElement("button", { onClick: () => addComponent("receiver"), style: { padding: "4px 8px", background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), receivers.length === 0 ? /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No receivers added") : /* @__PURE__ */ React2.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, receivers.map((rec, idx) => renderComponentEditor(rec, "receiver", idx)))), /* @__PURE__ */ React2.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#10B981" } }, "Processors (", processors.length, ")"), /* @__PURE__ */ React2.createElement("button", { onClick: () => addComponent("processor"), style: { padding: "4px 8px", background: "#10B981", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), processors.length === 0 ? /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No processors added") : /* @__PURE__ */ React2.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, processors.map((proc, idx) => renderComponentEditor(proc, "processor", idx)))), /* @__PURE__ */ React2.createElement("div", { style: { border: "1px solid #E5E7EB", borderRadius: 6, padding: 16, background: "white" } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("h4", { style: { margin: 0, fontSize: 14, fontWeight: 600, color: "#F59E0B" } }, "Exporters (", exporters.length, ")"), /* @__PURE__ */ React2.createElement("button", { onClick: () => addComponent("exporter"), style: { padding: "4px 8px", background: "#F59E0B", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "+ Add")), exporters.length === 0 ? /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#9CA3AF", textAlign: "center", padding: 20 } }, "No exporters added") : /* @__PURE__ */ React2.createElement("div", { style: { maxHeight: "600px", overflowY: "auto" } }, exporters.map((exp, idx) => {
     const compKey = `exporter-${idx}`;
     const isExtension = exp._isExtension === true;
     if (isExtension) {
       const isExpanded = expandedComponents.has(compKey);
-      return /* @__PURE__ */ React.createElement("div", { key: idx, style: { marginBottom: 12, border: "1px solid #F59E0B", borderRadius: 6, overflow: "hidden", borderLeft: "4px solid #F59E0B", background: "#FFFBEB" } }, /* @__PURE__ */ React.createElement("div", { style: {
+      return /* @__PURE__ */ React2.createElement("div", { key: idx, style: { marginBottom: 12, border: "1px solid #F59E0B", borderRadius: 6, overflow: "hidden", borderLeft: "4px solid #F59E0B", background: "#FFFBEB" } }, /* @__PURE__ */ React2.createElement("div", { style: {
         padding: 12,
         background: isExpanded ? "#FEF3C7" : "#FFFBEB",
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
         cursor: "pointer"
-      }, onClick: () => toggleExpand(compKey) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 2 } }, exp.name || `exporter_${idx + 1}`, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, marginLeft: 8, color: "#78350F", fontWeight: 400 } }, "(Extension: ", exp._sectionName, ")")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#92400E" } }, "Custom Section")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, /* @__PURE__ */ React.createElement(
+      }, onClick: () => toggleExpand(compKey) }, /* @__PURE__ */ React2.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "#92400E", marginBottom: 2 } }, exp.name || `exporter_${idx + 1}`, /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, marginLeft: 8, color: "#78350F", fontWeight: 400 } }, "(Extension: ", exp._sectionName, ")")), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#92400E" } }, "Custom Section")), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, /* @__PURE__ */ React2.createElement(
         "button",
         {
           onClick: (e) => {
@@ -4281,10 +4329,10 @@ headers:
           }
         },
         "Delete"
-      ), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: "#92400E" } }, isExpanded ? "\u25BC" : "\u25B6"))), isExpanded && renderComponentEditor(exp, "exporter", idx));
+      ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 14, color: "#92400E" } }, isExpanded ? "\u25BC" : "\u25B6"))), isExpanded && renderComponentEditor(exp, "exporter", idx));
     }
     return renderComponentEditor(exp, "exporter", idx);
-  })))), useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("label", { style: { fontSize: 14, fontWeight: 600, color: "#111827" } }, "\u26A1 Raw YAML Configuration Editor"), /* @__PURE__ */ React.createElement(
+  })))), useRawYAML && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React2.createElement("label", { style: { fontSize: 14, fontWeight: 600, color: "#111827" } }, "\u26A1 Raw YAML Configuration Editor"), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -4295,7 +4343,7 @@ headers:
       style: { padding: "6px 12px", background: "#6B7280", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 }
     },
     "Load from Generated"
-  )), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement(
     "textarea",
     {
       value: rawYAMLConfig,
@@ -4347,7 +4395,7 @@ service:
         lineHeight: "1.6"
       }
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, display: "flex", gap: 8, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, display: "flex", gap: 8, justifyContent: "flex-end" } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -4414,7 +4462,7 @@ service:
       style: { padding: "8px 20px", background: "#10B981", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 500 }
     },
     "\u{1F4BE} Save Raw YAML Config"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -4434,14 +4482,14 @@ service:
       style: { padding: "8px 16px", background: "#2563EB", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }
     },
     "\u2699\uFE0F Apply Raw YAML"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => setRawYAMLConfig(""),
       style: { padding: "6px 16px", background: "#6B7280", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 13 }
     },
     "Clear"
-  )), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, padding: 12, background: "#DBEAFE", borderRadius: 6, border: "1px solid #93C5FD" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 4, color: "#1E40AF" } }, "\u{1F4A1} Raw YAML Mode Tips"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#1E3A8A" } }, "\u2022 Write your OpenTelemetry Collector YAML configuration directly", /* @__PURE__ */ React.createElement("br", null), "\u2022 The configuration will be validated before saving", /* @__PURE__ */ React.createElement("br", null), "\u2022 After saving, it will require admin approval before pushing to agents", /* @__PURE__ */ React.createElement("br", null), "\u2022 You can switch back to form-based mode at any time"))), !useRawYAML && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { fontWeight: 600, fontSize: 14, color: "#111827" } }, "Generated Configuration"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, padding: 12, background: "#DBEAFE", borderRadius: 6, border: "1px solid #93C5FD" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 4, color: "#1E40AF" } }, "\u{1F4A1} Raw YAML Mode Tips"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#1E3A8A" } }, "\u2022 Write your OpenTelemetry Collector YAML configuration directly", /* @__PURE__ */ React2.createElement("br", null), "\u2022 The configuration will be validated before saving", /* @__PURE__ */ React2.createElement("br", null), "\u2022 After saving, it will require admin approval before pushing to agents", /* @__PURE__ */ React2.createElement("br", null), "\u2022 You can switch back to form-based mode at any time"))), !useRawYAML && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("label", { style: { fontWeight: 600, fontSize: 14, color: "#111827" } }, "Generated Configuration"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: generateConfig,
@@ -4470,7 +4518,7 @@ service:
       })()
     },
     "Generate Config"
-  ), generatedConfig && /* @__PURE__ */ React.createElement("button", { onClick: () => setGeneratedConfig(""), style: { padding: "4px 12px", background: "#6B7280", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "Clear"))), generatedConfig && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  ), generatedConfig && /* @__PURE__ */ React2.createElement("button", { onClick: () => setGeneratedConfig(""), style: { padding: "4px 12px", background: "#6B7280", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 } }, "Clear"))), generatedConfig && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(
     "textarea",
     {
       readOnly: true,
@@ -4486,7 +4534,7 @@ service:
         background: "#F9FAFB"
       }
     }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => setShowSaveDialog(true),
@@ -4505,7 +4553,7 @@ service:
       title: !generatedConfig || generatedConfig.trim() === "" ? "Generate config first to enable saving as template" : "Save current configuration as a reusable template"
     },
     "\u{1F4BE} Save Template"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: async () => {
@@ -4564,55 +4612,55 @@ service:
   )))), selectedAgentUID && configVersions.length > 0 && (() => {
     const pendingConfigs = configVersions.filter((v) => v.agentUid === selectedAgentUID && v.approvalStatus === "pending");
     if (pendingConfigs.length === 0) return null;
-    return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 24, marginBottom: 24 } }, /* @__PURE__ */ React.createElement("div", { style: {
+    return /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 24, marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: {
       padding: 16,
       background: "#FEF3C7",
       borderRadius: 6,
       border: "2px solid #FCD34D"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#92400E", marginBottom: 4 } }, "\u26A0\uFE0F Pending Approvals (", pendingConfigs.length, ")"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#78350F" } }, isAdmin ? "Review and approve these configurations below to enable pushing them to agents." : `These configurations are waiting for admin approval. Only admins can approve configurations.`))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#78350F", marginTop: 8 } }, pendingConfigs.map((cfg, idx) => /* @__PURE__ */ React.createElement("div", { key: cfg.id, style: { marginBottom: 8, padding: 8, background: "white", borderRadius: 4 } }, /* @__PURE__ */ React.createElement("strong", null, "Version ", cfg.version), " - Created by ", cfg.createdBy || "unknown", " at ", cfg.createdAt ? new Date(cfg.createdAt).toLocaleString() : "N/A", !isAdmin && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: 8, fontSize: 11, color: "#B45309" } }, "\u23F3 Awaiting admin approval")))), !isAdmin && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#78350F", marginTop: 8, padding: 8, background: "white", borderRadius: 4 } }, "\u{1F4A1} ", /* @__PURE__ */ React.createElement("strong", null, "Next Steps:"), " Contact an administrator to approve the configuration. Once approved, you'll be able to push it to the agent.")));
-  })(), selectedAgentUID && configVersions.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { fontWeight: 600, fontSize: 16, color: "#111827" } }, "\u{1F4CB} Configuration History & Approval Queue"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 4 } }, (() => {
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#92400E", marginBottom: 4 } }, "\u26A0\uFE0F Pending Approvals (", pendingConfigs.length, ")"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#78350F" } }, isAdmin ? "Review and approve these configurations below to enable pushing them to agents." : `These configurations are waiting for admin approval. Only admins can approve configurations.`))), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, color: "#78350F", marginTop: 8 } }, pendingConfigs.map((cfg, idx) => /* @__PURE__ */ React2.createElement("div", { key: cfg.id, style: { marginBottom: 8, padding: 8, background: "white", borderRadius: 4 } }, /* @__PURE__ */ React2.createElement("strong", null, "Version ", cfg.version), " - Created by ", cfg.createdBy || "unknown", " at ", cfg.createdAt ? new Date(cfg.createdAt).toLocaleString() : "N/A", !isAdmin && /* @__PURE__ */ React2.createElement("span", { style: { marginLeft: 8, fontSize: 11, color: "#B45309" } }, "\u23F3 Awaiting admin approval")))), !isAdmin && /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#78350F", marginTop: 8, padding: 8, background: "white", borderRadius: 4 } }, "\u{1F4A1} ", /* @__PURE__ */ React2.createElement("strong", null, "Next Steps:"), " Contact an administrator to approve the configuration. Once approved, you'll be able to push it to the agent.")));
+  })(), selectedAgentUID && configVersions.length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("label", { style: { fontWeight: 600, fontSize: 16, color: "#111827" } }, "\u{1F4CB} Configuration History & Approval Queue"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginTop: 4 } }, (() => {
     const agentConfigs = configVersions.filter((v) => v.agentUid === selectedAgentUID);
     const pending = agentConfigs.filter((v) => v.approvalStatus === "pending").length;
     const approved = agentConfigs.filter((v) => v.approvalStatus === "approved").length;
     const rejected = agentConfigs.filter((v) => v.approvalStatus === "rejected").length;
     return `Agent: ${selectedAgentUID.substring(0, 16)}... \u2022 ${pending} pending \u2022 ${approved} approved \u2022 ${rejected} rejected \u2022 Last 5 versions shown`;
-  })())), isAdmin && /* @__PURE__ */ React.createElement("div", { style: {
+  })())), isAdmin && /* @__PURE__ */ React2.createElement("div", { style: {
     padding: "6px 12px",
     background: "#D1FAE5",
     borderRadius: 6,
     border: "1px solid #86EFAC"
-  } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#065F46", fontWeight: 600 } }, "\u{1F464} Admin Mode - Can Approve/Reject")), !isAdmin && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 12, color: "#065F46", fontWeight: 600 } }, "\u{1F464} Admin Mode - Can Approve/Reject")), !isAdmin && /* @__PURE__ */ React2.createElement("div", { style: {
     padding: "6px 12px",
     background: "#FEF3C7",
     borderRadius: 6,
     border: "1px solid #FCD34D",
     fontSize: 11,
     color: "#92400E"
-  } }, "\u26A0\uFE0F Admin role not detected. Check console for role details. For testing, approvals may still work.")), /* @__PURE__ */ React.createElement("div", { style: { background: "white", border: "1px solid #E5E7EB", borderRadius: 6, overflow: "hidden" } }, configVersions.filter((v) => v.agentUid === selectedAgentUID).map((version, idx) => {
+  } }, "\u26A0\uFE0F Admin role not detected. Check console for role details. For testing, approvals may still work.")), /* @__PURE__ */ React2.createElement("div", { style: { background: "white", border: "1px solid #E5E7EB", borderRadius: 6, overflow: "hidden" } }, configVersions.filter((v) => v.agentUid === selectedAgentUID).map((version, idx) => {
     const syncStatus = configSyncStatus[version.id];
     const hasFailed = syncStatus && version.pushedAt && ((syncStatus.remoteConfigStatus || "").includes("FAILED") || !!syncStatus.remoteConfigError);
     const statusColor = hasFailed ? "#EF4444" : version.approvalStatus === "approved" ? "#10B981" : version.approvalStatus === "rejected" ? "#EF4444" : "#F59E0B";
     const isApproved = version.approvalStatus === "approved";
     const displayStatus = hasFailed ? "FAILED" : version.approvalStatus || "pending";
-    return /* @__PURE__ */ React.createElement("div", { key: version.id, style: {
+    return /* @__PURE__ */ React2.createElement("div", { key: version.id, style: {
       padding: 16,
       borderBottom: idx < configVersions.length - 1 ? "1px solid #E5E7EB" : "none",
       background: idx === 0 ? "#F9FAFB" : "white"
-    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 12, alignItems: "center", marginBottom: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 14 } }, "Version ", version.version), /* @__PURE__ */ React.createElement("span", { style: {
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 12, alignItems: "center", marginBottom: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 600, fontSize: 14 } }, "Version ", version.version), /* @__PURE__ */ React2.createElement("span", { style: {
       padding: "2px 8px",
       borderRadius: 4,
       fontSize: 11,
       fontWeight: 500,
       background: statusColor,
       color: "white"
-    } }, displayStatus), hasFailed && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#EF4444", fontWeight: 600 } }, "\u26A0\uFE0F Config Error"), version.pushedAt && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#3B82F6", fontWeight: 500 } }, "\u2713 Pushed at ", new Date(version.pushedAt).toLocaleString(), version.pushedBy && ` by ${version.pushedBy}`), isApproved && !version.pushedAt && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "#10B981", fontWeight: 500 } }, "\u2713 Ready to Push")), /* @__PURE__ */ React.createElement("div", { style: {
+    } }, displayStatus), hasFailed && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#EF4444", fontWeight: 600 } }, "\u26A0\uFE0F Config Error"), version.pushedAt && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#3B82F6", fontWeight: 500 } }, "\u2713 Pushed at ", new Date(version.pushedAt).toLocaleString(), version.pushedBy && ` by ${version.pushedBy}`), isApproved && !version.pushedAt && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#10B981", fontWeight: 500 } }, "\u2713 Ready to Push")), /* @__PURE__ */ React2.createElement("div", { style: {
       fontSize: 12,
       color: "#6B7280",
       padding: 8,
       background: "#F3F4F6",
       borderRadius: 4,
       marginBottom: 8
-    } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React.createElement("strong", null, "Created:"), " ", version.createdBy || "unknown", " at ", version.createdAt ? new Date(version.createdAt).toLocaleString() : "N/A"), version.modifiedAt && version.modifiedAt !== version.createdAt && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React.createElement("strong", null, "Modified:"), " ", version.modifiedBy, " at ", new Date(version.modifiedAt).toLocaleString()), version.approvedBy && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4, color: version.approvalStatus === "approved" ? "#10B981" : "#EF4444" } }, /* @__PURE__ */ React.createElement("strong", null, version.approvalStatus === "approved" ? "\u2713 Approved" : "\u2717 Rejected", ":"), " ", version.approvedBy, " at ", version.approvedAt ? new Date(version.approvedAt).toLocaleString() : "", version.approvalComment && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, fontSize: 11, fontStyle: "italic", color: "#6B7280", padding: "6px 10px", background: "#F9FAFB", borderRadius: 4, borderLeft: "3px solid #D1D5DB" } }, "\u{1F4AC} ", /* @__PURE__ */ React.createElement("strong", null, "Comment:"), " ", version.approvalComment)), (() => {
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React2.createElement("strong", null, "Created:"), " ", version.createdBy || "unknown", " at ", version.createdAt ? new Date(version.createdAt).toLocaleString() : "N/A"), version.modifiedAt && version.modifiedAt !== version.createdAt && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 4 } }, /* @__PURE__ */ React2.createElement("strong", null, "Modified:"), " ", version.modifiedBy, " at ", new Date(version.modifiedAt).toLocaleString()), version.approvedBy && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 4, color: version.approvalStatus === "approved" ? "#10B981" : "#EF4444" } }, /* @__PURE__ */ React2.createElement("strong", null, version.approvalStatus === "approved" ? "\u2713 Approved" : "\u2717 Rejected", ":"), " ", version.approvedBy, " at ", version.approvedAt ? new Date(version.approvedAt).toLocaleString() : "", version.approvalComment && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 6, fontSize: 11, fontStyle: "italic", color: "#6B7280", padding: "6px 10px", background: "#F9FAFB", borderRadius: 4, borderLeft: "3px solid #D1D5DB" } }, "\u{1F4AC} ", /* @__PURE__ */ React2.createElement("strong", null, "Comment:"), " ", version.approvalComment)), (() => {
       const syncStatus2 = configSyncStatus[version.id];
       if (syncStatus2 && version.pushedAt) {
         const remoteStatus = syncStatus2.remoteConfigStatus || "";
@@ -4620,14 +4668,14 @@ service:
         const hasError = syncStatus2.remoteConfigError;
         if (remoteStatus.includes("FAILED") || hasError) {
           const errorMsg = syncStatus2.remoteConfigError || "Configuration failed to apply";
-          return /* @__PURE__ */ React.createElement("div", { style: {
+          return /* @__PURE__ */ React2.createElement("div", { style: {
             marginTop: 8,
             padding: "10px 12px",
             background: "#FEE2E2",
             borderRadius: 4,
             border: "2px solid #EF4444",
             fontSize: 11
-          } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, color: "#991B1B", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 } }, "\u274C ", /* @__PURE__ */ React.createElement("span", null, "Configuration Failed to Apply")), /* @__PURE__ */ React.createElement("div", { style: {
+          } }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, color: "#991B1B", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 } }, "\u274C ", /* @__PURE__ */ React2.createElement("span", null, "Configuration Failed to Apply")), /* @__PURE__ */ React2.createElement("div", { style: {
             color: "#7F1D1D",
             fontFamily: "monospace",
             whiteSpace: "pre-wrap",
@@ -4643,7 +4691,7 @@ service:
         }
       }
       return null;
-    })())), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    })())), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: () => {
@@ -4667,7 +4715,7 @@ service:
       const agentNotOnline = !agent || agent.status !== "online";
       const canRevert = !isLatestVersion && isApproved && !agentNotOnline;
       const disabledReason = isLatestVersion ? "Cannot revert to the latest version" : isNotApproved ? "Only approved configurations can be reverted" : agentNotOnline ? "Agent must be online to revert" : "";
-      return /* @__PURE__ */ React.createElement(
+      return /* @__PURE__ */ React2.createElement(
         "button",
         {
           onClick: () => {
@@ -4699,7 +4747,7 @@ service:
         },
         "\u21A9\uFE0F Revert"
       );
-    })(), isApproved && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, !version.pushedAt ? /* @__PURE__ */ React.createElement(
+    })(), isApproved && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, !version.pushedAt ? /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: async () => {
@@ -4726,7 +4774,7 @@ service:
         }
       },
       "\u{1F680} Push This Version"
-    ) : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: {
+    ) : /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React2.createElement("div", { style: {
       padding: "8px 12px",
       background: "#E0E7FF",
       borderRadius: 4,
@@ -4736,7 +4784,7 @@ service:
     } }, "\u2713 Pushed at ", new Date(version.pushedAt).toLocaleString(), version.pushedBy && ` by ${version.pushedBy}`), (() => {
       const syncStatus2 = configSyncStatus[version.id];
       if (!syncStatus2) {
-        return /* @__PURE__ */ React.createElement("span", { style: {
+        return /* @__PURE__ */ React2.createElement("span", { style: {
           padding: "4px 10px",
           background: "#6B7280",
           color: "white",
@@ -4752,7 +4800,7 @@ service:
       const hashMatch = syncStatus2.hashMatch;
       const hasError = syncStatus2.remoteConfigError;
       if (remoteStatus.includes("APPLIED") && hashMatch) {
-        return /* @__PURE__ */ React.createElement("span", { style: {
+        return /* @__PURE__ */ React2.createElement("span", { style: {
           padding: "4px 10px",
           background: "#10B981",
           color: "white",
@@ -4765,7 +4813,7 @@ service:
         } }, "\u2705 Synced");
       } else if (remoteStatus.includes("FAILED") || hasError) {
         const errorMsg = syncStatus2.remoteConfigError || "Unknown error";
-        return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: {
+        return /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("span", { style: {
           padding: "6px 12px",
           background: "#EF4444",
           color: "white",
@@ -4775,7 +4823,7 @@ service:
           display: "inline-flex",
           alignItems: "center",
           gap: 6
-        } }, "\u274C Configuration Failed"), errorMsg && /* @__PURE__ */ React.createElement("div", { style: {
+        } }, "\u274C Configuration Failed"), errorMsg && /* @__PURE__ */ React2.createElement("div", { style: {
           padding: "10px 12px",
           background: "#FEE2E2",
           borderRadius: 4,
@@ -4788,9 +4836,9 @@ service:
           maxWidth: "400px",
           maxHeight: "200px",
           overflowY: "auto"
-        } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, "Error Details:"), errorMsg));
+        } }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, "Error Details:"), errorMsg));
       } else if (remoteStatus.includes("APPLYING")) {
-        return /* @__PURE__ */ React.createElement("span", { style: {
+        return /* @__PURE__ */ React2.createElement("span", { style: {
           padding: "4px 10px",
           background: "#F59E0B",
           color: "white",
@@ -4802,7 +4850,7 @@ service:
           gap: 6
         } }, "\u23F3 Syncing...");
       } else {
-        return /* @__PURE__ */ React.createElement("div", { style: {
+        return /* @__PURE__ */ React2.createElement("div", { style: {
           padding: "6px 10px",
           background: "#F3F4F6",
           color: "#374151",
@@ -4811,13 +4859,13 @@ service:
           lineHeight: 1.5
         } }, "Agent has not reported a RemoteConfigStatus yet. After pushing, track the collector health badge in the roster (green = applied, red = offline).");
       }
-    })(), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 6 } }, "After pushing, watch the collector health indicator under the Collectors tab. Green means the agent is healthy, red means it needs attention."))), version.approvalStatus === "pending" && /* @__PURE__ */ React.createElement("div", { style: {
+    })(), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#6B7280", marginTop: 6 } }, "After pushing, watch the collector health indicator under the Collectors tab. Green means the agent is healthy, red means it needs attention."))), version.approvalStatus === "pending" && /* @__PURE__ */ React2.createElement("div", { style: {
       padding: 12,
       background: "#FEF3C7",
       borderRadius: 6,
       border: "2px solid #FCD34D",
       marginTop: 8
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#92400E", marginBottom: 8 } }, "\u26A0\uFE0F AWAITING APPROVAL ", isAdmin ? "(You are admin)" : "(Admin role not detected - trying anyway for testing)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#92400E", marginBottom: 8 } }, "\u26A0\uFE0F AWAITING APPROVAL ", isAdmin ? "(You are admin)" : "(Admin role not detected - trying anyway for testing)"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: () => handleApprovalClick(String(version.id), "approve"),
@@ -4838,7 +4886,7 @@ service:
         title: version.approvalStatus === "approved" || version.approvalStatus === "rejected" ? `Configuration already ${version.approvalStatus}` : isAdmin ? "Approve this configuration as admin" : "Attempting to approve (testing mode)"
       },
       "\u2713 Approve Configuration"
-    ), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: () => handleApprovalClick(String(version.id), "reject"),
@@ -4859,14 +4907,14 @@ service:
         title: version.approvalStatus === "approved" || version.approvalStatus === "rejected" ? `Configuration already ${version.approvalStatus}` : isAdmin ? "Reject this configuration as admin" : "Attempting to reject (testing mode)"
       },
       "\u2717 Reject Configuration"
-    )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#78350F", marginTop: 8 } }, "\u{1F4A1} Review the configuration above, then approve or reject it. Approved configs can be pushed to agents.", !isAdmin && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4, fontSize: 10 } }, "\u26A0\uFE0F Note: Admin role not detected, but approval will be attempted anyway for testing."))), version.approvalStatus === "rejected" && /* @__PURE__ */ React.createElement("div", { style: {
+    )), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#78350F", marginTop: 8 } }, "\u{1F4A1} Review the configuration above, then approve or reject it. Approved configs can be pushed to agents.", !isAdmin && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 4, fontSize: 10 } }, "\u26A0\uFE0F Note: Admin role not detected, but approval will be attempted anyway for testing."))), version.approvalStatus === "rejected" && /* @__PURE__ */ React2.createElement("div", { style: {
       padding: 12,
       background: "#FEE2E2",
       borderRadius: 6,
       border: "2px solid #FECACA",
       marginTop: 8
-    } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#991B1B", marginBottom: 4 } }, "\u2717 Configuration Rejected"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#7F1D1D" } }, "This configuration has been rejected and cannot be approved again. Create a new version if you need to make changes.")))));
-  }))), showApprovalDialog && approvalAction && approvalConfigId && /* @__PURE__ */ React.createElement("div", { style: {
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#991B1B", marginBottom: 4 } }, "\u2717 Configuration Rejected"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#7F1D1D" } }, "This configuration has been rejected and cannot be approved again. Create a new version if you need to make changes.")))));
+  }))), showApprovalDialog && approvalAction && approvalConfigId && /* @__PURE__ */ React2.createElement("div", { style: {
     position: "fixed",
     top: 0,
     left: 0,
@@ -4882,7 +4930,7 @@ service:
     setApprovalAction(null);
     setApprovalConfigId(null);
     setApprovalComment("");
-  } }, /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React2.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     padding: 24,
@@ -4891,7 +4939,7 @@ service:
     maxHeight: "80vh",
     overflowY: "auto",
     boxShadow: "0 10px 25px rgba(0,0,0,0.3)"
-  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("h3", { style: { margin: "0 0 16px 0", fontSize: 18, fontWeight: 600, color: approvalAction === "approve" ? "#10B981" : "#EF4444" } }, approvalAction === "approve" ? "\u2713 Approve Configuration" : "\u2717 Reject Configuration"), /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 16px 0", fontSize: 14, color: "#6B7280" } }, approvalAction === "approve" ? "Are you sure you want to approve this configuration? Approved configurations can be pushed to agents." : "Please provide a reason for rejecting this configuration. Comments are required for rejections."), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 500, marginBottom: 8, color: "#111827" } }, approvalAction === "reject" ? "Rejection Reason *" : "Comment (Optional)"), /* @__PURE__ */ React.createElement(
+  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: "0 0 16px 0", fontSize: 18, fontWeight: 600, color: approvalAction === "approve" ? "#10B981" : "#EF4444" } }, approvalAction === "approve" ? "\u2713 Approve Configuration" : "\u2717 Reject Configuration"), /* @__PURE__ */ React2.createElement("p", { style: { margin: "0 0 16px 0", fontSize: 14, color: "#6B7280" } }, approvalAction === "approve" ? "Are you sure you want to approve this configuration? Approved configurations can be pushed to agents." : "Please provide a reason for rejecting this configuration. Comments are required for rejections."), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 13, fontWeight: 500, marginBottom: 8, color: "#111827" } }, approvalAction === "reject" ? "Rejection Reason *" : "Comment (Optional)"), /* @__PURE__ */ React2.createElement(
     "textarea",
     {
       value: approvalComment,
@@ -4908,7 +4956,7 @@ service:
         resize: "vertical"
       }
     }
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 12, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 12, justifyContent: "flex-end" } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -4929,7 +4977,7 @@ service:
       }
     },
     "Cancel"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: approveConfig,
@@ -4947,7 +4995,7 @@ service:
       }
     },
     approvalAction === "approve" ? "\u2713 Confirm Approval" : "\u2717 Confirm Rejection"
-  )))), showDiff && diffData && /* @__PURE__ */ React.createElement("div", { style: {
+  )))), showDiff && diffData && /* @__PURE__ */ React2.createElement("div", { style: {
     position: "fixed",
     top: 0,
     left: 0,
@@ -4958,7 +5006,7 @@ service:
     alignItems: "center",
     justifyContent: "center",
     zIndex: 2e3
-  }, onClick: () => setShowDiff(false) }, /* @__PURE__ */ React.createElement("div", { style: {
+  }, onClick: () => setShowDiff(false) }, /* @__PURE__ */ React2.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     padding: 24,
@@ -4967,7 +5015,7 @@ service:
     width: 1e3,
     overflow: "auto",
     boxShadow: "0 4px 20px rgba(0,0,0,0.3)"
-  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0 } }, "Configuration Diff"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowDiff(false), style: { background: "none", border: "none", fontSize: 24, cursor: "pointer" } }, "\xD7")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, "Viewing scope:\xA0", /* @__PURE__ */ React.createElement("strong", null, diffData.currentScope ? diffData.currentScope : "full document"), diffData.previousScope && diffData.previousScope !== diffData.currentScope && /* @__PURE__ */ React.createElement(React.Fragment, null, " (previous: ", diffData.previousScope, ")")), diffData.fullCurrent && /* @__PURE__ */ React.createElement(
+  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: 0 } }, "Configuration Diff"), /* @__PURE__ */ React2.createElement("button", { onClick: () => setShowDiff(false), style: { background: "none", border: "none", fontSize: 24, cursor: "pointer" } }, "\xD7")), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#4B5563" } }, "Viewing scope:\xA0", /* @__PURE__ */ React2.createElement("strong", null, diffData.currentScope ? diffData.currentScope : "full document"), diffData.previousScope && diffData.previousScope !== diffData.currentScope && /* @__PURE__ */ React2.createElement(React2.Fragment, null, " (previous: ", diffData.previousScope, ")")), diffData.fullCurrent && /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => setShowFullDiff((prev) => !prev),
@@ -4983,14 +5031,14 @@ service:
       }
     },
     showFullDiff ? "Hide Full CR YAML" : "Show Full CR YAML"
-  )), showFullDiff && diffData.fullCurrent && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Full Current CRD YAML"), /* @__PURE__ */ React.createElement("pre", { style: {
+  )), showFullDiff && diffData.fullCurrent && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, marginBottom: 6 } }, "Full Current CRD YAML"), /* @__PURE__ */ React2.createElement("pre", { style: {
     maxHeight: 200,
     overflow: "auto",
     background: "#F3F4F6",
     padding: 12,
     borderRadius: 4,
     fontSize: 11
-  } }, diffData.fullCurrent)), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#DC2626" } }, "\u274C ", diffData.isUsingBaseline ? "Baseline" : `Previous Version (v${diffData.previousVersion || "N/A"})`, " (Removed/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
+  } }, diffData.fullCurrent)), /* @__PURE__ */ React2.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#DC2626" } }, "\u274C ", diffData.isUsingBaseline ? "Baseline" : `Previous Version (v${diffData.previousVersion || "N/A"})`, " (Removed/Changed)"), /* @__PURE__ */ React2.createElement("div", { style: {
     width: "100%",
     minHeight: 400,
     maxHeight: 500,
@@ -5005,15 +5053,15 @@ service:
     wordWrap: "break-word"
   } }, diffData.diff && diffData.diff.length > 0 ? diffData.diff.map((change, idx) => {
     if (change.type === "removed" || change.type === "modified") {
-      return /* @__PURE__ */ React.createElement("div", { key: idx, style: {
+      return /* @__PURE__ */ React2.createElement("div", { key: idx, style: {
         padding: "2px 4px",
         background: "#FECACA",
         borderLeft: "3px solid #DC2626",
         marginBottom: 1
-      } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#991B1B", marginRight: 8, userSelect: "none", fontWeight: 600 } }, "L", change.line), /* @__PURE__ */ React.createElement("span", { style: { color: "#7F1D1D" } }, change.old || " "));
+      } }, /* @__PURE__ */ React2.createElement("span", { style: { color: "#991B1B", marginRight: 8, userSelect: "none", fontWeight: 600 } }, "L", change.line), /* @__PURE__ */ React2.createElement("span", { style: { color: "#7F1D1D" } }, change.old || " "));
     }
     return null;
-  }) : /* @__PURE__ */ React.createElement("div", { style: { color: "#6B7280", fontStyle: "italic" } }, "No changes detected"))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#059669" } }, "\u2705 Selected Version (v", diffData.currentVersion || "N/A", ") (New/Changed)"), /* @__PURE__ */ React.createElement("div", { style: {
+  }) : /* @__PURE__ */ React2.createElement("div", { style: { color: "#6B7280", fontStyle: "italic" } }, "No changes detected"))), /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, marginBottom: 8, color: "#059669" } }, "\u2705 Selected Version (v", diffData.currentVersion || "N/A", ") (New/Changed)"), /* @__PURE__ */ React2.createElement("div", { style: {
     width: "100%",
     minHeight: 400,
     maxHeight: 500,
@@ -5028,35 +5076,35 @@ service:
     wordWrap: "break-word"
   } }, diffData.diff && diffData.diff.length > 0 ? diffData.diff.map((change, idx) => {
     if (change.type === "added" || change.type === "modified") {
-      return /* @__PURE__ */ React.createElement("div", { key: idx, style: {
+      return /* @__PURE__ */ React2.createElement("div", { key: idx, style: {
         padding: "2px 4px",
         background: change.type === "modified" ? "#A7F3D0" : "#D1FAE5",
         borderLeft: change.type === "modified" ? "3px solid #059669" : "3px solid #10B981",
         marginBottom: 1
-      } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#065F46", marginRight: 8, userSelect: "none", fontWeight: 600 } }, "L", change.line), /* @__PURE__ */ React.createElement("span", { style: { color: "#047857" } }, change.new || " "));
+      } }, /* @__PURE__ */ React2.createElement("span", { style: { color: "#065F46", marginRight: 8, userSelect: "none", fontWeight: 600 } }, "L", change.line), /* @__PURE__ */ React2.createElement("span", { style: { color: "#047857" } }, change.new || " "));
     }
     return null;
-  }) : /* @__PURE__ */ React.createElement("div", { style: { color: "#6B7280", fontStyle: "italic" } }, "No changes detected")))), /* @__PURE__ */ React.createElement("div", { style: { borderTop: "1px solid #E5E7EB", paddingTop: 16 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, fontSize: 16 } }, "Changes Summary"), /* @__PURE__ */ React.createElement("div", { style: {
+  }) : /* @__PURE__ */ React2.createElement("div", { style: { color: "#6B7280", fontStyle: "italic" } }, "No changes detected")))), /* @__PURE__ */ React2.createElement("div", { style: { borderTop: "1px solid #E5E7EB", paddingTop: 16 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, marginBottom: 8, fontSize: 16 } }, "Changes Summary"), /* @__PURE__ */ React2.createElement("div", { style: {
     marginBottom: 16,
     padding: 12,
     background: diffData.diff && diffData.diff.filter((d) => d.type === "modified").length > 0 ? "#FEF3C7" : "#F3F4F6",
     borderRadius: 6,
     border: `2px solid ${diffData.diff && diffData.diff.filter((d) => d.type === "modified").length > 0 ? "#F59E0B" : "#D1D5DB"}`
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 600, marginBottom: 4 } }, "\u{1F4CA} Change Statistics"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "\u2022 ", /* @__PURE__ */ React.createElement("strong", null, diffData.diff ? diffData.diff.filter((d) => d.type === "modified").length : 0), " lines modified/changed"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "\u2022 ", /* @__PURE__ */ React.createElement("strong", null, diffData.diff ? diffData.diff.filter((d) => d.type === "unchanged").length : 0), " lines unchanged"), (diffData.current || "").split("\n").length !== (diffData.previous || "").split("\n").length && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#F59E0B", marginTop: 4 } }, "\u26A0\uFE0F Line count changed: Previous (", (diffData.previous || "").split("\n").length, ") \u2192 Current (", (diffData.current || "").split("\n").length, ")")), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 8, fontSize: 16 } }, "Line-by-Line Changes"), /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, fontWeight: 600, marginBottom: 4 } }, "\u{1F4CA} Change Statistics"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "\u2022 ", /* @__PURE__ */ React2.createElement("strong", null, diffData.diff ? diffData.diff.filter((d) => d.type === "modified").length : 0), " lines modified/changed"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, "\u2022 ", /* @__PURE__ */ React2.createElement("strong", null, diffData.diff ? diffData.diff.filter((d) => d.type === "unchanged").length : 0), " lines unchanged"), (diffData.current || "").split("\n").length !== (diffData.previous || "").split("\n").length && /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#F59E0B", marginTop: 4 } }, "\u26A0\uFE0F Line count changed: Previous (", (diffData.previous || "").split("\n").length, ") \u2192 Current (", (diffData.current || "").split("\n").length, ")")), /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, marginBottom: 8, fontSize: 16 } }, "Line-by-Line Changes"), /* @__PURE__ */ React2.createElement("div", { style: {
     maxHeight: 300,
     overflow: "auto",
     background: "#F9FAFB",
     padding: 12,
     borderRadius: 6,
     border: "1px solid #E5E7EB"
-  } }, diffData.diff && diffData.diff.length > 0 ? diffData.diff.filter((change) => change.type !== "unchanged").map((change, idx) => /* @__PURE__ */ React.createElement("div", { key: idx, style: {
+  } }, diffData.diff && diffData.diff.length > 0 ? diffData.diff.filter((change) => change.type !== "unchanged").map((change, idx) => /* @__PURE__ */ React2.createElement("div", { key: idx, style: {
     padding: 10,
     marginBottom: 6,
     background: change.type === "modified" ? "#FFF3CD" : change.type === "added" ? "#D1FAE5" : "#FEE2E2",
     borderRadius: 4,
     fontSize: 12,
     borderLeft: change.type === "modified" ? "3px solid #F59E0B" : change.type === "added" ? "3px solid #10B981" : "3px solid #EF4444"
-  } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, marginBottom: 4, color: "#111827" } }, "Line ", change.line, ": ", change.type === "modified" ? "\u270F\uFE0F Modified" : change.type === "added" ? "\u2795 Added" : "\u2796 Removed"), change.type === "modified" || change.type === "removed" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { color: "#7F1D1D", marginBottom: 4, padding: 4, background: "#FEE2E2", borderRadius: 2, fontWeight: 600 } }, /* @__PURE__ */ React.createElement("strong", null, "- "), " ", change.old || "(empty)"), change.type === "modified" && /* @__PURE__ */ React.createElement("div", { style: { color: "#065F46", padding: 4, background: "#D1FAE5", borderRadius: 2, fontWeight: 600 } }, /* @__PURE__ */ React.createElement("strong", null, "+ "), " ", change.new || "(empty)")) : /* @__PURE__ */ React.createElement("div", { style: { color: "#065F46", padding: 4, background: "#D1FAE5", borderRadius: 2, fontWeight: 600 } }, /* @__PURE__ */ React.createElement("strong", null, "+ "), " ", change.new || "(empty)"))) : /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: 20, color: "#6B7280" } }, "No changes detected (configurations are identical)")))))), showComponentTypeManager && /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, marginBottom: 4, color: "#111827" } }, "Line ", change.line, ": ", change.type === "modified" ? "\u270F\uFE0F Modified" : change.type === "added" ? "\u2795 Added" : "\u2796 Removed"), change.type === "modified" || change.type === "removed" ? /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { color: "#7F1D1D", marginBottom: 4, padding: 4, background: "#FEE2E2", borderRadius: 2, fontWeight: 600 } }, /* @__PURE__ */ React2.createElement("strong", null, "- "), " ", change.old || "(empty)"), change.type === "modified" && /* @__PURE__ */ React2.createElement("div", { style: { color: "#065F46", padding: 4, background: "#D1FAE5", borderRadius: 2, fontWeight: 600 } }, /* @__PURE__ */ React2.createElement("strong", null, "+ "), " ", change.new || "(empty)")) : /* @__PURE__ */ React2.createElement("div", { style: { color: "#065F46", padding: 4, background: "#D1FAE5", borderRadius: 2, fontWeight: 600 } }, /* @__PURE__ */ React2.createElement("strong", null, "+ "), " ", change.new || "(empty)"))) : /* @__PURE__ */ React2.createElement("div", { style: { textAlign: "center", padding: 20, color: "#6B7280" } }, "No changes detected (configurations are identical)")))))), showComponentTypeManager && /* @__PURE__ */ React2.createElement("div", { style: {
     position: "fixed",
     top: 0,
     left: 0,
@@ -5070,7 +5118,7 @@ service:
   }, onClick: () => {
     setShowComponentTypeManager(false);
     setEditingComponentType(null);
-  } }, /* @__PURE__ */ React.createElement("div", { style: {
+  } }, /* @__PURE__ */ React2.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     padding: 24,
@@ -5079,7 +5127,7 @@ service:
     maxHeight: "90vh",
     overflow: "auto",
     boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)"
-  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React.createElement("h3", { style: { margin: 0, fontSize: 20, fontWeight: 600 } }, "Manage Component Types"), /* @__PURE__ */ React.createElement(
+  }, onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: 0, fontSize: 20, fontWeight: 600 } }, "Manage Component Types"), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => {
@@ -5097,7 +5145,7 @@ service:
       }
     },
     "Close"
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 20, borderBottom: "2px solid #E5E7EB" } }, ["receiver", "processor", "exporter"].map((cat) => /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 20, borderBottom: "2px solid #E5E7EB" } }, ["receiver", "processor", "exporter"].map((cat) => /* @__PURE__ */ React2.createElement(
     "button",
     {
       key: cat,
@@ -5120,7 +5168,7 @@ service:
     },
     cat,
     "s"
-  ))), editingComponentType && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: "0 0 16px 0", fontSize: 16 } }, editingComponentType.id ? "Edit" : "Add New", " ", editingComponentType.category?.charAt(0).toUpperCase(), editingComponentType.category?.slice(1), " Type"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, 'Type Name (e.g., "my_custom_receiver")'), /* @__PURE__ */ React.createElement(
+  ))), editingComponentType && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24, padding: 16, background: "#F9FAFB", borderRadius: 6 } }, /* @__PURE__ */ React2.createElement("h4", { style: { margin: "0 0 16px 0", fontSize: 16 } }, editingComponentType.id ? "Edit" : "Add New", " ", editingComponentType.category?.charAt(0).toUpperCase(), editingComponentType.category?.slice(1), " Type"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, 'Type Name (e.g., "my_custom_receiver")'), /* @__PURE__ */ React2.createElement(
     "input",
     {
       type: "text",
@@ -5130,7 +5178,7 @@ service:
       disabled: !!editingComponentType.isSystem,
       style: { width: "100%", padding: "8px 12px", border: "1px solid #D1D5DB", borderRadius: 4 }
     }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, "Display Label"), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, "Display Label"), /* @__PURE__ */ React2.createElement(
     "input",
     {
       type: "text",
@@ -5139,7 +5187,7 @@ service:
       placeholder: "My Custom Receiver",
       style: { width: "100%", padding: "8px 12px", border: "1px solid #D1D5DB", borderRadius: 4 }
     }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, "Description"), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, "Description"), /* @__PURE__ */ React2.createElement(
     "textarea",
     {
       value: editingComponentType.description || "",
@@ -5147,7 +5195,7 @@ service:
       placeholder: "Description of this component type...",
       style: { width: "100%", padding: "8px 12px", border: "1px solid #D1D5DB", borderRadius: 4, minHeight: 60 }
     }
-  )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, "Default Config (JSON)"), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 } }, "Default Config (JSON)"), /* @__PURE__ */ React2.createElement(
     "textarea",
     {
       value: JSON.stringify(editingComponentType.config || {}, null, 2),
@@ -5160,7 +5208,7 @@ service:
       placeholder: '{"endpoint": "http://localhost:4317"}',
       style: { width: "100%", padding: "8px 12px", border: "1px solid #D1D5DB", borderRadius: 4, minHeight: 100, fontFamily: "monospace", fontSize: 12 }
     }
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: async () => {
@@ -5206,7 +5254,7 @@ service:
     },
     editingComponentType.id ? "Update" : "Create",
     " Type"
-  ), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => setEditingComponentType(null),
@@ -5221,7 +5269,7 @@ service:
       }
     },
     "Cancel"
-  )))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("h4", { style: { margin: 0, fontSize: 16 } }, "Existing Types"), !editingComponentType && /* @__PURE__ */ React.createElement(
+  )))), /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("h4", { style: { margin: 0, fontSize: 16 } }, "Existing Types"), !editingComponentType && /* @__PURE__ */ React2.createElement(
     "button",
     {
       onClick: () => setEditingComponentType({ category: "receiver", type: "", label: "", config: {}, description: "" }),
@@ -5236,21 +5284,21 @@ service:
       }
     },
     "+ Add New"
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 } }, ["receiver", "processor", "exporter"].map((category) => {
+  )), /* @__PURE__ */ React2.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 } }, ["receiver", "processor", "exporter"].map((category) => {
     const types = getTypesForCategory(category);
-    return types.map((t) => /* @__PURE__ */ React.createElement("div", { key: `${category}-${t.value}`, style: {
+    return types.map((t) => /* @__PURE__ */ React2.createElement("div", { key: `${category}-${t.value}`, style: {
       padding: 12,
       background: "white",
       border: "1px solid #E5E7EB",
       borderRadius: 6
-    } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t.label), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontFamily: "monospace" } }, t.value), t.description && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 4 } }, t.description), t.isSystem && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, color: "#3B82F6", fontWeight: 600 } }, "System")), !t.isSystem && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4 } }, /* @__PURE__ */ React.createElement(
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "start", marginBottom: 8 } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, fontWeight: 600 } }, t.label), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#6B7280", fontFamily: "monospace" } }, t.value), t.description && /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#9CA3AF", marginTop: 4 } }, t.description), t.isSystem && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, color: "#3B82F6", fontWeight: 600 } }, "System")), !t.isSystem && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4 } }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: () => setEditingComponentType({ ...t, category }),
         style: { padding: "4px 8px", background: "#3B82F6", color: "white", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 10 }
       },
       "Edit"
-    ), /* @__PURE__ */ React.createElement(
+    ), /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: async () => {
@@ -5270,7 +5318,7 @@ service:
       },
       "Delete"
     )))));
-  }))))), showSaveDialog && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2e3 } }, /* @__PURE__ */ React.createElement("div", { style: { background: "white", borderRadius: 8, padding: 24, maxWidth: 500, width: "90%", boxShadow: "0 4px 20px rgba(0,0,0,0.3)" } }, /* @__PURE__ */ React.createElement("h3", { style: { marginTop: 0 } }, "Save Configuration Template"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", marginBottom: 4, fontSize: 14, fontWeight: 500 } }, "Name *"), /* @__PURE__ */ React.createElement(
+  }))))), showSaveDialog && /* @__PURE__ */ React2.createElement("div", { style: { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2e3 } }, /* @__PURE__ */ React2.createElement("div", { style: { background: "white", borderRadius: 8, padding: 24, maxWidth: 500, width: "90%", boxShadow: "0 4px 20px rgba(0,0,0,0.3)" } }, /* @__PURE__ */ React2.createElement("h3", { style: { marginTop: 0 } }, "Save Configuration Template"), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", marginBottom: 4, fontSize: 14, fontWeight: 500 } }, "Name *"), /* @__PURE__ */ React2.createElement(
     "input",
     {
       type: "text",
@@ -5279,7 +5327,7 @@ service:
       placeholder: "e.g., Production OTLP Pipeline",
       style: { width: "100%", padding: "8px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 14 }
     }
-  )), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement("label", { style: { display: "block", marginBottom: 4, fontSize: 14, fontWeight: 500 } }, "Description"), /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React2.createElement("label", { style: { display: "block", marginBottom: 4, fontSize: 14, fontWeight: 500 } }, "Description"), /* @__PURE__ */ React2.createElement(
     "textarea",
     {
       value: saveDescription,
@@ -5288,14 +5336,15 @@ service:
       rows: 3,
       style: { width: "100%", padding: "8px", border: "1px solid #E5E7EB", borderRadius: 6, fontSize: 14 }
     }
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
+  )), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end" } }, /* @__PURE__ */ React2.createElement("button", { onClick: () => {
     setShowSaveDialog(false);
     setSaveName("");
     setSaveDescription("");
-  }, style: { padding: "8px 16px", background: "#6B7280", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: saveTemplate, style: { padding: "8px 16px", background: "#3B82F6", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Save")))));
+  }, style: { padding: "8px 16px", background: "#6B7280", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React2.createElement("button", { onClick: saveTemplate, style: { padding: "8px 16px", background: "#3B82F6", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Save")))));
 }
 
 // pages/components/TelemetryConfigDrawer.tsx
+var React2 = __REACT__.default || __REACT__;
 
 // pages/constants.ts
 var PLUGIN_ID = "otel-collector-agent-fleet-management";
@@ -5939,6 +5988,7 @@ var runtimeMode = detectRuntimeMode();
 var isRunningInGrafana = runtimeMode === "grafana";
 var grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
 var backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
+var { useState: useState2, useEffect: useEffect2 } = React2;
 var TelemetryConfigDrawer = ({
   open,
   mode,
@@ -6146,48 +6196,11 @@ var TelemetryConfigDrawer = ({
 };
 
 // pages/components/MonitoringSection.tsx
-
-// pages/utils/helpers.tsx
 var React2 = __REACT__.default || __REACT__;
-var normalizeTelemetryItems = (items) => {
-  if (!Array.isArray(items)) {
-    return [];
-  }
-  return items.map((item) => {
-    const payload = item?.data ?? item ?? {};
-    return {
-      recorded_at: item?.recorded_at || item?.reported_at || payload?.recorded_at || payload?.reported_at || null,
-      cpu_percent: payload?.cpu_percent ?? null,
-      memory_bytes: payload?.memory_bytes ?? null,
-      inbound_bandwidth_kbps: payload?.inbound_bandwidth_kbps ?? null,
-      outbound_bandwidth_kbps: payload?.outbound_bandwidth_kbps ?? null,
-      pipelines: payload?.pipelines ?? payload?.pipelines_json ?? null
-    };
-  });
-};
-var getStatusBadge2 = (status) => {
-  const styles = {
-    online: { bg: "#10B981", color: "white", icon: "\u25CF" },
-    offline: { bg: "#EF4444", color: "white", icon: "\u25CF" },
-    degraded: { bg: "#F59E0B", color: "white", icon: "\u26A0" },
-    unknown: { bg: "#6B7280", color: "white", icon: "\u25CF" }
-  };
-  const s = styles[status] || styles.unknown;
-  return /* @__PURE__ */ React2.createElement("span", { style: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "4px 10px",
-    borderRadius: 12,
-    fontSize: 12,
-    fontWeight: 500,
-    background: s.bg,
-    color: s.color
-  } }, /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 8 } }, s.icon), status);
-};
 
 // pages/utils/capabilities.tsx
-
+var React2 = __REACT__.default || __REACT__;
+var { useMemo: useMemo2 } = React2;
 var capabilityMeta = {
   accepts_remote_config: {
     label: "Remote Config",
@@ -6392,8 +6405,10 @@ var TelemetryToggleCard = ({
 );
 
 // pages/components/LogsPanelView.tsx
+var React2 = __REACT__.default || __REACT__;
 
 var rawBackendSrv2 = __GRAFANA_RUNTIME__.getBackendSrv();
+var { useState: useState2, useEffect: useEffect2, useCallback: useCallback2 } = React2;
 var LogsPanelView = ({ settings, enabled, agentUid, agentName, orgName, onConfigure, backendSrv: backendSrv6 }) => {
   const [datasource, setDatasource] = useState2(null);
   const [entries, setEntries] = useState2([]);
@@ -6572,10 +6587,14 @@ var LogsPanelView = ({ settings, enabled, agentUid, agentName, orgName, onConfig
 };
 
 // pages/components/PipelineFlowDiagram.tsx
+var React2 = __REACT__.default || __REACT__;
 
 // pages/components/StageMetricsRail.tsx
+var React2 = __REACT__.default || __REACT__;
 
 // pages/components/StageMetricsGroup.tsx
+var React2 = __REACT__.default || __REACT__;
+
 
 // pages/utils/metrics.ts
 var escapeSelectorValue = (value) => value.replace(/"/g, '\\"');
@@ -6621,6 +6640,7 @@ var formatStageRate = (value) => {
 };
 
 // pages/components/StageMetricsGroup.tsx
+var { useState: useState2, useEffect: useEffect2, useCallback: useCallback2 } = React2;
 var runtimeMode2 = detectRuntimeMode();
 var isRunningInGrafana2 = runtimeMode2 === "grafana";
 var grafanaTransport2 = detectGrafanaTransport(isRunningInGrafana2);
@@ -6711,6 +6731,7 @@ var StageMetricsGroup = ({ kind, stages, pipelineType, datasource, templates, ag
 };
 
 // pages/components/StageMetricsRail.tsx
+var { useState: useState2, useEffect: useEffect2 } = React2;
 var runtimeMode3 = detectRuntimeMode();
 var isRunningInGrafana3 = runtimeMode3 === "grafana";
 var grafanaTransport3 = detectGrafanaTransport(isRunningInGrafana3);
@@ -6789,6 +6810,7 @@ var StageMetricsRail = ({ flowType, receivers, processors, exporters, metricsSet
 };
 
 // pages/components/PipelineFlowDiagram.tsx
+var { useMemo: useMemo2 } = React2;
 var PipelineFlowDiagram = React2.memo(function PipelineFlowDiagram2({
   config,
   pipelines,
@@ -7006,6 +7028,7 @@ var runtimeMode4 = detectRuntimeMode();
 var isRunningInGrafana4 = runtimeMode4 === "grafana";
 var grafanaTransport4 = detectGrafanaTransport(isRunningInGrafana4);
 var backendSrv4 = createBackendSrv(isRunningInGrafana4, grafanaTransport4);
+var { useState: useState2, useEffect: useEffect2, useMemo: useMemo2 } = React2;
 function MonitoringSection({
   agents,
   bridges,
@@ -7219,7 +7242,7 @@ function MonitoringSection({
         }
       },
       /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", width: 20 } }, bridgeCollectors.length > 0 ? isExpanded ? "\u25BC" : "\u25B6" : ""),
-      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 600, color: "#6B7280", fontSize: 12 } }, bridge.name), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#9CA3AF" } }, "(Bridge - Management Agent)"), bridge.namespace && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge2(bridge.status), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""))
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 600, color: "#6B7280", fontSize: 12 } }, bridge.name), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#9CA3AF" } }, "(Bridge - Management Agent)"), bridge.namespace && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", bridge.namespace), bridge.cluster && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", bridge.cluster), getStatusBadge(bridge.status), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, bridgeCollectors.length, " collector", bridgeCollectors.length !== 1 ? "s" : ""))
     ), isExpanded && bridgeCollectors.map((collector) => /* @__PURE__ */ React2.createElement(
       "div",
       {
@@ -7249,7 +7272,7 @@ function MonitoringSection({
           }
         }
       },
-      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 500, color: "#111827" } }, collector.name), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Collector)"), collector.labels?.["k8s.namespace"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels?.["k8s.crd_name"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#FEF3C7", color: "#92400E", borderRadius: 3 } }, "crd: ", collector.labels["k8s.crd_name"]), collector.labels?.["k8s.cluster"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", collector.labels["k8s.cluster"]), getStatusBadge2(collector.status), collector.version && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", collector.version)),
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", { style: { fontWeight: 500, color: "#111827" } }, collector.name), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "(Collector)"), collector.labels?.["k8s.namespace"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#EFF6FF", color: "#1E40AF", borderRadius: 3 } }, "ns: ", collector.labels["k8s.namespace"]), collector.labels?.["k8s.crd_name"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#FEF3C7", color: "#92400E", borderRadius: 3 } }, "crd: ", collector.labels["k8s.crd_name"]), collector.labels?.["k8s.cluster"] && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 10, padding: "2px 6px", background: "#F0FDF4", color: "#166534", borderRadius: 3 } }, "cluster: ", collector.labels["k8s.cluster"]), getStatusBadge(collector.status), collector.version && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", collector.version)),
       /* @__PURE__ */ React2.createElement(
         "button",
         {
@@ -7295,7 +7318,7 @@ function MonitoringSection({
         borderTop: "1px solid #E5E7EB"
       }
     },
-    /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", null, agent.name || agent.agentUid), getStatusBadge2(agent.status), agent.version && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", agent.version), agent.labels && Object.keys(agent.labels).length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } }, Object.entries(agent.labels).slice(0, 3).map(([key, value]) => /* @__PURE__ */ React2.createElement("span", { key, style: { fontSize: 10, padding: "2px 6px", background: "#F3F4F6", color: "#374151", borderRadius: 3 } }, key, ": ", value)))),
+    /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("span", null, agent.name || agent.agentUid), getStatusBadge(agent.status), agent.version && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "v", agent.version), agent.labels && Object.keys(agent.labels).length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } }, Object.entries(agent.labels).slice(0, 3).map(([key, value]) => /* @__PURE__ */ React2.createElement("span", { key, style: { fontSize: 10, padding: "2px 6px", background: "#F3F4F6", color: "#374151", borderRadius: 3 } }, key, ": ", value)))),
     /* @__PURE__ */ React2.createElement(
       "button",
       {
@@ -7803,6 +7826,7 @@ var buildOpampConnectionUrl = (serverUrl, endpoint) => {
 };
 
 // pages/App.tsx
+var { useEffect: useEffect2, useState: useState2, useMemo: useMemo2, useCallback: useCallback2 } = React2;
 var rawBackendSrv4 = __GRAFANA_RUNTIME__.getBackendSrv();
 var runtimeMode5 = detectRuntimeMode();
 var isRunningInGrafana5 = runtimeMode5 === "grafana";
@@ -8573,7 +8597,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
           }
         }
       )),
-      /* @__PURE__ */ React2.createElement("div", null, getStatusBadge2(bridge.status)),
+      /* @__PURE__ */ React2.createElement("div", null, getStatusBadge(bridge.status)),
       /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, bridge.version || "unknown"),
       /* @__PURE__ */ React2.createElement("div", { onClick: (e) => e.stopPropagation() }, bridge.status === "offline" && /* @__PURE__ */ React2.createElement(
         "button",
@@ -8663,7 +8687,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         ": ",
         value
       ))) : /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#9CA3AF", fontStyle: "italic" } }, "No labels")),
-      /* @__PURE__ */ React2.createElement("div", null, getStatusBadge2(collector.status)),
+      /* @__PURE__ */ React2.createElement("div", null, getStatusBadge(collector.status)),
       /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, collector.version || "unknown"),
       /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, collector.status !== "online" && /* @__PURE__ */ React2.createElement(
         "button",
@@ -8800,7 +8824,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       " ",
       /* @__PURE__ */ React2.createElement("span", null, value)
     )) : /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 12, color: "#9CA3AF", fontStyle: "italic" } }, "No labels")),
-    /* @__PURE__ */ React2.createElement("div", null, getStatusBadge2(agent.status)),
+    /* @__PURE__ */ React2.createElement("div", null, getStatusBadge(agent.status)),
     /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280" } }, agent.version || "unknown"),
     /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, agent.status !== "online" && /* @__PURE__ */ React2.createElement(
       "button",
@@ -8932,7 +8956,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     background: "#EFF6FF",
     borderRadius: 6,
     border: "1px solid #BFDBFE"
-  } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#1E40AF", fontWeight: 600, marginBottom: 4 } }, "TENANT"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, color: "#111827", fontWeight: 600, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React2.createElement("span", null, selectedAgentTenantName || "Unknown tenant"), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 12, color: "#1D4ED8", fontFamily: "monospace" } }, "(ID: ", selectedAgent.orgId, ")"))), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Name"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, selectedAgent.name || selectedAgent.agentUid)), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Agent UID"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, fontFamily: "monospace", color: "#111827", background: "#F3F4F6", padding: 8, borderRadius: 4 } }, selectedAgent.agentUid)), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Status"), /* @__PURE__ */ React2.createElement("div", null, getStatusBadge2(selectedAgent.status))), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Version"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.version || "unknown")), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.lastSeen ? new Date(selectedAgent.lastSeen).toLocaleString() : "Never")), selectedAgent.labels && Object.keys(selectedAgent.labels).length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 8, fontWeight: 600 } }, "Labels"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, Object.entries(selectedAgent.labels).map(([key, value]) => /* @__PURE__ */ React2.createElement(
+  } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#1E40AF", fontWeight: 600, marginBottom: 4 } }, "TENANT"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, color: "#111827", fontWeight: 600, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" } }, /* @__PURE__ */ React2.createElement("span", null, selectedAgentTenantName || "Unknown tenant"), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 12, color: "#1D4ED8", fontFamily: "monospace" } }, "(ID: ", selectedAgent.orgId, ")"))), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Name"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 16, fontWeight: 600, color: "#111827" } }, selectedAgent.name || selectedAgent.agentUid)), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Agent UID"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 13, fontFamily: "monospace", color: "#111827", background: "#F3F4F6", padding: 8, borderRadius: 4 } }, selectedAgent.agentUid)), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Status"), /* @__PURE__ */ React2.createElement("div", null, getStatusBadge(selectedAgent.status))), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Version"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.version || "unknown")), /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 4 } }, "Last Seen"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 14, color: "#111827" } }, selectedAgent.lastSeen ? new Date(selectedAgent.lastSeen).toLocaleString() : "Never")), selectedAgent.labels && Object.keys(selectedAgent.labels).length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { marginBottom: 24 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#6B7280", marginBottom: 8, fontWeight: 600 } }, "Labels"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, Object.entries(selectedAgent.labels).map(([key, value]) => /* @__PURE__ */ React2.createElement(
     "button",
     {
       key,

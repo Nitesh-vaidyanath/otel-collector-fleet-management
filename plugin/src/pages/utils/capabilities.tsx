@@ -1,6 +1,8 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { capabilityOrder } from '../constants';
 import type { CapabilityDescriptor } from '../types';
+
+const { useMemo } = React;
 
 export const capabilityMeta: Record<string, CapabilityDescriptor> = {
   accepts_remote_config: {
@@ -164,4 +166,3 @@ export const CapabilityBadges: React.FC<{
     </div>
   );
 };
-

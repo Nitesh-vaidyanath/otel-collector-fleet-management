@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import type { MetricsTelemetryConfig, StageQueryKey } from '../types';
 import { buildDefaultStageQueries } from '../utils/telemetry';
 import { createBackendSrv } from '../utils/api';
 import { detectRuntimeMode, detectGrafanaTransport } from '../utils/runtime';
 import { StageMetricsGroup } from './StageMetricsGroup';
+
+const { useState, useEffect } = React;
 
 const runtimeMode = detectRuntimeMode();
 const isRunningInGrafana = runtimeMode === 'grafana';

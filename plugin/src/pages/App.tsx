@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 import { ConfigGenerator } from './components/ConfigGenerator';
 import { TelemetryConfigDrawer } from './components/TelemetryConfigDrawer';
@@ -56,6 +56,8 @@ import {
   builtinExporterTemplates,
   inferComponentType,
 } from './utils/components';
+
+const { useEffect, useState, useMemo, useCallback } = React;
 
 const rawBackendSrv = getBackendSrv();
 

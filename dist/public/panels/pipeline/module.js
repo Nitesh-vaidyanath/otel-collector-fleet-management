@@ -7,6 +7,12 @@ var useState2 = React2.useState ? React2.useState.bind(React2) : void 0;
 var useEffect2 = React2.useEffect ? React2.useEffect.bind(React2) : void 0;
 var useMemo2 = React2.useMemo ? React2.useMemo.bind(React2) : void 0;
 var useCallback2 = React2.useCallback ? React2.useCallback.bind(React2) : void 0;
+var useRef2 = React2.useRef ? React2.useRef.bind(React2) : void 0;
+var useReducer2 = React2.useReducer ? React2.useReducer.bind(React2) : void 0;
+var useContext2 = React2.useContext ? React2.useContext.bind(React2) : void 0;
+var useLayoutEffect2 = React2.useLayoutEffect ? React2.useLayoutEffect.bind(React2) : void 0;
+var useImperativeHandle2 = React2.useImperativeHandle ? React2.useImperativeHandle.bind(React2) : void 0;
+var useId2 = React2.useId ? React2.useId.bind(React2) : void 0;
 // panels/pipeline/module.tsx
 var React2 = __REACT__.default || __REACT__;
 

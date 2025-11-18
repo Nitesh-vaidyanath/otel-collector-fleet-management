@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React from 'react';
 import * as yaml from 'js-yaml';
 import type { Agent, Bridge, ComponentCategory } from '../types';
 import {
@@ -11,6 +11,8 @@ import {
   inferComponentType,
 } from '../utils/components';
 import { getStatusBadge } from '../utils/helpers';
+
+const { useState, useEffect, useMemo, useCallback } = React;
 
 export function ConfigGenerator({ 
   agents, 

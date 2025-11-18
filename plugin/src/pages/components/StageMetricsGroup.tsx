@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { getBackendSrv } from '@grafana/runtime';
 import type { StageQueryKey, StageMetricTemplates } from '../types';
 import { extractPrometheusSample, formatStageRate, escapeSelectorValue } from '../utils/metrics';
@@ -6,6 +6,8 @@ import { buildDefaultStageQueries } from '../utils/telemetry';
 import { createBackendSrv } from '../utils/api';
 import { detectRuntimeMode, detectGrafanaTransport } from '../utils/runtime';
 import { STAGE_SUMMARY } from './StageMetricsRail';
+
+const { useState, useEffect, useCallback } = React;
 
 const runtimeMode = detectRuntimeMode();
 const isRunningInGrafana = runtimeMode === 'grafana';
@@ -146,4 +148,3 @@ export const StageMetricsGroup: React.FC<StageMetricsGroupProps> = ({ kind, stag
     </div>
   );
 };
-
