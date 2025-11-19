@@ -5371,7 +5371,9 @@ var capabilityOrder = [
 ];
 
 // components/PipelineMetricsPanelView.tsx
+var React2 = __REACT__.default || __REACT__;
 
+var { useCallback: useCallback2, useEffect: useEffect2, useMemo: useMemo2, useRef, useState: useState2 } = React2;
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var METRIC_LABELS = [
   { key: "cpu", label: "CPU Usage", helper: "Example metric: otelcol_process_cpu_seconds_total" },
@@ -7131,6 +7133,15 @@ function MonitoringSection({
     ...bridges.flatMap((b) => b.collectors || [])
     // Collectors from bridges
   ];
+  const standaloneAgents = useMemo2(() => {
+    return agents.filter((agent) => {
+      const isBridge = bridges.some((bridge) => bridge.agentUid === agent.agentUid);
+      const isBridgeCollector = bridges.some(
+        (bridge) => bridge.collectors?.some((collector) => collector.agentUid === agent.agentUid)
+      );
+      return !isBridge && !isBridgeCollector;
+    });
+  }, [agents, bridges]);
   const onlineAgents = allCollectors.filter((a) => a.status === "online");
   const totalAgents = allCollectors.length;
   const resolvedAgentCaps = useMemo2(() => {
@@ -7294,15 +7305,7 @@ function MonitoringSection({
         selectedAgentUID === collector.agentUid ? "\u2713 Selected" : "Select"
       )
     )));
-  }), agents.filter((a) => {
-    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
-    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
-    return !isBridge && !isBridgeCollector;
-  }).length > 0 && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { padding: "12px 16px", background: "#F9FAFB", borderTop: "2px solid #E5E7EB", fontWeight: 600, fontSize: 12, color: "#6B7280" } }, "Standalone Agents"), agents.filter((a) => {
-    const isBridge = bridges.some((b) => b.agentUid === a.agentUid);
-    const isBridgeCollector = bridges.some((b) => b.collectors.some((c) => c.agentUid === a.agentUid));
-    return !isBridge && !isBridgeCollector;
-  }).map((agent) => /* @__PURE__ */ React2.createElement(
+  }), standaloneAgents.length > 0 && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { padding: "12px 16px", background: "#F9FAFB", borderTop: "2px solid #E5E7EB", fontWeight: 600, fontSize: 12, color: "#6B7280" } }, "Standalone Agents"), standaloneAgents.map((agent) => /* @__PURE__ */ React2.createElement(
     "div",
     {
       key: agent.agentUid,
@@ -8043,18 +8046,12 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   const fetchBridges = async () => {
     try {
       const response = await backendSrv5.get("/api/plugins/otel-collector-agent-fleet-management/resources/bridges");
-      console.log("DEBUG: Fetched bridges response:", { bridges: response.bridges, count: response.bridges?.length || 0 });
-      if (response.bridges && response.bridges.length > 0) {
-        response.bridges.forEach((bridge, idx) => {
-          console.log(`DEBUG: Bridge ${idx}:`, {
-            agentUid: bridge.agentUid?.substring(0, 8),
-            name: bridge.name,
-            collectorsCount: bridge.collectors?.length || 0,
-            collectors: bridge.collectors?.map((c) => ({ uid: c.agentUid?.substring(0, 8), name: c.name }))
-          });
-        });
-      }
-      setBridges(response.bridges || []);
+      const sanitized = (response.bridges || []).map((bridge) => {
+        const collectors = Array.isArray(bridge.collectors) ? bridge.collectors.filter((collector) => collector.agentUid && collector.agentUid !== bridge.agentUid) : [];
+        return { ...bridge, collectors };
+      }).filter((bridge) => bridge.collectors.length > 0);
+      console.log("DEBUG: Sanitized bridges response:", { count: sanitized.length });
+      setBridges(sanitized);
     } catch (err) {
       console.error("Failed to fetch bridges:", err);
     }

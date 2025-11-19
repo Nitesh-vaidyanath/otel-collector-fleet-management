@@ -256,24 +256,32 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 		}
 	}
 
-	// Mark old bridge instances as offline (same org_id, different bridge_uid)
-	_, err := db.Exec(`
-		UPDATE bridges 
-			SET status = 'offline', last_seen_at = NOW()
-		WHERE org_id = ? 
-		  AND bridge_uid != ?
-		  AND status = 'online'
-	`, orgID, instanceUID)
-	if err == nil {
-		log.Printf("OpAMP Bridge reconnected: Marked old bridge instances as offline (org_id=%d, new_uid=%s)", orgID, instanceUID[:8])
-	}
-
 	// Derive nicer defaults for name/version from labels if not provided
 	if name == "" || name == instanceUID || (len(name) == len(instanceUID) && normalizeAgentUID(name) == instanceUID) {
 		if v, ok := labels["service.name"]; ok && strings.TrimSpace(v) != "" {
 			name = v
 		} else if v, ok := labels["resource.attributes.service.name"]; ok && strings.TrimSpace(v) != "" {
 			name = v
+		}
+	}
+
+	// Only mark old instances of the SAME bridge as offline (same name, different UID)
+	// This prevents marking unrelated bridges offline when multiple bridges exist in the same org
+	if name != "" && name != instanceUID && normalizeAgentUID(name) != instanceUID {
+		result, markErr := db.Exec(`
+			UPDATE bridges 
+				SET status = 'offline', last_seen_at = NOW()
+			WHERE org_id = ? 
+			  AND bridge_uid != ?
+			  AND name = ?
+			  AND status = 'online'
+			  AND last_seen_at < DATE_SUB(NOW(), INTERVAL 10 SECOND)
+		`, orgID, instanceUID, name)
+		if markErr == nil {
+			rowsAffected, _ := result.RowsAffected()
+			if rowsAffected > 0 {
+				log.Printf("OpAMP Bridge reconnected: Marked %d old instance(s) of bridge '%s' as offline (org_id=%d, new_uid=%s)", rowsAffected, name, orgID, instanceUID[:8])
+			}
 		}
 	}
 	if version == "" || version == "unknown" {
@@ -287,6 +295,7 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 	}
 
 	// UPSERT bridge into bridges table
+	var err error
 	_, err = db.Exec(`
 		INSERT INTO bridges (org_id, bridge_uid, name, version, status, last_seen_at, labels_json, capabilities_json)
 		VALUES (?, ?, ?, ?, 'online', NOW(), ?, ?)
@@ -658,34 +667,38 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 
 	for configKey := range collectorsInEffectiveConfig {
 		// Parse namespace/name from key (format: "namespace/name")
+		// NOTE: Bridge may send keys like "pipeline:metrics/internal" instead of actual "namespace/name"
+		// We'll extract the actual namespace from CRD metadata if available
 		ns, name, ok := strings.Cut(configKey, "/")
 		if !ok || ns == "" || name == "" {
 			continue
 		}
 
-		// Generate stable UID = sha256("namespace/name")
-		uidBytes := sha256.Sum256([]byte(configKey))
-		stableUID := normalizeAgentUID(hex.EncodeToString(uidBytes[:]))
-
-		// Build minimal labels we know for sure
-		labels := map[string]string{
-			"otel.kind":           "OpenTelemetryCollector",
-			"deployment.type":     "k8s",
-			"k8s.namespace":       ns,
-			"k8s.crd_name":        name,
-			"bridge.instance_uid": bridgeNormalizedUID,
-		}
-		labelsJSON, _ := json.Marshal(labels)
-
 		// Extract version and config from CRD if available
+		// Also extract actual namespace/name from CRD metadata (source of truth)
 		collectorVersion := "unknown"
 		var collectorConfigYAML string
 		var collectorConfigHash string
+		actualNamespace := ns // Default to parsed namespace, will override from CRD if available
+		actualName := name    // Default to parsed name, will override from CRD if available
+
 		if message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
 			if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; cfgMap != nil {
 				if cfgFile, ok := cfgMap[configKey]; ok && cfgFile != nil && len(cfgFile.Body) > 0 {
 					var crdYAML map[string]interface{}
 					if err := yaml.Unmarshal(cfgFile.Body, &crdYAML); err == nil {
+						// CRITICAL: Extract actual Kubernetes namespace and name from CRD metadata
+						// This is the source of truth, not the configKey which may be "pipeline:metrics/internal"
+						if metadata, ok := crdYAML["metadata"].(map[string]interface{}); ok {
+							if namespace, ok := metadata["namespace"].(string); ok && namespace != "" {
+								actualNamespace = namespace
+								log.Printf("DEBUG: Extracted actual namespace '%s' from CRD metadata (configKey was '%s')", actualNamespace, configKey)
+							}
+							if crdName, ok := metadata["name"].(string); ok && crdName != "" {
+								actualName = crdName
+								log.Printf("DEBUG: Extracted actual CRD name '%s' from CRD metadata (configKey was '%s')", actualName, configKey)
+							}
+						}
 						// Extract version from status.version first (most reliable)
 						if status, ok := crdYAML["status"].(map[string]interface{}); ok {
 							if version, ok := status["version"].(string); ok && version != "" {
@@ -723,7 +736,11 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 								}
 							} else {
 								// If spec.config doesn't exist, try to extract from full CRD
-								collectorConfigYAML = extractCollectorConfigFromCRD(cfgFile.Body, stableUID)
+								// Generate temporary UID for extractCollectorConfigFromCRD call
+								tempKey := fmt.Sprintf("%s/%s", actualNamespace, actualName)
+								tempUIDBytes := sha256.Sum256([]byte(tempKey))
+								tempUID := normalizeAgentUID(hex.EncodeToString(tempUIDBytes[:]))
+								collectorConfigYAML = extractCollectorConfigFromCRD(cfgFile.Body, tempUID)
 								if collectorConfigYAML != "" {
 									hashBytes := sha256.Sum256([]byte(collectorConfigYAML))
 									collectorConfigHash = hex.EncodeToString(hashBytes[:])
@@ -734,6 +751,26 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 				}
 			}
 		}
+
+		// Generate stable UID from actual namespace/name (not configKey which may be wrong)
+		// Use actualNamespace/actualName for stable UID generation
+		stableKey := fmt.Sprintf("%s/%s", actualNamespace, actualName)
+		uidBytes := sha256.Sum256([]byte(stableKey))
+		stableUID := normalizeAgentUID(hex.EncodeToString(uidBytes[:]))
+
+		// Build labels with actual namespace and name from CRD metadata
+		labels := map[string]string{
+			"otel.kind":           "OpenTelemetryCollector",
+			"deployment.type":     "k8s",
+			"k8s.namespace":       actualNamespace, // Use actual namespace from CRD, not configKey
+			"k8s.crd_name":        actualName,      // Use actual name from CRD, not configKey
+			"bridge.instance_uid": bridgeNormalizedUID,
+		}
+		// Also store the original configKey for reference (in case it's useful for debugging)
+		if configKey != stableKey {
+			labels["bridge.config_key"] = configKey
+		}
+		labelsJSON, _ := json.Marshal(labels)
 
 		// UPSERT: create a row if it doesn't exist; otherwise refresh heartbeat and update labels/config
 		// CRITICAL: Use ON DUPLICATE KEY UPDATE to handle both new and existing collectors
@@ -754,10 +791,10 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 				version = IF(VALUES(version) != 'unknown' AND VALUES(version) != '', VALUES(version), version),
 				current_config_yaml = IF(VALUES(current_config_yaml) IS NOT NULL AND VALUES(current_config_yaml) != '', VALUES(current_config_yaml), current_config_yaml),
 				current_config_hash = IF(VALUES(current_config_hash) IS NOT NULL AND VALUES(current_config_hash) != '', VALUES(current_config_hash), current_config_hash)
-		`, bridgeOrgID, bridgeOrgName, stableUID, name, collectorVersion, string(labelsJSON), ns, name, clusterID, collectorConfigYAML, collectorConfigHash)
+		`, bridgeOrgID, bridgeOrgName, stableUID, actualName, collectorVersion, string(labelsJSON), actualNamespace, actualName, clusterID, collectorConfigYAML, collectorConfigHash)
 
 		if err != nil {
-			log.Printf("ERROR: Failed to UPSERT collector %s/%s (uid: %s): %v", ns, name, stableUID[:8], err)
+			log.Printf("ERROR: Failed to UPSERT collector %s/%s (uid: %s): %v", actualNamespace, actualName, stableUID[:8], err)
 			continue
 		}
 
@@ -1483,8 +1520,22 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 													collectorVersion = val
 												}
 												// Bridge pattern: Extract Kubernetes CRD identification
+												// CRITICAL: Validate namespace - if it contains ":" it's likely a pipeline name, not a real namespace
+												// Pipeline names like "pipeline:metrics" should be rejected - we need actual K8s namespace
 												if attr.Key == "k8s.namespace" {
-													k8sNamespace = val
+													// Validate: Kubernetes namespaces cannot contain ":" - if present, it's likely a pipeline name
+													if !strings.Contains(val, ":") {
+														k8sNamespace = val
+													} else {
+														log.Printf("WARNING: Collector reported k8s.namespace='%s' which contains ':' - this appears to be a pipeline name, not a namespace. Ignoring.", val)
+													}
+												}
+												// Also check for alternative namespace attribute names
+												if attr.Key == "kubernetes.namespace" || attr.Key == "resource.attributes.k8s.namespace" || attr.Key == "resource.attributes.kubernetes.namespace" {
+													if !strings.Contains(val, ":") && k8sNamespace == "" {
+														k8sNamespace = val
+														log.Printf("DEBUG: Extracted namespace '%s' from attribute '%s'", val, attr.Key)
+													}
 												}
 												if attr.Key == "k8s.crd_name" || attr.Key == "k8s.crd.name" {
 													k8sCRDName = val
@@ -1494,8 +1545,9 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 								}
 
-								// Check IdentifyingAttributes for collector version
+								// Check IdentifyingAttributes for collector version and bridge identification
 								// OpenTelemetry Collector sends: service.name="otelcol-contrib" and service.version="0.138.0" in IdentifyingAttributes
+								// OpAMP Bridge sends: service.name="io.opentelemetry.operator-opamp-bridge" in IdentifyingAttributes
 								var collectorServiceName string
 								if message.AgentDescription != nil && message.AgentDescription.IdentifyingAttributes != nil {
 									for _, attr := range message.AgentDescription.IdentifyingAttributes {
@@ -1503,7 +1555,9 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 											val := attr.Value.GetStringValue()
 											if attr.Key == "service.name" {
 												// Collector sends "otelcol-contrib", "otelcol", etc. here
+												// Bridge sends "io.opentelemetry.operator-opamp-bridge" here
 												collectorServiceName = val
+												log.Printf("DEBUG: service.name in IdentifyingAttributes: '%s'", val)
 											}
 											// When service.name is "otelcol-contrib" or similar, service.version is the collector version
 											if (collectorServiceName == "otelcol-contrib" || collectorServiceName == "otelcol" ||
@@ -1550,7 +1604,8 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								// If k8s.namespace and k8s.crd_name are present, generate stable UID from them
 								// This ensures each collector CRD has a persistent identity even if the bridge pod restarts
 								// Note: The bridge connection remains mapped to bridgeNormalizedUID, but we use stable UID for agent registration
-								if k8sNamespace != "" && k8sCRDName != "" {
+								// CRITICAL: Only use k8sNamespace if it's valid (doesn't contain ":" which indicates a pipeline name)
+								if k8sNamespace != "" && k8sCRDName != "" && !strings.Contains(k8sNamespace, ":") {
 									// Generate stable InstanceUID: sha256("namespace/name")
 									stableUIDInput := fmt.Sprintf("%s/%s", k8sNamespace, k8sCRDName)
 									stableUIDHash := sha256.Sum256([]byte(stableUIDInput))
@@ -1588,7 +1643,13 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									// Ensure required bridge pattern labels are set
 									labels["deployment.type"] = "k8s"
 									labels["otel.kind"] = "OpenTelemetryCollector"
-									labels["k8s.namespace"] = k8sNamespace
+									// CRITICAL: Only set k8s.namespace if it's valid (doesn't contain ":")
+									// If k8sNamespace contains ":" it's likely a pipeline name like "pipeline:metrics", not a real namespace
+									if k8sNamespace != "" && !strings.Contains(k8sNamespace, ":") {
+										labels["k8s.namespace"] = k8sNamespace
+									} else if k8sNamespace != "" {
+										log.Printf("WARNING: Skipping invalid k8s.namespace='%s' (contains ':', likely a pipeline name) for collector %s", k8sNamespace, k8sCRDName)
+									}
 									labels["k8s.crd_name"] = k8sCRDName
 									labels["bridge.instance_uid"] = bridgeNormalizedUID // Track which bridge connection to use
 
@@ -2033,11 +2094,79 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								m.storeAgentTelemetry(instanceUID, message)
 
 								// CRITICAL FIX #1: Detect OpAMP Bridge EARLY and register in bridges table, NOT agents table
-								// Bridges are NOT collectors - they manage collectors
+								// Based on OpAMP spec: https://opentelemetry.io/docs/specs/opamp/
+								// Classification rules (in priority order, using OpAMP spec-compliant attributes):
+								//
+								// 1. OpAMP Bridge (operator-opamp-bridge):
+								//    - service.name="io.opentelemetry.operator-opamp-bridge" in IdentifyingAttributes (from bridge source code)
+								//    - Sends EffectiveConfig with CRD YAMLs (keys like "namespace/name")
+								//    - Does NOT have k8sNamespace/k8sCRDName in its own attributes (bridge itself, not a collector)
+								//
+								// 2. Collector CRD with OpAMP Extension (direct connection):
+								//    - Has k8sNamespace/k8sCRDName in NonIdentifyingAttributes
+								//    - Does NOT have bridge.instance_uid label (connects directly, not via bridge)
+								//    - Sends EffectiveConfig with its own collector config (not CRD YAMLs)
+								//
+								// 3. OpAMP Supervisor (opampsupervisor):
+								//    - Has supervisor.mode=true or agent.type=supervisor in labels
+								//    - Manages collectors on VM/Docker
+								//
+								// 4. Bridge-discovered collectors:
+								//    - Have bridge.instance_uid label (set by bridge when discovered)
+								//    - Discovered from bridge's EffectiveConfig
+								//
+								// 5. VM/Docker agents (default):
+								//    - No k8sNamespace, no bridge.instance_uid
+								//
 								isOpAMPBridge := false
-								if reportsEffectiveConfig, ok := capabilities["reports_effective_config"]; ok {
-									if val, ok := reportsEffectiveConfig.(bool); ok && val {
+
+								// Method 1: Check service.name in IdentifyingAttributes (most reliable, from bridge source code)
+								// Reference: https://github.com/open-telemetry/opentelemetry-operator/blob/main/cmd/operator-opamp-bridge/internal/agent/agent.go
+								if collectorServiceName == "io.opentelemetry.operator-opamp-bridge" {
+									// CRITICAL: Bridge itself does NOT have k8sNamespace/k8sCRDName
+									// If it has these, it's a collector CRD, not the bridge
+									if k8sNamespace == "" && k8sCRDName == "" {
 										isOpAMPBridge = true
+										log.Printf("DEBUG: Detected OpAMP Bridge by service.name='%s' in IdentifyingAttributes (no k8s namespace/crd)", collectorServiceName)
+									} else {
+										log.Printf("DEBUG: service.name='%s' but has k8sNamespace='%s' - this is a collector CRD with OpAMP extension, not a bridge", collectorServiceName, k8sNamespace)
+									}
+								}
+
+								// Method 2: Check if EffectiveConfig contains CRD YAMLs (bridge pattern)
+								// Bridge sends EffectiveConfig with keys like "namespace/name" containing CRD YAMLs
+								// Direct collectors send their own config (not CRD YAMLs)
+								if !isOpAMPBridge && message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
+									if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; len(cfgMap) > 0 {
+										hasCRDKeys := false
+										for key := range cfgMap {
+											// Bridge sends CRD YAMLs with keys like "namespace/name" (contains "/" but not ".")
+											// Direct collectors send config with keys like "collector.yaml" or "" (empty string)
+											if strings.Contains(key, "/") && !strings.Contains(key, ".") {
+												// Check if it's actually a CRD YAML (contains "apiVersion" and "kind")
+												if cfgFile, ok := cfgMap[key]; ok && cfgFile != nil && len(cfgFile.Body) > 0 {
+													bodyStr := string(cfgFile.Body)
+													if strings.Contains(bodyStr, "apiVersion:") && strings.Contains(bodyStr, "kind:") {
+														hasCRDKeys = true
+														break
+													}
+												}
+											}
+										}
+										if hasCRDKeys && k8sNamespace == "" && k8sCRDName == "" {
+											isOpAMPBridge = true
+											log.Printf("DEBUG: Detected OpAMP Bridge by EffectiveConfig containing CRD YAMLs (no k8s namespace/crd in attributes)")
+										}
+									}
+								}
+
+								// Method 3: Check name pattern (fallback, less reliable)
+								if !isOpAMPBridge && name != "" {
+									nameLower := strings.ToLower(name)
+									if (strings.Contains(nameLower, "opamp-bridge") || strings.Contains(nameLower, "operator-opamp-bridge")) &&
+										k8sNamespace == "" && k8sCRDName == "" {
+										isOpAMPBridge = true
+										log.Printf("DEBUG: Detected OpAMP Bridge by name pattern '%s' (no k8s namespace/crd)", name)
 									}
 								}
 
@@ -2074,13 +2203,45 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									m.updateDiscoveredCollectorsHealth(instanceUID, message, bridgeConn)
 								} else {
 									// This is a collector/agent - register in agents table
-									// Auto-register agent in database with current config
-									// This also updates last_seen_at, ensuring agent stays online
-									if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash); err != nil {
-										log.Printf("Failed to register agent: %v", err)
-									} else {
-										// Ensure agent is marked online and last_seen_at is updated
-										m.updateAgentStatus(instanceUID, "online")
+									// Classification:
+									// - Direct OpAMP Extension: Has k8sNamespace/k8sCRDName, NO bridge.instance_uid label
+									// - Supervisor: Has supervisor.mode=true or agent.type=supervisor in labels
+									// - VM/Docker: No k8sNamespace, no bridge.instance_uid
+									// - Bridge-discovered collectors: Have bridge.instance_uid label (registered by updateDiscoveredCollectorsHealth)
+
+									// Check if this is a supervisor
+									isSupervisor := false
+									if supervisorMode, ok := labels["supervisor.mode"]; ok && supervisorMode == "true" {
+										isSupervisor = true
+									}
+									if agentType, ok := labels["agent.type"]; ok && agentType == "supervisor" {
+										isSupervisor = true
+									}
+
+									// Only register if it doesn't have bridge.instance_uid label
+									// (bridge-discovered collectors are registered by updateDiscoveredCollectorsHealth)
+									hasBridgeLabel := false
+									if bridgeUID, ok := labels["bridge.instance_uid"]; ok && bridgeUID != "" {
+										hasBridgeLabel = true
+										log.Printf("DEBUG: Agent %s has bridge.instance_uid='%s' - this is a bridge-discovered collector, skipping direct registration", instanceUID[:8], bridgeUID[:8])
+									}
+
+									if !hasBridgeLabel {
+										// Auto-register agent in database with current config
+										// This also updates last_seen_at, ensuring agent stays online
+										if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash); err != nil {
+											log.Printf("Failed to register agent: %v", err)
+										} else {
+											// Ensure agent is marked online and last_seen_at is updated
+											m.updateAgentStatus(instanceUID, "online")
+											if isSupervisor {
+												log.Printf("DEBUG: Registered OpAMP Supervisor: %s (name: %s)", instanceUID[:8], name)
+											} else if k8sNamespace != "" {
+												log.Printf("DEBUG: Registered direct OpAMP Extension collector: %s/%s (uid: %s)", k8sNamespace, k8sCRDName, instanceUID[:8])
+											} else {
+												log.Printf("DEBUG: Registered VM/Docker agent: %s (name: %s)", instanceUID[:8], name)
+											}
+										}
 									}
 								}
 

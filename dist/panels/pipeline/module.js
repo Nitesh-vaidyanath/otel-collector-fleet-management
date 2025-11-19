@@ -18,8 +18,9 @@ var React2 = __REACT__.default || __REACT__;
 
 
 // components/PipelineMetricsPanelView.tsx
-var React = __REACT__.default || __REACT__; var { useCallback, useEffect, useRef, useState } = __REACT__;
+var React = __REACT__.default || __REACT__;
 
+var { useCallback, useEffect, useMemo, useRef, useState } = React;
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var METRIC_LABELS = [
   { key: "cpu", label: "CPU Usage", helper: "Example metric: otelcol_process_cpu_seconds_total" },
