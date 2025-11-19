@@ -364,7 +364,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json 
 			FROM agents a
 			WHERE a.org_id=?
-			  AND (a.status='online' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+			  AND (a.status='online' OR a.status='unclassified' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
 			  -- Exclude discovered collectors (they belong under bridges) - check multiple JSON path formats
 			  AND (
 				JSON_EXTRACT(a.labels_json, '$."bridge.instance_uid"') IS NULL 
@@ -381,7 +381,14 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				OR JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') != true
 				OR (a.k8s_namespace IS NOT NULL AND a.k8s_namespace != '')
 			  )
-			ORDER BY a.last_seen_at DESC 
+			ORDER BY 
+			  CASE 
+				WHEN JSON_EXTRACT(a.labels_json, '$."classification.status"') = '"unclassified"' 
+				  OR JSON_EXTRACT(a.labels_json, '$.classification.status') = '"unclassified"' 
+				THEN 1 
+				ELSE 0 
+			  END,
+			  a.last_seen_at DESC 
 			LIMIT 200
 		`, orgID)
 		if err != nil {

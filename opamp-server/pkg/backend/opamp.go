@@ -31,9 +31,10 @@ type agentConnection struct {
 }
 
 type OpampManager struct {
-	server         server.OpAMPServer
-	conns          map[string]*agentConnection // agent_uid -> connection
-	connAgentTypes map[types.Connection]string // connection -> agent_type from HTTP header (temporary until we get instanceUID)
+	server               server.OpAMPServer
+	conns                map[string]*agentConnection // agent_uid -> connection
+	connAgentTypes       map[types.Connection]string // connection -> agent_type from HTTP header (temporary until we get instanceUID)
+	connAgentTypesByAddr map[string]string           // remote_addr -> agent_type (fallback if connection object comparison fails)
 }
 
 const agentTelemetryRetention = 10 * time.Minute
@@ -41,9 +42,10 @@ const agentTelemetryRetention = 10 * time.Minute
 func NewOpampManager() (*OpampManager, error) {
 	s := server.New(nil)
 	return &OpampManager{
-		server:         s,
-		conns:          make(map[string]*agentConnection),
-		connAgentTypes: make(map[types.Connection]string),
+		server:               s,
+		conns:                make(map[string]*agentConnection),
+		connAgentTypes:       make(map[types.Connection]string),
+		connAgentTypesByAddr: make(map[string]string),
 	}, nil
 }
 
@@ -577,13 +579,21 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 			}
 		}
 
+		// Determine status: 'unclassified' if classification.status label is set, otherwise 'online'
+		agentStatus := "online"
+		if labels != nil {
+			if classificationStatus, ok := labels["classification.status"]; ok && classificationStatus == "unclassified" {
+				agentStatus = "unclassified"
+			}
+		}
+
 		_, err := db.Exec(`
 			INSERT INTO agents (org_id, org_name, agent_uid, name, version, status, last_seen_at, labels_json, capabilities_json, current_config_yaml, current_config_hash)
-			VALUES (?, ?, ?, ?, ?, 'online', NOW(), ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE 
 				name = IF(VALUES(name) != '' AND VALUES(name) != VALUES(agent_uid), VALUES(name), name),
 				version = IF(VALUES(version) != '' AND VALUES(version) != 'unknown', VALUES(version), version),
-			status = IF(status = 'degraded', 'degraded', 'online'),
+				status = IF(VALUES(status) = 'unclassified', 'unclassified', IF(status = 'degraded', 'degraded', 'online')),
 				last_seen_at = NOW(),
 				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
 				capabilities_json = IF(CHAR_LENGTH(VALUES(capabilities_json)) > 2 AND VALUES(capabilities_json) != '{}', VALUES(capabilities_json), capabilities_json),
@@ -596,7 +606,7 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 					ELSE current_config_yaml
 				END,
 				current_config_hash = COALESCE(VALUES(current_config_hash), current_config_hash)
-		`, orgID, orgName, instanceUID, name, version, labelsJSONStr, capabilitiesJSONStr, currentConfig, currentConfigHash)
+		`, orgID, orgName, instanceUID, name, version, agentStatus, labelsJSONStr, capabilitiesJSONStr, currentConfig, currentConfigHash)
 		if err != nil {
 			log.Printf("Failed to register agent %s: %v", instanceUID, err)
 			return err
@@ -1038,17 +1048,20 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 			row := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, agentUID)
 			if err := row.Scan(&currentStatus); err == nil {
 				if currentStatus == "online" {
-					// Collector was online but now missing from EffectiveConfig - mark as degraded
-					log.Printf("WARNING: Collector %s/%s (%s) missing from bridge EffectiveConfig - marking as degraded (may be deleted or crashed)",
+					// Collector was online but now missing from EffectiveConfig - mark as degraded first
+					// The cleanup worker will mark it offline after 2 minutes if bridge continues not reporting it
+					log.Printf("WARNING: Collector %s/%s (%s) missing from bridge EffectiveConfig - marking as degraded (may be deleted or crashed). Will be marked offline if bridge doesn't report it within 2 minutes.",
 						namespace, crdName, agentUID[:8])
 					db.Exec(`UPDATE agents SET status='degraded', last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
 				} else if currentStatus == "degraded" {
-					// Already degraded, just update timestamp
-					db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+					// Already degraded - DON'T update last_seen_at here
+					// Let cleanup worker mark it offline if it stays degraded for 2+ minutes without bridge reporting it
+					// This ensures collectors that are truly gone (not in EffectiveConfig) get marked offline
+					log.Printf("DEBUG: Collector %s/%s (%s) still missing from bridge EffectiveConfig (status: degraded). Cleanup worker will mark offline if not reported within 2 minutes.",
+						namespace, crdName, agentUID[:8])
 				} else if currentStatus == "offline" {
 					// Already offline - don't change, might be deleted
-					// Just update timestamp to prevent cleanup
-					db.Exec(`UPDATE agents SET last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+					// DON'T update last_seen_at - let it age out for garbage collection
 				}
 			}
 		}
@@ -1443,11 +1456,17 @@ func (m *OpampManager) cleanupStaleAgents() {
 	defer db.Close()
 
 	// Mark agents as offline if they haven't sent heartbeat in 2 minutes
+	// CRITICAL: For bridge-discovered collectors, mark offline if bridge hasn't reported them recently
+	// The bridge updates last_seen_at when it reports collectors in EffectiveConfig
+	// If last_seen_at is old, it means the collector is no longer in bridge's EffectiveConfig (deleted/crashed)
 	result, err := db.Exec(`
 		UPDATE agents 
 		SET status = 'offline'
 		WHERE status = 'online'
 		  AND last_seen_at < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+		  -- Include ALL agents (direct and bridge-discovered) - if last_seen_at is old, they're truly offline
+		  -- Bridge-discovered collectors: last_seen_at is updated by bridge when it reports them
+		  -- If bridge stops reporting a collector (removed from EffectiveConfig), last_seen_at won't be updated
 	`)
 	if err != nil {
 		log.Printf("ERROR: Failed to cleanup stale agents: %v", err)
@@ -1599,20 +1618,60 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 					log.Printf("Resolved OrgID: %d, OrgName: %q", orgOverrideID, orgOverrideName)
 					log.Printf("=====================================")
 
+					// Store remote address for lookup (use as primary key since connection object comparison is unreliable)
+					remoteAddr := request.RemoteAddr
+					// Also extract IP:port for more reliable matching (in case RemoteAddr format varies)
+					remoteAddrParts := strings.Split(remoteAddr, ":")
+					remoteIP := remoteAddr
+					if len(remoteAddrParts) > 0 {
+						remoteIP = remoteAddrParts[0]
+					}
+
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: types.ConnectionCallbacks{
 							OnConnected: func(ctx context.Context, conn types.Connection) {
-								log.Printf("OPAMP agent connected")
-								// Store agent type from header in temporary map (will be moved to agentConnection once we have instanceUID)
+								log.Printf("OPAMP agent connected from %s", remoteAddr)
+								// Store agent type from header using remote address as key (more reliable than connection object)
 								if agentTypeHeader != "" {
+									// Store in both maps for redundancy
 									m.connAgentTypes[conn] = agentTypeHeader
-									log.Printf("DEBUG: Stored agent type '%s' from HTTP header for connection", agentTypeHeader)
+									m.connAgentTypesByAddr[remoteAddr] = agentTypeHeader
+									m.connAgentTypesByAddr[remoteIP] = agentTypeHeader // Also store by IP for fallback
+									log.Printf("DEBUG: Stored agent type '%s' from HTTP header for connection from %s (map size: %d, addr map size: %d)", agentTypeHeader, remoteAddr, len(m.connAgentTypes), len(m.connAgentTypesByAddr))
+								} else {
+									log.Printf("DEBUG: No agent type header provided in OnConnected (map size: %d)", len(m.connAgentTypes))
 								}
 							},
 							OnMessage: func(ctx context.Context, conn types.Connection, message *protobufs.AgentToServer) *protobufs.ServerToAgent {
 								instanceUIDHex := hex.EncodeToString(message.InstanceUid)
 								logAgentToServerDebug(instanceUIDHex, message)
+
+								// Get instanceUID early for potential lookup
+								instanceUIDNormalized := normalizeAgentUID(instanceUIDHex)
+
+								// Try to get remote address from connection or context for lookup
+								// Note: Connection object comparison may fail, so we use remote address as primary lookup key
+								var remoteAddr string
+								var remoteIP string
+								// Try to get from context first
+								if req := ctx.Value("http_request"); req != nil {
+									if httpReq, ok := req.(*http.Request); ok {
+										remoteAddr = httpReq.RemoteAddr
+										remoteAddrParts := strings.Split(remoteAddr, ":")
+										if len(remoteAddrParts) > 0 {
+											remoteIP = remoteAddrParts[0]
+										}
+										log.Printf("DEBUG: Got remote address '%s' from context", remoteAddr)
+									}
+								}
+								// If not in context, check if we already have this instanceUID stored (from previous message)
+								if remoteAddr == "" {
+									// Check if we have a connection for this instanceUID that might have the agent type
+									if existingConn, exists := m.conns[instanceUIDNormalized]; exists && existingConn.agentType != "" {
+										log.Printf("DEBUG: Found existing connection for instanceUID %s with agent type '%s'", instanceUIDNormalized[:8], existingConn.agentType)
+									}
+								}
 
 								// Convert instance UID bytes to string for reliable MySQL storage
 								// This ensures we can store it even if it contains binary data
@@ -1693,23 +1752,76 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								}
 
 								// Get agent type from HTTP header (ONLY supported method currently)
-								if agentTypeFromHeader, ok := m.connAgentTypes[conn]; ok && agentTypeFromHeader != "" {
-									// Validate header value
-									agentTypeLower := strings.ToLower(agentTypeFromHeader)
-									if agentTypeLower == "bridge" || agentTypeLower == "agent" || agentTypeLower == "supervisor" {
-										explicitAgentType = agentTypeLower
-										log.Printf("DEBUG: Found agent type '%s' from HTTP header X-OpAMP-Agent-Type", explicitAgentType)
+								// Strategy: Try multiple lookup methods in order of reliability
+								var agentTypeFromHeader string
+								var foundInMap bool
+
+								// METHOD 1: Check if we already have agent type stored for this instanceUID (from previous message)
+								if existingConn, exists := m.conns[instanceUIDNormalized]; exists && existingConn.agentType != "" {
+									agentTypeFromHeader = existingConn.agentType
+									foundInMap = true
+									log.Printf("DEBUG: Found agent type '%s' from existing connection for instanceUID %s", agentTypeFromHeader, instanceUIDNormalized[:8])
+								}
+
+								// METHOD 2: Try remote address lookup (if available)
+								if !foundInMap && remoteAddr != "" {
+									// Try full remote address first
+									if addrType, ok := m.connAgentTypesByAddr[remoteAddr]; ok {
+										agentTypeFromHeader = addrType
+										foundInMap = true
+										log.Printf("DEBUG: Found agent type '%s' by remote address '%s'", agentTypeFromHeader, remoteAddr)
+									} else if remoteIP != "" {
+										// Fallback: Try IP only (in case port changed)
+										if addrType, ok := m.connAgentTypesByAddr[remoteIP]; ok {
+											agentTypeFromHeader = addrType
+											foundInMap = true
+											log.Printf("DEBUG: Found agent type '%s' by remote IP '%s'", agentTypeFromHeader, remoteIP)
+										}
+									}
+								}
+
+								// METHOD 3: Try connection object map (may fail if connection objects differ)
+								if !foundInMap {
+									if connType, ok := m.connAgentTypes[conn]; ok && connType != "" {
+										agentTypeFromHeader = connType
+										foundInMap = true
+										log.Printf("DEBUG: Found agent type '%s' from connection object map", agentTypeFromHeader)
+									} else {
+										log.Printf("DEBUG: Connection not found in maps (conn map size: %d, addr map size: %d, remoteAddr: %q, instanceUID: %s)", len(m.connAgentTypes), len(m.connAgentTypesByAddr), remoteAddr, instanceUIDNormalized[:8])
+										// Last resort: Try to find it by iterating all connections
+										for storedConn, storedType := range m.connAgentTypes {
+											if storedConn == conn {
+												agentTypeFromHeader = storedType
+												foundInMap = true
+												log.Printf("DEBUG: Found agent type '%s' by connection comparison (iterated)", agentTypeFromHeader)
+												break
+											}
+										}
+									}
+								}
+
+								if foundInMap && agentTypeFromHeader != "" {
+									// Validate header value (already lowercased in OnConnecting)
+									if agentTypeFromHeader == "bridge" || agentTypeFromHeader == "agent" || agentTypeFromHeader == "supervisor" {
+										explicitAgentType = agentTypeFromHeader
+										log.Printf("DEBUG: Using agent type '%s' from HTTP header X-OpAMP-Agent-Type", explicitAgentType)
 									} else {
 										// Invalid header value - mark as unclassified
 										explicitAgentType = "unclassified"
 										log.Printf("WARNING: Invalid X-OpAMP-Agent-Type header value '%s' (expected: bridge, agent, or supervisor). Agent will be classified as 'unclassified'.", agentTypeFromHeader)
 									}
-									// Clean up temporary map entry
+									// Clean up temporary map entries
 									delete(m.connAgentTypes, conn)
+									if remoteAddr != "" {
+										delete(m.connAgentTypesByAddr, remoteAddr)
+									}
+									if remoteIP != "" {
+										delete(m.connAgentTypesByAddr, remoteIP)
+									}
 								} else {
 									// No header provided - mark as unclassified
 									explicitAgentType = "unclassified"
-									log.Printf("WARNING: No X-OpAMP-Agent-Type header provided. Agent will be classified as 'unclassified'. Please set the header to ensure proper classification.")
+									log.Printf("WARNING: No X-OpAMP-Agent-Type header found for connection (map lookup failed). Agent will be classified as 'unclassified'. Please ensure the header is set in the HTTP request.")
 								}
 
 								// Check IdentifyingAttributes for collector version and bridge identification
