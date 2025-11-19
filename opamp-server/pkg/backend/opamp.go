@@ -1082,10 +1082,10 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 			if err := row.Scan(&currentStatus); err == nil {
 				if currentStatus == "online" {
 					// Collector was online but now missing from EffectiveConfig - mark as degraded first
-					// The cleanup worker will mark it offline after 2 minutes if bridge continues not reporting it
+					// IMPORTANT: Do NOT refresh last_seen_at here; allows cleanup worker to flip to offline quickly
 					log.Printf("WARNING: Collector %s/%s (%s) missing from bridge EffectiveConfig - marking as degraded (may be deleted or crashed). Will be marked offline if bridge doesn't report it within 2 minutes.",
 						namespace, crdName, agentUID[:8])
-					db.Exec(`UPDATE agents SET status='degraded', last_seen_at=NOW() WHERE agent_uid=?`, agentUID)
+					db.Exec(`UPDATE agents SET status='degraded' WHERE agent_uid=?`, agentUID)
 				} else if currentStatus == "degraded" {
 					// Already degraded - DON'T update last_seen_at here
 					// Let cleanup worker mark it offline if it stays degraded for 2+ minutes without bridge reporting it
@@ -2333,22 +2333,45 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								isOpAMPBridge := false
 								isSupervisor := false
 
-								// Classify based on explicit agent type from HTTP header
-								if explicitAgentType == "bridge" {
-									isOpAMPBridge = true
-									log.Printf("DEBUG: Agent type set to 'bridge' from HTTP header X-OpAMP-Agent-Type")
-								} else if explicitAgentType == "supervisor" {
-									isSupervisor = true
-									log.Printf("DEBUG: Agent type set to 'supervisor' from HTTP header X-OpAMP-Agent-Type")
-								} else if explicitAgentType == "agent" {
-									log.Printf("DEBUG: Agent type set to 'agent' from HTTP header X-OpAMP-Agent-Type")
-								} else if explicitAgentType == "unclassified" {
-									// Mark labels to indicate unclassified status
+								ensureLabelMap := func() {
 									if labels == nil {
 										labels = make(map[string]string)
 									}
+								}
+
+								// Classify based on explicit agent type from HTTP header
+								if explicitAgentType == "bridge" {
+									isOpAMPBridge = true
+									ensureLabelMap()
+									labels["agent.type"] = "bridge"
+									labels["classification.role"] = "bridge"
+									log.Printf("DEBUG: Agent type set to 'bridge' from HTTP header X-OpAMP-Agent-Type")
+								} else if explicitAgentType == "supervisor" {
+									isSupervisor = true
+									ensureLabelMap()
+									labels["agent.type"] = "supervisor"
+									labels["classification.role"] = "supervisor"
+									// Supervisors may not set supervisor.mode label, ensure it's present for UI filters
+									if _, exists := labels["supervisor.mode"]; !exists {
+										labels["supervisor.mode"] = "true"
+									}
+									log.Printf("DEBUG: Agent type set to 'supervisor' from HTTP header X-OpAMP-Agent-Type")
+								} else if explicitAgentType == "agent" {
+									ensureLabelMap()
+									labels["agent.type"] = "agent"
+									labels["classification.role"] = "agent"
+									log.Printf("DEBUG: Agent type set to 'agent' from HTTP header X-OpAMP-Agent-Type")
+								} else if explicitAgentType == "unclassified" {
+									// Mark labels to indicate unclassified status
+									ensureLabelMap()
 									labels["classification.status"] = "unclassified"
+									labels["classification.role"] = "unclassified"
 									log.Printf("WARNING: Agent %s is unclassified (no valid X-OpAMP-Agent-Type header). Please configure the header for proper classification.", instanceUID[:8])
+								} else if explicitAgentType != "" {
+									// Header had some other value that passed the validation step above (defensive)
+									ensureLabelMap()
+									labels["agent.type"] = explicitAgentType
+									labels["classification.role"] = explicitAgentType
 								}
 
 								// Store/update connection with agentType
