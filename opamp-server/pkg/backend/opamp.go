@@ -65,48 +65,158 @@ func pruneAgentTelemetry(db *sql.DB) {
 }
 
 func logAgentToServerDebug(instanceUID string, message *protobufs.AgentToServer) {
-	if appLogger == nil || !IsDebugLoggingEnabled() {
-		return
-	}
-	fields := map[string]interface{}{
-		"instanceUid":           instanceUID,
-		"capabilities":          fmt.Sprintf("0x%x", message.Capabilities),
-		"hasAgentDescription":   message.AgentDescription != nil,
-		"hasHealth":             message.Health != nil,
-		"hasRemoteConfigStatus": message.RemoteConfigStatus != nil,
-		"hasEffectiveConfig":    message.EffectiveConfig != nil,
-		"connectionSettingsReq": message.ConnectionSettingsRequest != nil,
-	}
+	// Always log detailed AgentToServer message (not just when appLogger is enabled)
+	log.Printf("===== AgentToServer MESSAGE (UID: %s) =====", instanceUID[:8])
+	log.Printf("InstanceUid (hex): %s (length: %d bytes)", instanceUID, len(message.InstanceUid))
+	log.Printf("Capabilities (bits): 0x%x (decimal: %d)", message.Capabilities, message.Capabilities)
 
+	// Log AgentDescription
 	if message.AgentDescription != nil {
-		fields["agentDescription"] = map[string]interface{}{
-			"identifyingAttributes":    len(message.AgentDescription.IdentifyingAttributes),
-			"nonIdentifyingAttributes": len(message.AgentDescription.NonIdentifyingAttributes),
+		log.Printf("AgentDescription:")
+		log.Printf("  IdentifyingAttributes count: %d", len(message.AgentDescription.IdentifyingAttributes))
+		for i, attr := range message.AgentDescription.IdentifyingAttributes {
+			if attr.Value != nil {
+				val := attr.Value.GetStringValue()
+				log.Printf("    [%d] %s = %q", i, attr.Key, val)
+			} else {
+				log.Printf("    [%d] %s = <nil>", i, attr.Key)
+			}
 		}
+		log.Printf("  NonIdentifyingAttributes count: %d", len(message.AgentDescription.NonIdentifyingAttributes))
+		for i, attr := range message.AgentDescription.NonIdentifyingAttributes {
+			if attr.Value != nil {
+				val := attr.Value.GetStringValue()
+				log.Printf("    [%d] %s = %q", i, attr.Key, val)
+			} else {
+				log.Printf("    [%d] %s = <nil>", i, attr.Key)
+			}
+		}
+	} else {
+		log.Printf("AgentDescription: <nil>")
 	}
 
+	// Log Health
 	if message.Health != nil {
-		componentCount := 0
+		log.Printf("Health:")
+		log.Printf("  Healthy: %v", message.Health.Healthy)
+		log.Printf("  StartTimeUnixNano: %d", message.Health.StartTimeUnixNano)
+		log.Printf("  StatusTimeUnixNano: %d", message.Health.StatusTimeUnixNano)
+		log.Printf("  LastError: %q", message.Health.LastError)
 		if message.Health.ComponentHealthMap != nil {
-			componentCount = len(message.Health.ComponentHealthMap)
+			log.Printf("  ComponentHealthMap count: %d", len(message.Health.ComponentHealthMap))
+			for key, health := range message.Health.ComponentHealthMap {
+				if health != nil {
+					log.Printf("    [%s] Healthy: %v, Status: %q, LastError: %q", key, health.Healthy, health.Status, health.LastError)
+				} else {
+					log.Printf("    [%s] <nil>", key)
+				}
+			}
+		} else {
+			log.Printf("  ComponentHealthMap: <nil>")
 		}
-		fields["health"] = map[string]interface{}{
-			"healthy":         message.Health.Healthy,
-			"lastError":       message.Health.LastError,
-			"componentCounts": componentCount,
-		}
+	} else {
+		log.Printf("Health: <nil>")
 	}
 
+	// Log EffectiveConfig
+	if message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
+		if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; cfgMap != nil {
+			log.Printf("EffectiveConfig:")
+			log.Printf("  ConfigMap count: %d", len(cfgMap))
+			for key, cfgFile := range cfgMap {
+				if cfgFile != nil {
+					bodySize := 0
+					if cfgFile.Body != nil {
+						bodySize = len(cfgFile.Body)
+					}
+					log.Printf("    [%s] ContentType: %q, Body size: %d bytes", key, cfgFile.ContentType, bodySize)
+					// Log first 200 chars of body for debugging
+					if cfgFile.Body != nil && len(cfgFile.Body) > 0 {
+						bodyPreview := string(cfgFile.Body)
+						if len(bodyPreview) > 200 {
+							bodyPreview = bodyPreview[:200] + "..."
+						}
+						log.Printf("      Body preview: %q", bodyPreview)
+					}
+				} else {
+					log.Printf("    [%s] <nil>", key)
+				}
+			}
+		} else {
+			log.Printf("EffectiveConfig.ConfigMap: <nil>")
+		}
+	} else {
+		log.Printf("EffectiveConfig: <nil>")
+	}
+
+	// Log RemoteConfigStatus
 	if message.RemoteConfigStatus != nil {
-		fields["remoteConfigStatus"] = map[string]interface{}{
-			"status":      message.RemoteConfigStatus.Status.String(),
-			"error":       message.RemoteConfigStatus.ErrorMessage,
-			"hashLength":  len(message.RemoteConfigStatus.LastRemoteConfigHash),
-			"hashPreview": hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash),
-		}
+		log.Printf("RemoteConfigStatus:")
+		log.Printf("  Status: %v", message.RemoteConfigStatus.Status)
+		log.Printf("  LastRemoteConfigHash: %x", message.RemoteConfigStatus.LastRemoteConfigHash)
+		log.Printf("  ErrorMessage: %q", message.RemoteConfigStatus.ErrorMessage)
+	} else {
+		log.Printf("RemoteConfigStatus: <nil>")
 	}
 
-	appLogger.Debug("AgentToServer message", fields)
+	// Log ConnectionSettingsRequest
+	if message.ConnectionSettingsRequest != nil {
+		log.Printf("ConnectionSettingsRequest: present")
+	} else {
+		log.Printf("ConnectionSettingsRequest: <nil>")
+	}
+
+	// Log PackageStatuses (if available)
+	if message.PackageStatuses != nil {
+		log.Printf("PackageStatuses: present")
+	} else {
+		log.Printf("PackageStatuses: <nil>")
+	}
+
+	log.Printf("==========================================")
+
+	// Also log to appLogger if available (for structured logging)
+	if appLogger != nil && IsDebugLoggingEnabled() {
+		fields := map[string]interface{}{
+			"instanceUid":           instanceUID,
+			"capabilities":          fmt.Sprintf("0x%x", message.Capabilities),
+			"hasAgentDescription":   message.AgentDescription != nil,
+			"hasHealth":             message.Health != nil,
+			"hasRemoteConfigStatus": message.RemoteConfigStatus != nil,
+			"hasEffectiveConfig":    message.EffectiveConfig != nil,
+			"connectionSettingsReq": message.ConnectionSettingsRequest != nil,
+		}
+
+		if message.AgentDescription != nil {
+			fields["agentDescription"] = map[string]interface{}{
+				"identifyingAttributes":    len(message.AgentDescription.IdentifyingAttributes),
+				"nonIdentifyingAttributes": len(message.AgentDescription.NonIdentifyingAttributes),
+			}
+		}
+
+		if message.Health != nil {
+			componentCount := 0
+			if message.Health.ComponentHealthMap != nil {
+				componentCount = len(message.Health.ComponentHealthMap)
+			}
+			fields["health"] = map[string]interface{}{
+				"healthy":         message.Health.Healthy,
+				"lastError":       message.Health.LastError,
+				"componentCounts": componentCount,
+			}
+		}
+
+		if message.RemoteConfigStatus != nil {
+			fields["remoteConfigStatus"] = map[string]interface{}{
+				"status":      message.RemoteConfigStatus.Status.String(),
+				"error":       message.RemoteConfigStatus.ErrorMessage,
+				"hashLength":  len(message.RemoteConfigStatus.LastRemoteConfigHash),
+				"hashPreview": hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash),
+			}
+		}
+
+		appLogger.Debug("AgentToServer message", fields)
+	}
 }
 
 func resolveOrgIDFromLabels(labels map[string]string) (int64, string) {
@@ -774,6 +884,7 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 
 		// UPSERT: create a row if it doesn't exist; otherwise refresh heartbeat and update labels/config
 		// CRITICAL: Use ON DUPLICATE KEY UPDATE to handle both new and existing collectors
+		// CRITICAL: Always set status to 'online' when bridge reports collector (bridge heartbeat)
 		_, err := db.Exec(`
 			INSERT INTO agents (org_id, org_name, agent_uid, name, version, status, last_seen_at,
 			                    labels_json, capabilities_json, k8s_namespace, k8s_crd_name, cluster_id,
@@ -781,7 +892,7 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 			VALUES (?, ?, ?, ?, ?, 'online', NOW(), ?, JSON_OBJECT(), ?, ?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE
 				last_seen_at = NOW(),
-				status = IF(status='offline', 'online', status),
+				status = 'online',  -- Bridge heartbeat: if bridge reports collector, it's online
 				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
 				k8s_namespace = VALUES(k8s_namespace),
 				k8s_crd_name = VALUES(k8s_crd_name),
@@ -1456,7 +1567,22 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 						tenantOverride = rawScoperTenant
 					}
 					orgOverrideID, orgOverrideName := resolveOrgFromBridgeHeaders(request, tenantOverride)
-					log.Printf("OPAMP connection request from: %s (X-Scope-OrgName=%q, X-Scoper-Tenant=%q)", request.RemoteAddr, rawScopeName, rawScoperTenant)
+
+					// DEBUG: Log all HTTP headers
+					log.Printf("===== OPAMP CONNECTION REQUEST =====")
+					log.Printf("RemoteAddr: %s", request.RemoteAddr)
+					log.Printf("Method: %s", request.Method)
+					log.Printf("URL: %s", request.URL.String())
+					log.Printf("Headers:")
+					for name, values := range request.Header {
+						for _, value := range values {
+							log.Printf("  %s: %s", name, value)
+						}
+					}
+					log.Printf("X-Scope-OrgName: %q", rawScopeName)
+					log.Printf("X-Scoper-Tenant: %q", rawScoperTenant)
+					log.Printf("Resolved OrgID: %d, OrgName: %q", orgOverrideID, orgOverrideName)
+					log.Printf("=====================================")
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: types.ConnectionCallbacks{
@@ -1824,71 +1950,9 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 								}
 
-								// For OpAMP Bridge: If it accepts remote config, it likely accepts other connection settings too
-								// This is a reasonable inference for bridge implementations
-								// CRITICAL: Identify bridges by ReportsEffectiveConfig capability, NOT by name
-								isBridge := false
-								if reportsEffectiveConfig, ok := capabilities["reports_effective_config"]; ok {
-									if val, ok := reportsEffectiveConfig.(bool); ok && val {
-										isBridge = true
-									}
-								}
-								if isBridge {
-									log.Printf("DEBUG: Detected OpAMP Bridge %s - inferring additional capabilities", instanceUID[:8])
-									// Bridge implementations typically support these if they support remote config
-									if capabilities["accepts_remote_config"] == true {
-										// OpAMP Bridge typically supports connection settings management
-										if _, exists := capabilities["accepts_opamp_connection_settings"]; !exists {
-											capabilities["accepts_opamp_connection_settings"] = true
-											capFlags = append(capFlags, "AcceptsOpampConnectionSettings")
-											log.Printf("DEBUG: Inferred AcceptsOpampConnectionSettings for bridge")
-										}
-										if _, exists := capabilities["accepts_other_connection_settings"]; !exists {
-											capabilities["accepts_other_connection_settings"] = true
-											capFlags = append(capFlags, "AcceptsOtherConnectionSettings")
-											log.Printf("DEBUG: Inferred AcceptsOtherConnectionSettings for bridge")
-										}
-										if _, exists := capabilities["reports_connection_settings_status"]; !exists {
-											capabilities["reports_connection_settings_status"] = true
-											capFlags = append(capFlags, "ReportsConnectionSettingsStatus")
-											log.Printf("DEBUG: Inferred ReportsConnectionSettingsStatus for bridge")
-										}
-										// Bridges typically support restart commands for managed collectors
-										if _, exists := capabilities["accepts_restart_command"]; !exists {
-											capabilities["accepts_restart_command"] = true
-											capFlags = append(capFlags, "AcceptsRestartCommand")
-											log.Printf("DEBUG: Inferred AcceptsRestartCommand for bridge")
-										}
-									}
-
-									// Explicitly mark unsupported capabilities as false for OpAMP Bridge
-									// These are disabled in the CRD or not implemented in opamp-go v0.22.0
-									if _, exists := capabilities["accepts_packages"]; !exists {
-										capabilities["accepts_packages"] = false // Not supported - requires PackagesStateProvider
-									}
-									if _, exists := capabilities["reports_package_statuses"]; !exists {
-										capabilities["reports_package_statuses"] = false // Not supported - requires PackagesStateProvider
-									}
-									if _, exists := capabilities["reports_own_traces"]; !exists {
-										capabilities["reports_own_traces"] = false // Not implemented in opamp-go v0.22.0
-									}
-									if _, exists := capabilities["reports_own_metrics"]; !exists {
-										capabilities["reports_own_metrics"] = false // Not implemented in opamp-go v0.22.0
-									}
-									if _, exists := capabilities["reports_own_logs"]; !exists {
-										capabilities["reports_own_logs"] = false // Not implemented in opamp-go v0.22.0
-									}
-
-									// ReportsAvailableComponents - check if we already inferred it
-									if _, exists := capabilities["reports_available_components"]; !exists {
-										// If AgentDescription exists but no component attributes found, mark as false
-										// Otherwise, it might be supported but not reported yet
-										if message.AgentDescription != nil {
-											// We already checked above, so if we get here, it's not supported
-											capabilities["reports_available_components"] = false
-										}
-									}
-								}
+								// NOTE: Bridge detection and capability inference is now done LATER (after extracting service.name)
+								// This prevents collectors with reports_effective_config from being misidentified as bridges
+								// Bridge capability inference will happen AFTER we confirm it's actually a bridge (see below)
 
 								// Update capabilities_flags if we added inferred capabilities
 								if len(capFlags) > 0 {
@@ -2061,32 +2125,9 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 										log.Printf("DEBUG: Agent %s EffectiveConfig is nil or empty - cannot discover collectors", instanceUID)
 									}
 								} else {
-									// Check if this is a bridge that claims ReportsEffectiveConfig capability
-									// CRITICAL: Identify bridges by capability, NOT by name pattern
-									isBridge := false
-									if reportsEffectiveConfig, ok := capabilities["reports_effective_config"]; ok {
-										if val, ok := reportsEffectiveConfig.(bool); ok && val {
-											isBridge = true
-										}
-									}
-									if isBridge {
-										// Check capabilities from database
-										capDB := mustDB()
-										var capabilitiesJSON sql.NullString
-										capRow := capDB.QueryRow(`SELECT capabilities_json FROM agents WHERE agent_uid=? LIMIT 1`, instanceUID)
-										if capRow.Scan(&capabilitiesJSON) == nil && capabilitiesJSON.Valid {
-											var caps map[string]interface{}
-											if json.Unmarshal([]byte(capabilitiesJSON.String), &caps) == nil {
-												if reportsEffectiveConfig, ok := caps["reports_effective_config"].(bool); ok && reportsEffectiveConfig {
-													log.Printf("WARNING: Bridge %s (%s) claims ReportsEffectiveConfig capability but is NOT sending EffectiveConfig messages. Collectors cannot be discovered until bridge sends EffectiveConfig.", instanceUID[:8], name)
-													log.Printf("  To fix: Configure the OpAMP bridge to actually send EffectiveConfig in its AgentToServer messages.")
-												}
-											}
-										}
-										capDB.Close()
-									} else {
-										log.Printf("DEBUG: Agent %s did not send EffectiveConfig - cannot discover collectors yet", instanceUID)
-									}
+									// This is a direct collector (not a bridge) - EffectiveConfig contains its own config
+									// Bridge detection happens later, after we extract service.name
+									log.Printf("DEBUG: Agent %s sent EffectiveConfig (direct collector, not bridge)", instanceUID[:8])
 								}
 
 								// Extract and store agent telemetry according to OpAMP spec
@@ -2120,9 +2161,30 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								//
 								isOpAMPBridge := false
 
+								// CRITICAL: First, EXCLUDE known collector service names - these are NEVER bridges
+								// Collectors with OpAMP Extension may have reports_effective_config, but they're NOT bridges
+								isKnownCollector := false
+								if collectorServiceName != "" {
+									collectorServiceNameLower := strings.ToLower(collectorServiceName)
+									knownCollectorNames := []string{
+										"otelcol-contrib",
+										"otelcol",
+										"opentelemetry-collector",
+										"opentelemetry-collector-contrib",
+									}
+									for _, knownName := range knownCollectorNames {
+										if collectorServiceNameLower == strings.ToLower(knownName) {
+											isKnownCollector = true
+											log.Printf("DEBUG: service.name='%s' is a known collector - NOT a bridge", collectorServiceName)
+											break
+										}
+									}
+								}
+
 								// Method 1: Check service.name in IdentifyingAttributes (most reliable, from bridge source code)
 								// Reference: https://github.com/open-telemetry/opentelemetry-operator/blob/main/cmd/operator-opamp-bridge/internal/agent/agent.go
-								if collectorServiceName == "io.opentelemetry.operator-opamp-bridge" {
+								// ONLY check if it's NOT a known collector
+								if !isKnownCollector && collectorServiceName == "io.opentelemetry.operator-opamp-bridge" {
 									// CRITICAL: Bridge itself does NOT have k8sNamespace/k8sCRDName
 									// If it has these, it's a collector CRD, not the bridge
 									if k8sNamespace == "" && k8sCRDName == "" {
@@ -2136,7 +2198,8 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								// Method 2: Check if EffectiveConfig contains CRD YAMLs (bridge pattern)
 								// Bridge sends EffectiveConfig with keys like "namespace/name" containing CRD YAMLs
 								// Direct collectors send their own config (not CRD YAMLs)
-								if !isOpAMPBridge && message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
+								// CRITICAL: Only check if it's NOT a known collector
+								if !isOpAMPBridge && !isKnownCollector && message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
 									if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; len(cfgMap) > 0 {
 										hasCRDKeys := false
 										for key := range cfgMap {
@@ -2161,13 +2224,20 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								}
 
 								// Method 3: Check name pattern (fallback, less reliable)
-								if !isOpAMPBridge && name != "" {
+								// CRITICAL: Only check if it's NOT a known collector
+								if !isOpAMPBridge && !isKnownCollector && name != "" {
 									nameLower := strings.ToLower(name)
 									if (strings.Contains(nameLower, "opamp-bridge") || strings.Contains(nameLower, "operator-opamp-bridge")) &&
 										k8sNamespace == "" && k8sCRDName == "" {
 										isOpAMPBridge = true
 										log.Printf("DEBUG: Detected OpAMP Bridge by name pattern '%s' (no k8s namespace/crd)", name)
 									}
+								}
+
+								// CRITICAL: If it's a known collector, it's NEVER a bridge, regardless of other checks
+								if isKnownCollector && isOpAMPBridge {
+									log.Printf("WARNING: Collector %s (service.name='%s') was incorrectly identified as bridge - correcting to agent", instanceUID[:8], collectorServiceName)
+									isOpAMPBridge = false
 								}
 
 								if isOpAMPBridge {
@@ -2204,10 +2274,16 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								} else {
 									// This is a collector/agent - register in agents table
 									// Classification:
-									// - Direct OpAMP Extension: Has k8sNamespace/k8sCRDName, NO bridge.instance_uid label
+									// - Direct OpAMP Extension: Has k8sNamespace/k8sCRDName, connects directly
 									// - Supervisor: Has supervisor.mode=true or agent.type=supervisor in labels
-									// - VM/Docker: No k8sNamespace, no bridge.instance_uid
-									// - Bridge-discovered collectors: Have bridge.instance_uid label (registered by updateDiscoveredCollectorsHealth)
+									// - VM/Docker: No k8sNamespace
+									// - Bridge-discovered collectors: Discovered via bridge's EffectiveConfig (registered by updateDiscoveredCollectorsHealth)
+									//
+									// CRITICAL: If an agent connects directly (OpAMP Extension), it should be registered
+									// even if it was previously discovered by a bridge. The bridge.instance_uid label
+									// is just metadata - if the agent connects directly, it's a direct agent.
+									// Bridge-discovered collectors are those ONLY discovered via bridge's EffectiveConfig,
+									// not those that connect directly.
 
 									// Check if this is a supervisor
 									isSupervisor := false
@@ -2218,29 +2294,21 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 										isSupervisor = true
 									}
 
-									// Only register if it doesn't have bridge.instance_uid label
-									// (bridge-discovered collectors are registered by updateDiscoveredCollectorsHealth)
-									hasBridgeLabel := false
-									if bridgeUID, ok := labels["bridge.instance_uid"]; ok && bridgeUID != "" {
-										hasBridgeLabel = true
-										log.Printf("DEBUG: Agent %s has bridge.instance_uid='%s' - this is a bridge-discovered collector, skipping direct registration", instanceUID[:8], bridgeUID[:8])
-									}
-
-									if !hasBridgeLabel {
-										// Auto-register agent in database with current config
-										// This also updates last_seen_at, ensuring agent stays online
-										if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash); err != nil {
-											log.Printf("Failed to register agent: %v", err)
+									// Always register direct connections - if agent connects directly, it's a direct agent
+									// Bridge-discovered collectors are those ONLY in bridge's EffectiveConfig, never connecting directly
+									// Auto-register agent in database with current config
+									// This also updates last_seen_at, ensuring agent stays online
+									if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash); err != nil {
+										log.Printf("Failed to register agent: %v", err)
+									} else {
+										// Ensure agent is marked online and last_seen_at is updated
+										m.updateAgentStatus(instanceUID, "online")
+										if isSupervisor {
+											log.Printf("DEBUG: Registered OpAMP Supervisor: %s (name: %s)", instanceUID[:8], name)
+										} else if k8sNamespace != "" {
+											log.Printf("DEBUG: Registered direct OpAMP Extension collector: %s/%s (uid: %s)", k8sNamespace, k8sCRDName, instanceUID[:8])
 										} else {
-											// Ensure agent is marked online and last_seen_at is updated
-											m.updateAgentStatus(instanceUID, "online")
-											if isSupervisor {
-												log.Printf("DEBUG: Registered OpAMP Supervisor: %s (name: %s)", instanceUID[:8], name)
-											} else if k8sNamespace != "" {
-												log.Printf("DEBUG: Registered direct OpAMP Extension collector: %s/%s (uid: %s)", k8sNamespace, k8sCRDName, instanceUID[:8])
-											} else {
-												log.Printf("DEBUG: Registered VM/Docker agent: %s (name: %s)", instanceUID[:8], name)
-											}
+											log.Printf("DEBUG: Registered VM/Docker agent: %s (name: %s)", instanceUID[:8], name)
 										}
 									}
 								}
