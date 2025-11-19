@@ -27,11 +27,13 @@ type agentConnection struct {
 	originalUID []byte // Original InstanceUid bytes from agent (required by OpAMP spec for ServerToAgent messages)
 	orgID       int64
 	orgName     string
+	agentType   string // Explicit agent type from HTTP header: "bridge", "agent", "supervisor", or "" (auto-detect)
 }
 
 type OpampManager struct {
-	server server.OpAMPServer
-	conns  map[string]*agentConnection // agent_uid -> connection
+	server         server.OpAMPServer
+	conns          map[string]*agentConnection // agent_uid -> connection
+	connAgentTypes map[types.Connection]string // connection -> agent_type from HTTP header (temporary until we get instanceUID)
 }
 
 const agentTelemetryRetention = 10 * time.Minute
@@ -39,8 +41,9 @@ const agentTelemetryRetention = 10 * time.Minute
 func NewOpampManager() (*OpampManager, error) {
 	s := server.New(nil)
 	return &OpampManager{
-		server: s,
-		conns:  make(map[string]*agentConnection),
+		server:         s,
+		conns:          make(map[string]*agentConnection),
+		connAgentTypes: make(map[types.Connection]string),
 	}, nil
 }
 
@@ -468,8 +471,11 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 
 	// CRITICAL: Bridges should NEVER be registered as agents
 	// This function is ONLY for collectors/agents, NOT bridges
-	if reportsEffectiveConfig, ok := capabilities["reports_effective_config"]; ok {
-		if val, ok := reportsEffectiveConfig.(bool); ok && val {
+	// Bridge detection is done BEFORE calling this function (in OnMessage handler),
+	// so we only check for the most specific bridge identifier here as a safeguard
+	if serviceName, ok := labels["service.name"]; ok && serviceName == "io.opentelemetry.operator-opamp-bridge" {
+		// Also check that it doesn't have k8sNamespace (bridge itself, not a collector CRD)
+		if k8sNS, ok := labels["k8s.namespace"]; !ok || k8sNS == "" {
 			log.Printf("ERROR: Attempted to register OpAMP Bridge %s as an agent - this should not happen!", instanceUID[:8])
 			return fmt.Errorf("bridges must be registered via registerBridge, not registerAgent")
 		}
@@ -1568,6 +1574,14 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 					}
 					orgOverrideID, orgOverrideName := resolveOrgFromBridgeHeaders(request, tenantOverride)
 
+					// Extract explicit agent type from HTTP header (most reliable method)
+					// Supported values: "bridge", "agent", "supervisor", or empty (auto-detect)
+					agentTypeHeader := strings.TrimSpace(strings.ToLower(request.Header.Get("X-OpAMP-Agent-Type")))
+					if agentTypeHeader != "" && agentTypeHeader != "bridge" && agentTypeHeader != "agent" && agentTypeHeader != "supervisor" {
+						log.Printf("WARNING: Invalid X-OpAMP-Agent-Type header value: %q (expected: bridge, agent, or supervisor), ignoring", agentTypeHeader)
+						agentTypeHeader = ""
+					}
+
 					// DEBUG: Log all HTTP headers
 					log.Printf("===== OPAMP CONNECTION REQUEST =====")
 					log.Printf("RemoteAddr: %s", request.RemoteAddr)
@@ -1581,13 +1595,20 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 					}
 					log.Printf("X-Scope-OrgName: %q", rawScopeName)
 					log.Printf("X-Scoper-Tenant: %q", rawScoperTenant)
+					log.Printf("X-OpAMP-Agent-Type: %q", agentTypeHeader)
 					log.Printf("Resolved OrgID: %d, OrgName: %q", orgOverrideID, orgOverrideName)
 					log.Printf("=====================================")
+
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: types.ConnectionCallbacks{
 							OnConnected: func(ctx context.Context, conn types.Connection) {
 								log.Printf("OPAMP agent connected")
+								// Store agent type from header in temporary map (will be moved to agentConnection once we have instanceUID)
+								if agentTypeHeader != "" {
+									m.connAgentTypes[conn] = agentTypeHeader
+									log.Printf("DEBUG: Stored agent type '%s' from HTTP header for connection", agentTypeHeader)
+								}
 							},
 							OnMessage: func(ctx context.Context, conn types.Connection, message *protobufs.AgentToServer) *protobufs.ServerToAgent {
 								instanceUIDHex := hex.EncodeToString(message.InstanceUid)
@@ -1607,12 +1628,8 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								bridgeNormalizedUID := normalizeAgentUID(bridgeInstanceUID)
 								// Store bridge connection - we'll use stable UIDs for collector CRDs later
 								// Per OpAMP spec: ServerToAgent.InstanceUid must match agent's original InstanceUid EXACTLY
-								m.conns[bridgeNormalizedUID] = &agentConnection{
-									conn:        conn,
-									instanceUID: bridgeNormalizedUID,
-									originalUID: message.InstanceUid, // Store original bytes EXACTLY as received (critical for OpAMP spec)
-								}
-								log.Printf("DEBUG: Stored bridge connection - normalizedUID: %s, originalUID bytes length: %d", bridgeNormalizedUID, len(message.InstanceUid))
+								// Note: explicitAgentType will be extracted from NonIdentifyingAttributes/HTTP header below
+								// For now, create connection without agentType, will update after extraction
 								updateBridgeHeartbeat(bridgeInstanceUID)
 								// Start with bridge UID - will be replaced with stable UID if bridge pattern detected
 								instanceUID := bridgeNormalizedUID
@@ -1624,7 +1641,11 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								var collectorVersion string         // OpenTelemetry Collector version (e.g., "0.138.0")
 								var k8sNamespace, k8sCRDName string // For bridge pattern: collector CRD identification
 								var bridgeVersionFromCRD string     // Extract bridge version from its own CRD if available
+								var explicitAgentType string        // Agent type from HTTP header X-OpAMP-Agent-Type (only supported method)
 
+								// Extract labels from NonIdentifyingAttributes
+								// NOTE: Currently only HTTP header-based classification is supported
+								// Future: May support agent.type or opamp.agent_type from NonIdentifyingAttributes
 								if message.AgentDescription != nil && message.AgentDescription.NonIdentifyingAttributes != nil {
 									for _, attr := range message.AgentDescription.NonIdentifyingAttributes {
 										if attr.Value != nil {
@@ -1669,6 +1690,26 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 											}
 										}
 									}
+								}
+
+								// Get agent type from HTTP header (ONLY supported method currently)
+								if agentTypeFromHeader, ok := m.connAgentTypes[conn]; ok && agentTypeFromHeader != "" {
+									// Validate header value
+									agentTypeLower := strings.ToLower(agentTypeFromHeader)
+									if agentTypeLower == "bridge" || agentTypeLower == "agent" || agentTypeLower == "supervisor" {
+										explicitAgentType = agentTypeLower
+										log.Printf("DEBUG: Found agent type '%s' from HTTP header X-OpAMP-Agent-Type", explicitAgentType)
+									} else {
+										// Invalid header value - mark as unclassified
+										explicitAgentType = "unclassified"
+										log.Printf("WARNING: Invalid X-OpAMP-Agent-Type header value '%s' (expected: bridge, agent, or supervisor). Agent will be classified as 'unclassified'.", agentTypeFromHeader)
+									}
+									// Clean up temporary map entry
+									delete(m.connAgentTypes, conn)
+								} else {
+									// No header provided - mark as unclassified
+									explicitAgentType = "unclassified"
+									log.Printf("WARNING: No X-OpAMP-Agent-Type header provided. Agent will be classified as 'unclassified'. Please set the header to ensure proper classification.")
 								}
 
 								// Check IdentifyingAttributes for collector version and bridge identification
@@ -2134,110 +2175,57 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								// Reference: https://opentelemetry.io/docs/specs/opamp/
 								m.storeAgentTelemetry(instanceUID, message)
 
-								// CRITICAL FIX #1: Detect OpAMP Bridge EARLY and register in bridges table, NOT agents table
-								// Based on OpAMP spec: https://opentelemetry.io/docs/specs/opamp/
-								// Classification rules (in priority order, using OpAMP spec-compliant attributes):
+								// Agent classification based on HTTP header X-OpAMP-Agent-Type
+								// Currently ONLY HTTP header-based classification is supported
+								// See AGENT_CLASSIFICATION.md for details
 								//
-								// 1. OpAMP Bridge (operator-opamp-bridge):
-								//    - service.name="io.opentelemetry.operator-opamp-bridge" in IdentifyingAttributes (from bridge source code)
-								//    - Sends EffectiveConfig with CRD YAMLs (keys like "namespace/name")
-								//    - Does NOT have k8sNamespace/k8sCRDName in its own attributes (bridge itself, not a collector)
-								//
-								// 2. Collector CRD with OpAMP Extension (direct connection):
-								//    - Has k8sNamespace/k8sCRDName in NonIdentifyingAttributes
-								//    - Does NOT have bridge.instance_uid label (connects directly, not via bridge)
-								//    - Sends EffectiveConfig with its own collector config (not CRD YAMLs)
-								//
-								// 3. OpAMP Supervisor (opampsupervisor):
-								//    - Has supervisor.mode=true or agent.type=supervisor in labels
-								//    - Manages collectors on VM/Docker
-								//
-								// 4. Bridge-discovered collectors:
-								//    - Have bridge.instance_uid label (set by bridge when discovered)
-								//    - Discovered from bridge's EffectiveConfig
-								//
-								// 5. VM/Docker agents (default):
-								//    - No k8sNamespace, no bridge.instance_uid
+								// Supported values:
+								//   - "bridge" - OpAMP Bridge (registered in bridges table)
+								//   - "agent" - Direct agent/collector (registered in agents table)
+								//   - "supervisor" - OpAMP Supervisor (registered in agents table with supervisor label)
+								//   - "unclassified" - No header or invalid value (registered in agents table with unclassified label)
 								//
 								isOpAMPBridge := false
+								isSupervisor := false
 
-								// CRITICAL: First, EXCLUDE known collector service names - these are NEVER bridges
-								// Collectors with OpAMP Extension may have reports_effective_config, but they're NOT bridges
-								isKnownCollector := false
-								if collectorServiceName != "" {
-									collectorServiceNameLower := strings.ToLower(collectorServiceName)
-									knownCollectorNames := []string{
-										"otelcol-contrib",
-										"otelcol",
-										"opentelemetry-collector",
-										"opentelemetry-collector-contrib",
+								// Classify based on explicit agent type from HTTP header
+								if explicitAgentType == "bridge" {
+									isOpAMPBridge = true
+									log.Printf("DEBUG: Agent type set to 'bridge' from HTTP header X-OpAMP-Agent-Type")
+								} else if explicitAgentType == "supervisor" {
+									isSupervisor = true
+									log.Printf("DEBUG: Agent type set to 'supervisor' from HTTP header X-OpAMP-Agent-Type")
+								} else if explicitAgentType == "agent" {
+									log.Printf("DEBUG: Agent type set to 'agent' from HTTP header X-OpAMP-Agent-Type")
+								} else if explicitAgentType == "unclassified" {
+									// Mark labels to indicate unclassified status
+									if labels == nil {
+										labels = make(map[string]string)
 									}
-									for _, knownName := range knownCollectorNames {
-										if collectorServiceNameLower == strings.ToLower(knownName) {
-											isKnownCollector = true
-											log.Printf("DEBUG: service.name='%s' is a known collector - NOT a bridge", collectorServiceName)
-											break
-										}
-									}
+									labels["classification.status"] = "unclassified"
+									log.Printf("WARNING: Agent %s is unclassified (no valid X-OpAMP-Agent-Type header). Please configure the header for proper classification.", instanceUID[:8])
 								}
 
-								// Method 1: Check service.name in IdentifyingAttributes (most reliable, from bridge source code)
-								// Reference: https://github.com/open-telemetry/opentelemetry-operator/blob/main/cmd/operator-opamp-bridge/internal/agent/agent.go
-								// ONLY check if it's NOT a known collector
-								if !isKnownCollector && collectorServiceName == "io.opentelemetry.operator-opamp-bridge" {
-									// CRITICAL: Bridge itself does NOT have k8sNamespace/k8sCRDName
-									// If it has these, it's a collector CRD, not the bridge
-									if k8sNamespace == "" && k8sCRDName == "" {
-										isOpAMPBridge = true
-										log.Printf("DEBUG: Detected OpAMP Bridge by service.name='%s' in IdentifyingAttributes (no k8s namespace/crd)", collectorServiceName)
-									} else {
-										log.Printf("DEBUG: service.name='%s' but has k8sNamespace='%s' - this is a collector CRD with OpAMP extension, not a bridge", collectorServiceName, k8sNamespace)
+								// Store/update connection with agentType
+								if existingConn, exists := m.conns[instanceUID]; exists {
+									existingConn.conn = conn
+									existingConn.originalUID = message.InstanceUid
+									existingConn.agentType = explicitAgentType
+									if existingConn.orgID == 0 && orgOverrideID > 0 {
+										existingConn.orgID = orgOverrideID
 									}
-								}
-
-								// Method 2: Check if EffectiveConfig contains CRD YAMLs (bridge pattern)
-								// Bridge sends EffectiveConfig with keys like "namespace/name" containing CRD YAMLs
-								// Direct collectors send their own config (not CRD YAMLs)
-								// CRITICAL: Only check if it's NOT a known collector
-								if !isOpAMPBridge && !isKnownCollector && message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
-									if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; len(cfgMap) > 0 {
-										hasCRDKeys := false
-										for key := range cfgMap {
-											// Bridge sends CRD YAMLs with keys like "namespace/name" (contains "/" but not ".")
-											// Direct collectors send config with keys like "collector.yaml" or "" (empty string)
-											if strings.Contains(key, "/") && !strings.Contains(key, ".") {
-												// Check if it's actually a CRD YAML (contains "apiVersion" and "kind")
-												if cfgFile, ok := cfgMap[key]; ok && cfgFile != nil && len(cfgFile.Body) > 0 {
-													bodyStr := string(cfgFile.Body)
-													if strings.Contains(bodyStr, "apiVersion:") && strings.Contains(bodyStr, "kind:") {
-														hasCRDKeys = true
-														break
-													}
-												}
-											}
-										}
-										if hasCRDKeys && k8sNamespace == "" && k8sCRDName == "" {
-											isOpAMPBridge = true
-											log.Printf("DEBUG: Detected OpAMP Bridge by EffectiveConfig containing CRD YAMLs (no k8s namespace/crd in attributes)")
-										}
+									if strings.TrimSpace(existingConn.orgName) == "" && strings.TrimSpace(orgOverrideName) != "" {
+										existingConn.orgName = orgOverrideName
 									}
-								}
-
-								// Method 3: Check name pattern (fallback, less reliable)
-								// CRITICAL: Only check if it's NOT a known collector
-								if !isOpAMPBridge && !isKnownCollector && name != "" {
-									nameLower := strings.ToLower(name)
-									if (strings.Contains(nameLower, "opamp-bridge") || strings.Contains(nameLower, "operator-opamp-bridge")) &&
-										k8sNamespace == "" && k8sCRDName == "" {
-										isOpAMPBridge = true
-										log.Printf("DEBUG: Detected OpAMP Bridge by name pattern '%s' (no k8s namespace/crd)", name)
+								} else {
+									m.conns[instanceUID] = &agentConnection{
+										conn:        conn,
+										instanceUID: instanceUID,
+										originalUID: message.InstanceUid,
+										orgID:       orgOverrideID,
+										orgName:     orgOverrideName,
+										agentType:   explicitAgentType,
 									}
-								}
-
-								// CRITICAL: If it's a known collector, it's NEVER a bridge, regardless of other checks
-								if isKnownCollector && isOpAMPBridge {
-									log.Printf("WARNING: Collector %s (service.name='%s') was incorrectly identified as bridge - correcting to agent", instanceUID[:8], collectorServiceName)
-									isOpAMPBridge = false
 								}
 
 								if isOpAMPBridge {
@@ -2249,26 +2237,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 
 									// Get bridge connection for mapping discovered collectors
-									bridgeConn, bridgeConnExists := m.conns[instanceUID]
-									if !bridgeConnExists {
-										bridgeConn = &agentConnection{
-											conn:        conn,
-											instanceUID: instanceUID,
-											originalUID: message.InstanceUid,
-											orgID:       orgOverrideID,
-											orgName:     orgOverrideName,
-										}
-										m.conns[instanceUID] = bridgeConn
-									} else {
-										bridgeConn.conn = conn
-										bridgeConn.originalUID = message.InstanceUid
-										if bridgeConn.orgID == 0 && orgOverrideID > 0 {
-											bridgeConn.orgID = orgOverrideID
-										}
-										if strings.TrimSpace(bridgeConn.orgName) == "" && strings.TrimSpace(orgOverrideName) != "" {
-											bridgeConn.orgName = orgOverrideName
-										}
-									}
+									bridgeConn := m.conns[instanceUID]
 									// Update discovered collectors health (this will UPSERT collectors from EffectiveConfig)
 									m.updateDiscoveredCollectorsHealth(instanceUID, message, bridgeConn)
 								} else {
@@ -2285,13 +2254,14 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									// Bridge-discovered collectors are those ONLY discovered via bridge's EffectiveConfig,
 									// not those that connect directly.
 
-									// Check if this is a supervisor
-									isSupervisor := false
-									if supervisorMode, ok := labels["supervisor.mode"]; ok && supervisorMode == "true" {
-										isSupervisor = true
-									}
-									if agentType, ok := labels["agent.type"]; ok && agentType == "supervisor" {
-										isSupervisor = true
+									// Check if this is a supervisor (use explicitAgentType if set, otherwise check labels)
+									if !isSupervisor {
+										if supervisorMode, ok := labels["supervisor.mode"]; ok && supervisorMode == "true" {
+											isSupervisor = true
+										}
+										if agentType, ok := labels["agent.type"]; ok && agentType == "supervisor" {
+											isSupervisor = true
+										}
 									}
 
 									// Always register direct connections - if agent connects directly, it's a direct agent
