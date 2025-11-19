@@ -900,7 +900,8 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 
 		// UPSERT: create a row if it doesn't exist; otherwise refresh heartbeat and update labels/config
 		// CRITICAL: Use ON DUPLICATE KEY UPDATE to handle both new and existing collectors
-		// CRITICAL: Always set status to 'online' when bridge reports collector (bridge heartbeat)
+		// CRITICAL: Don't force status to 'online' - let ComponentHealthMap logic below determine status
+		// We'll check ComponentHealthMap after UPSERT to set the correct status
 		_, err := db.Exec(`
 			INSERT INTO agents (org_id, org_name, agent_uid, name, version, status, last_seen_at,
 			                    labels_json, capabilities_json, k8s_namespace, k8s_crd_name, cluster_id,
@@ -908,7 +909,9 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 			VALUES (?, ?, ?, ?, ?, 'online', NOW(), ?, JSON_OBJECT(), ?, ?, ?, ?, ?)
 			ON DUPLICATE KEY UPDATE
 				last_seen_at = NOW(),
-				status = 'online',  -- Bridge heartbeat: if bridge reports collector, it's online
+				-- DON'T force status to 'online' here - ComponentHealthMap logic will set correct status below
+				-- Only update status if it's currently 'offline' (to bring it back if bridge reports it again)
+				status = IF(status = 'offline', 'online', status),
 				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
 				k8s_namespace = VALUES(k8s_namespace),
 				k8s_crd_name = VALUES(k8s_crd_name),
@@ -923,6 +926,24 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 		if err != nil {
 			log.Printf("ERROR: Failed to UPSERT collector %s/%s (uid: %s): %v", actualNamespace, actualName, stableUID[:8], err)
 			continue
+		}
+
+		// CRITICAL: Check ComponentHealthMap immediately after UPSERT to set correct status
+		// This ensures newly discovered collectors are marked as degraded if bridge reports them as unhealthy
+		if message.Health != nil && message.Health.ComponentHealthMap != nil {
+			if health, ok := message.Health.ComponentHealthMap[configKey]; ok && health != nil {
+				if !health.Healthy {
+					// Bridge reports collector as unhealthy - mark as degraded immediately
+					log.Printf("WARNING: Newly discovered collector %s/%s (%s) is unhealthy according to bridge ComponentHealthMap - marking as degraded",
+						actualNamespace, actualName, stableUID[:8])
+					db.Exec(`UPDATE agents SET status='degraded' WHERE agent_uid=?`, stableUID)
+				} else {
+					// Bridge reports collector as healthy - ensure it's online
+					log.Printf("DEBUG: Newly discovered collector %s/%s (%s) is healthy according to bridge ComponentHealthMap - ensuring online status",
+						actualNamespace, actualName, stableUID[:8])
+					db.Exec(`UPDATE agents SET status='online' WHERE agent_uid=?`, stableUID)
+				}
+			}
 		}
 
 		// CRITICAL FIX (B): Map stable UID to bridge connection so config pushes work
@@ -1028,13 +1049,25 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 					}
 				}
 			} else {
-				// No ComponentHealthMap entry for this collector - if in EffectiveConfig, assume healthy
-				// CRITICAL: If collector is in EffectiveConfig, bridge is managing it successfully - mark as online
-				if currentStatus != "online" {
-					log.Printf("INFO: Collector %s/%s (%s) is in EffectiveConfig (no ComponentHealthMap entry) - marking as online",
+				// No ComponentHealthMap entry for this collector
+				// CRITICAL: Don't assume healthy - if collector was degraded/offline, keep it that way
+				// Only mark as online if it was previously offline (bridge is reporting it again)
+				// If it's already degraded, don't change it - the collector might be crashed but still in EffectiveConfig
+				if currentStatus == "offline" {
+					// Collector was offline but bridge is reporting it again - mark as online
+					log.Printf("INFO: Collector %s/%s (%s) is in EffectiveConfig (no ComponentHealthMap entry) - was offline, marking as online",
 						namespace, crdName, agentUID[:8])
 					db.Exec(`UPDATE agents SET status='online' WHERE agent_uid=?`, agentUID)
 					onlineCount++
+				} else if currentStatus == "online" {
+					// Already online - no change needed, but update last_seen_at was already done in UPSERT
+					onlineCount++
+				} else {
+					// Collector is degraded - don't change it to online just because it's in EffectiveConfig
+					// A crashed collector (CrashLoopBackOff) might still be in EffectiveConfig
+					// The bridge will report it as unhealthy in ComponentHealthMap if it's truly unhealthy
+					log.Printf("DEBUG: Collector %s/%s (%s) is in EffectiveConfig but status is '%s' (no ComponentHealthMap entry) - keeping current status",
+						namespace, crdName, agentUID[:8], currentStatus)
 				}
 			}
 		} else {

@@ -358,13 +358,17 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		// Also filter out agents that haven't been seen in last 24 hours if they're offline
 		// CRITICAL: Exclude bridges (they're in bridges table) and discovered collectors (they belong under bridges)
 		// Exclude:
-		// 1. Agents with reports_effective_config capability (bridges) - but only if they don't have k8sNamespace
-		// 2. Agents with bridge.instance_uid label (managed collectors)
+		// 1. Agents that are registered in bridges table (actual bridges)
+		// 2. Agents with bridge.instance_uid label (managed collectors discovered by bridges)
+		//
+		// NOTE: We can't rely on reports_effective_config to identify bridges because:
+		// - Collectors with OpAMP extension also have reports_effective_config
+		// - The bridges table is the source of truth for bridges
 		rows, err := db.Query(`
 			SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json 
 			FROM agents a
 			WHERE a.org_id=?
-			  AND (a.status='online' OR a.status='unclassified' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
+			  AND (a.status='online' OR a.status='unclassified' OR a.status='degraded' OR a.last_seen_at > DATE_SUB(NOW(), INTERVAL 24 HOUR))
 			  -- Exclude discovered collectors (they belong under bridges) - check multiple JSON path formats
 			  AND (
 				JSON_EXTRACT(a.labels_json, '$."bridge.instance_uid"') IS NULL 
@@ -374,12 +378,12 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				OR JSON_EXTRACT(a.labels_json, '$.bridge.instance_uid') = ''
 				OR JSON_UNQUOTE(JSON_EXTRACT(a.labels_json, '$.bridge.instance_uid')) = ''
 			  )
-			  -- Exclude bridges (they're in bridges table) - but only if they don't have k8sNamespace
-			  -- Collectors with OpAMP extension may also have reports_effective_config, so we need to check k8sNamespace
-			  AND (
-				JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') IS NULL 
-				OR JSON_EXTRACT(a.capabilities_json, '$.reports_effective_config') != true
-				OR (a.k8s_namespace IS NOT NULL AND a.k8s_namespace != '')
+			  -- Exclude agents that are registered as bridges in bridges table
+			  -- This is the most reliable way to identify bridges (not reports_effective_config)
+			  AND NOT EXISTS (
+				SELECT 1 FROM bridges b 
+				WHERE b.org_id = a.org_id 
+				  AND b.bridge_uid = a.agent_uid
 			  )
 			ORDER BY 
 			  CASE 
