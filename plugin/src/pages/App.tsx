@@ -15,6 +15,7 @@ import {
 import type {
   Agent,
   Bridge,
+  Collector,
   Tab,
   FleetTelemetrySettings,
   MetricsTelemetryConfig,
@@ -291,18 +292,16 @@ export const App = () => {
   const fetchBridges = async () => {
     try {
       const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/bridges');
-      console.log('DEBUG: Fetched bridges response:', { bridges: response.bridges, count: response.bridges?.length || 0 });
-      if (response.bridges && response.bridges.length > 0) {
-        response.bridges.forEach((bridge: Bridge, idx: number) => {
-          console.log(`DEBUG: Bridge ${idx}:`, { 
-            agentUid: bridge.agentUid?.substring(0, 8), 
-            name: bridge.name, 
-            collectorsCount: bridge.collectors?.length || 0,
-            collectors: bridge.collectors?.map((c: any) => ({ uid: c.agentUid?.substring(0, 8), name: c.name }))
-          });
-        });
-      }
-      setBridges(response.bridges || []);
+      const sanitized = (response.bridges || [])
+        .map((bridge: Bridge) => {
+          const collectors = Array.isArray(bridge.collectors)
+            ? bridge.collectors.filter((collector: Collector) => collector.agentUid && collector.agentUid !== bridge.agentUid)
+            : [];
+          return { ...bridge, collectors };
+        })
+        .filter((bridge: Bridge) => bridge.collectors.length > 0);
+      console.log('DEBUG: Sanitized bridges response:', { count: sanitized.length });
+      setBridges(sanitized);
     } catch (err: any) {
       console.error('Failed to fetch bridges:', err);
       // Don't set error - bridges endpoint might not exist yet

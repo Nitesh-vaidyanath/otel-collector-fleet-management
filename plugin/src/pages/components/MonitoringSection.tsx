@@ -142,6 +142,15 @@ export function MonitoringSection({
     ...agents, // Standalone agents
     ...bridges.flatMap(b => b.collectors || []) // Collectors from bridges
   ];
+  const standaloneAgents = useMemo(() => {
+    return agents.filter((agent) => {
+      const isBridge = bridges.some((bridge) => bridge.agentUid === agent.agentUid);
+      const isBridgeCollector = bridges.some((bridge) =>
+        bridge.collectors?.some((collector) => collector.agentUid === agent.agentUid)
+      );
+      return !isBridge && !isBridgeCollector;
+    });
+  }, [agents, bridges]);
   const onlineAgents = allCollectors.filter(a => a.status === 'online');
   const totalAgents = allCollectors.length;
   const resolvedAgentCaps = useMemo(() => {
@@ -421,20 +430,12 @@ export function MonitoringSection({
               })}
               
               {/* Standalone agents (not managed by bridges) */}
-              {agents.filter(a => {
-                const isBridge = bridges.some(b => b.agentUid === a.agentUid);
-                const isBridgeCollector = bridges.some(b => b.collectors.some(c => c.agentUid === a.agentUid));
-                return !isBridge && !isBridgeCollector;
-              }).length > 0 && (
+              {standaloneAgents.length > 0 && (
                 <>
                   <div style={{ padding: '12px 16px', background: '#F9FAFB', borderTop: '2px solid #E5E7EB', fontWeight: 600, fontSize: 12, color: '#6B7280' }}>
                     Standalone Agents
                   </div>
-                  {agents.filter(a => {
-                    const isBridge = bridges.some(b => b.agentUid === a.agentUid);
-                    const isBridgeCollector = bridges.some(b => b.collectors.some(c => c.agentUid === a.agentUid));
-                    return !isBridge && !isBridgeCollector;
-                  }).map(agent => (
+                  {standaloneAgents.map(agent => (
                     <div
                       key={agent.agentUid}
                       onClick={() => setSelectedAgentUID(agent.agentUid)}
