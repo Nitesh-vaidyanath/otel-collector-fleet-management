@@ -49,6 +49,7 @@ export const STAGE_SUMMARY: Record<StageQueryKey, { title: string; color: string
 
 export const StageMetricsRail: React.FC<StageMetricsRailProps> = ({ flowType, receivers, processors, exporters, metricsSettings, agentUid, onConfigureMetrics }) => {
   const datasourceUid = metricsSettings.datasourceUid;
+  const datasourceOrgId = metricsSettings.datasourceOrgId;
   const [datasource, setDatasource] = useState<{ id: number; uid: string; name: string } | null>(null);
   const [dsError, setDsError] = useState<string | null>(null);
   const [loadingDatasource, setLoadingDatasource] = useState(false);
@@ -63,7 +64,8 @@ export const StageMetricsRail: React.FC<StageMetricsRailProps> = ({ flowType, re
     const load = async () => {
       setLoadingDatasource(true);
       try {
-        const ds = await backendSrv.get<{ id: number; uid: string; name: string }>(`/api/datasources/uid/${encodeURIComponent(datasourceUid)}`);
+        const headers = datasourceOrgId ? { 'X-Grafana-Org-Id': String(datasourceOrgId) } : undefined;
+        const ds = await backendSrv.get<{ id: number; uid: string; name: string }>(`/api/datasources/uid/${encodeURIComponent(datasourceUid)}`, { headers });
         if (!cancelled) {
           setDatasource(ds ?? null);
           setDsError(null);
@@ -84,7 +86,7 @@ export const StageMetricsRail: React.FC<StageMetricsRailProps> = ({ flowType, re
     return () => {
       cancelled = true;
     };
-  }, [datasourceUid]);
+  }, [datasourceUid, datasourceOrgId]);
 
   const templates = metricsSettings.stageQueries || buildDefaultStageQueries();
   const totalComponents = receivers.length + processors.length + exporters.length;
@@ -115,9 +117,9 @@ export const StageMetricsRail: React.FC<StageMetricsRailProps> = ({ flowType, re
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-        <StageMetricsGroup kind="receivers" stages={receivers} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} />
-        <StageMetricsGroup kind="processors" stages={processors} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} />
-        <StageMetricsGroup kind="exporters" stages={exporters} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} />
+        <StageMetricsGroup kind="receivers" stages={receivers} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} datasourceOrgId={datasourceOrgId} />
+        <StageMetricsGroup kind="processors" stages={processors} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} datasourceOrgId={datasourceOrgId} />
+        <StageMetricsGroup kind="exporters" stages={exporters} pipelineType={flowType} datasource={datasource} templates={templates} agentUid={agentUid} datasourceOrgId={datasourceOrgId} />
       </div>
       {loadingDatasource && (
         <div style={{ fontSize: 11, color: '#6B7280' }}>Resolving datasource metadata…</div>

@@ -5,7 +5,7 @@ import type { LogsTelemetryConfig } from '../types';
 
 const rawBackendSrv = getBackendSrv();
 
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useMemo } = React;
 
 export type LogsPanelProps = {
   settings: LogsTelemetryConfig;
@@ -24,6 +24,10 @@ export const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, age
   const [entries, setEntries] = useState<Array<{ ts: string; line: string }>>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const orgHeaders = useMemo(
+    () => (settings.datasourceOrgId ? { 'X-Grafana-Org-Id': String(settings.datasourceOrgId) } : undefined),
+    [settings.datasourceOrgId]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +37,7 @@ export const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, age
         return;
       }
       try {
-        const list = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources');
+        const list = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources', { headers: orgHeaders });
         if (!cancelled) {
           setDatasource(Array.isArray(list) ? list.find((ds) => ds.uid === settings.datasourceUid) || null : null);
         }
@@ -47,7 +51,7 @@ export const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, age
     return () => {
       cancelled = true;
     };
-  }, [settings.datasourceUid, backendSrv]);
+  }, [settings.datasourceUid, backendSrv, orgHeaders]);
 
   const buildQuery = useCallback(() => {
     const template = settings.query || LOGS_QUERY_PLACEHOLDER;
@@ -82,6 +86,7 @@ export const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, age
           start: start.toISOString(),
           end: end.toISOString(),
         },
+        headers: orgHeaders,
       });
       const result = response?.data?.data?.result || [];
       const rows: Array<{ ts: string; line: string }> = [];
@@ -106,7 +111,7 @@ export const LogsPanelView: React.FC<LogsPanelProps> = ({ settings, enabled, age
     } finally {
       setLoading(false);
     }
-  }, [datasource, buildQuery]);
+  }, [datasource, buildQuery, orgHeaders]);
 
   if (!enabled) {
     return (

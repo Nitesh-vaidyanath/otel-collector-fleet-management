@@ -1,5 +1,7 @@
 import React from 'react';
 import { getBackendSrv } from '@grafana/runtime';
+import { createBackendSrv } from '../pages/utils/api';
+import { detectRuntimeMode, detectGrafanaTransport } from '../pages/utils/runtime';
 
 export type PipelineMetricKey = 'cpu' | 'memory' | 'inbound' | 'outbound';
 
@@ -14,6 +16,7 @@ export interface PipelineMetricsPanelViewProps {
   initialEnabled?: boolean;
   defaultQueries?: PipelineMetricQueries;
   defaultDatasourceUid?: string | null;
+  datasourceOrgId?: number | null;
   title?: string;
   readOnly?: boolean;
   onQueriesChange?: (next: PipelineMetricQueries) => void;
@@ -30,6 +33,11 @@ export interface DatasourceSummary {
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
 const SUPPORTED_METRICS_DATASOURCES = new Set(['prometheus', 'mimir', 'grafana-mimir-datasource', 'thanos']);
+const runtimeMode = detectRuntimeMode();
+const isRunningInGrafana = runtimeMode === 'grafana';
+const grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
+const backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
+const rawBackendSrv = getBackendSrv();
 
 const METRIC_LABELS: Array<{ key: PipelineMetricKey; label: string; helper: string }> = [
   { key: 'cpu', label: 'CPU Usage', helper: 'Example metric: otelcol_process_cpu_seconds_total' },
@@ -107,6 +115,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
   initialEnabled = true,
   defaultQueries,
   defaultDatasourceUid = null,
+  datasourceOrgId = null,
   title = 'Custom Metrics Panel',
   readOnly = false,
   onQueriesChange,
@@ -122,6 +131,10 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
   const [lastRunAt, setLastRunAt] = useState<number | null>(null);
   const [values, setValues] = useState<Record<PipelineMetricKey, string>>({ cpu: '—', memory: '—', inbound: '—', outbound: '—' });
   const autoRunRef = useRef<boolean>(false);
+  const orgHeaders = useMemo(
+    () => (datasourceOrgId ? { 'X-Grafana-Org-Id': String(datasourceOrgId) } : undefined),
+    [datasourceOrgId]
+  );
 
   useEffect(() => {
     if (defaultQueries) {
@@ -133,7 +146,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     let mounted = true;
     const loadDatasources = async () => {
       try {
-        const response = await getBackendSrv().get('/api/datasources');
+        const response = await backendSrv.get('/api/datasources', { headers: orgHeaders });
         if (!mounted) {
           return;
         }
@@ -170,7 +183,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     return () => {
       mounted = false;
     };
-  }, [defaultDatasourceUid, onDatasourceChange, readOnly, selectedDatasource]);
+  }, [defaultDatasourceUid, onDatasourceChange, readOnly, selectedDatasource, orgHeaders]);
 
   useEffect(() => {
     if (!defaultDatasourceUid || !datasources || datasources.length === 0) {
@@ -210,10 +223,11 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
           results[key] = '—';
           continue;
         }
-        const response = await getBackendSrv().datasourceRequest({
+        const response = await rawBackendSrv.datasourceRequest({
           method: 'GET',
           url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query`,
           params: { query, time: now },
+          headers: orgHeaders,
         });
         const value = extractPrometheusValue(response?.data);
         results[key] = formatValue(key, value);
@@ -226,7 +240,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     } finally {
       setLoading(false);
     }
-  }, [queries, selectedDatasource]);
+  }, [queries, selectedDatasource, orgHeaders]);
 
   useEffect(() => {
     if (readOnly && selectedDatasource && !autoRunRef.current) {

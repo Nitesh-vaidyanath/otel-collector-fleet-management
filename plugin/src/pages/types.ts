@@ -17,6 +17,7 @@ export type StageMetricTemplates = {
 export type MetricsTelemetryConfig = {
   enabled: boolean;
   datasourceUid: string | null;
+  datasourceOrgId?: number | null;
   queries: PipelineMetricQueries;
   stageQueries: StageMetricTemplates;
 };
@@ -24,6 +25,7 @@ export type MetricsTelemetryConfig = {
 export type LogsTelemetryConfig = {
   enabled: boolean;
   datasourceUid: string | null;
+  datasourceOrgId?: number | null;
   query: string;
 };
 
@@ -87,4 +89,3 @@ export type OpampSettingsResponse = {
   opampServerURL?: string | null;
   opampEndpoint?: string | null;
 };
-

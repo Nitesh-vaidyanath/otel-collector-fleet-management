@@ -43,16 +43,18 @@ type StageMetricTemplates struct {
 }
 
 type MetricsTelemetryConfig struct {
-	Enabled       bool                 `json:"enabled"`
-	DatasourceUID string               `json:"datasourceUid,omitempty"`
-	Queries       map[string]string    `json:"queries"`
-	StageQueries  StageMetricTemplates `json:"stageQueries"`
+	Enabled         bool                 `json:"enabled"`
+	DatasourceUID   string               `json:"datasourceUid,omitempty"`
+	DatasourceOrgID int64                `json:"datasourceOrgId,omitempty"`
+	Queries         map[string]string    `json:"queries"`
+	StageQueries    StageMetricTemplates `json:"stageQueries"`
 }
 
 type LogsTelemetryConfig struct {
-	Enabled       bool   `json:"enabled"`
-	DatasourceUID string `json:"datasourceUid,omitempty"`
-	Query         string `json:"query"`
+	Enabled         bool   `json:"enabled"`
+	DatasourceUID   string `json:"datasourceUid,omitempty"`
+	DatasourceOrgID int64  `json:"datasourceOrgId,omitempty"`
+	Query           string `json:"query"`
 }
 
 type TelemetrySettings struct {
@@ -91,15 +93,17 @@ const defaultLogsQueryTemplate = `{service_instance_id="$collector_uid"}`
 func defaultTelemetrySettings() TelemetrySettings {
 	return TelemetrySettings{
 		Metrics: MetricsTelemetryConfig{
-			Enabled:       false,
-			DatasourceUID: "",
-			Queries:       defaultMetricQueries(),
-			StageQueries:  defaultStageMetricQueries(),
+			Enabled:         false,
+			DatasourceUID:   "",
+			DatasourceOrgID: 0,
+			Queries:         defaultMetricQueries(),
+			StageQueries:    defaultStageMetricQueries(),
 		},
 		Logs: LogsTelemetryConfig{
-			Enabled:       false,
-			DatasourceUID: "",
-			Query:         defaultLogsQueryTemplate,
+			Enabled:         false,
+			DatasourceUID:   "",
+			DatasourceOrgID: 0,
+			Query:           defaultLogsQueryTemplate,
 		},
 	}
 }
@@ -143,7 +147,13 @@ func normalizeTelemetrySettings(settings *TelemetrySettings) {
 	}
 
 	settings.Metrics.DatasourceUID = strings.TrimSpace(settings.Metrics.DatasourceUID)
+	if settings.Metrics.DatasourceOrgID < 0 {
+		settings.Metrics.DatasourceOrgID = 0
+	}
 	settings.Logs.DatasourceUID = strings.TrimSpace(settings.Logs.DatasourceUID)
+	if settings.Logs.DatasourceOrgID < 0 {
+		settings.Logs.DatasourceOrgID = 0
+	}
 	settings.Logs.Query = strings.TrimSpace(settings.Logs.Query)
 	if settings.Logs.Query == "" {
 		settings.Logs.Query = defaultLogsQueryTemplate

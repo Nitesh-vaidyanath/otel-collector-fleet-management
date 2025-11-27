@@ -197,6 +197,7 @@ export const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
                       : buildDefaultMetricQueries(flow.type, agentUid)
                   }
                   defaultDatasourceUid={metricsSettings.datasourceUid}
+                  datasourceOrgId={metricsSettings.datasourceOrgId}
                   readOnly
                 />
               ) : (

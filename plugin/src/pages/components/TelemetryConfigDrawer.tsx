@@ -54,6 +54,14 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   const [datasources, setDatasources] = useState<Array<{ id: number; uid: string; name: string; type: string }>>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const parseOrgId = (value: string): number | null => {
+    const trimmed = value.trim();
+    if (trimmed === '') {
+      return null;
+    }
+    const num = Number(trimmed);
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
 
   const handleStageQueryChange = (key: StageQueryKey, field: keyof StageQueryPair, value: string) => {
     onMetricsChange({
@@ -87,11 +95,13 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
       setError(null);
       return;
     }
+    const orgId = mode === 'metrics' ? metricsConfig.datasourceOrgId : logsConfig.datasourceOrgId;
+    const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
     let cancelled = false;
     const loadDatasources = async () => {
       setLoading(true);
       try {
-        const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources');
+        const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources', { headers });
         if (cancelled) {
           return;
         }
@@ -115,7 +125,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, mode]);
+  }, [open, mode, metricsConfig.datasourceOrgId, logsConfig.datasourceOrgId]);
 
   if (!open) {
     return null;
@@ -165,6 +175,25 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               <div style={{ fontSize: 12, color: '#475569' }}>
                 Select a Prometheus/Mimir datasource and adjust the default queries to match your labels. Placeholders like <code>$collector_uid</code>, <code>$pipeline</code>, and <code>$stage</code> are substituted at runtime.
               </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                Datasource org ID (optional)
+                <input
+                  type="number"
+                  min="1"
+                  value={metricsConfig.datasourceOrgId ?? ''}
+                  onChange={(event) =>
+                    onMetricsChange({
+                      ...metricsConfig,
+                      datasourceOrgId: parseOrgId(event.target.value),
+                    })
+                  }
+                  placeholder="Defaults to current org"
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                />
+                <span style={{ fontSize: 11, color: '#6B7280' }}>
+                  Use this to list datasources from another Grafana org (requires your user to have access).
+                </span>
+              </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Data source
                 <select
@@ -245,6 +274,25 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               <div style={{ fontSize: 12, color: '#475569' }}>
                 Provide a Loki query template and adjust its labels to your environment. Supported placeholders: <code>$collector_uid</code>, <code>$collector_name</code>, <code>$org_name</code>.
               </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                Datasource org ID (optional)
+                <input
+                  type="number"
+                  min="1"
+                  value={logsConfig.datasourceOrgId ?? ''}
+                  onChange={(event) =>
+                    onLogsChange({
+                      ...logsConfig,
+                      datasourceOrgId: parseOrgId(event.target.value),
+                    })
+                  }
+                  placeholder="Defaults to current org"
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                />
+                <span style={{ fontSize: 11, color: '#6B7280' }}>
+                  Set this when the Loki datasource you need lives in another Grafana org.
+                </span>
+              </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Loki data source
                 <select

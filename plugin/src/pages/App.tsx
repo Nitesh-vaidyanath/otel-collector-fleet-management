@@ -638,6 +638,7 @@ export const App = () => {
     total: 0,
     online: 0,
   });
+  const [labelCache, setLabelCache] = useState<Map<string, Record<string, string>>>(new Map());
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
   const displayUserName = useMemo(() => {
     const raw = (userContext.name || '').trim();
@@ -680,7 +681,32 @@ export const App = () => {
     }
   };
 
-  const fetchBridges = async () => {
+  const mergeAgentLabels = useCallback((incomingAgents: Agent[], baseCache: Map<string, Record<string, string>>) => {
+    const nextCache = new Map(baseCache);
+    const mergedAgents = incomingAgents.map((agent) => {
+      const mergedLabels = { ...(nextCache.get(agent.agentUid) || {}), ...(agent.labels || {}) };
+      nextCache.set(agent.agentUid, mergedLabels);
+      return { ...agent, labels: mergedLabels };
+    });
+    return { mergedAgents, nextCache };
+  }, []);
+
+  const mergeBridgeLabels = useCallback((incomingBridges: Bridge[], baseCache: Map<string, Record<string, string>>) => {
+    const nextCache = new Map(baseCache);
+    const mergedBridges = incomingBridges.map((bridge) => {
+      const mergedBridgeLabels = { ...(nextCache.get(bridge.agentUid) || {}), ...(bridge.labels || {}) };
+      nextCache.set(bridge.agentUid, mergedBridgeLabels);
+      const collectors = (bridge.collectors || []).map((collector) => {
+        const mergedCollectorLabels = { ...(nextCache.get(collector.agentUid) || {}), ...(collector.labels || {}) };
+        nextCache.set(collector.agentUid, mergedCollectorLabels);
+        return { ...collector, labels: mergedCollectorLabels };
+      });
+      return { ...bridge, labels: mergedBridgeLabels, collectors };
+    });
+    return { mergedBridges, nextCache };
+  }, []);
+
+  const fetchBridges = async (baseCache?: Map<string, Record<string, string>>) => {
     try {
       const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/bridges');
       console.log('DEBUG: Fetched bridges response:', { bridges: response.bridges, count: response.bridges?.length || 0 });
@@ -694,7 +720,10 @@ export const App = () => {
           });
         });
       }
-      setBridges(response.bridges || []);
+      const startingCache = baseCache ?? labelCache;
+      const { mergedBridges, nextCache } = mergeBridgeLabels(response.bridges || [], startingCache);
+      setLabelCache(nextCache);
+      setBridges(mergedBridges);
     } catch (err: any) {
       console.error('Failed to fetch bridges:', err);
       // Don't set error - bridges endpoint might not exist yet
@@ -712,7 +741,9 @@ export const App = () => {
         status: a.status,
         labels: a.labels
       })));
-      setAgents(incomingAgents);
+      const { mergedAgents, nextCache } = mergeAgentLabels(incomingAgents, labelCache);
+      setLabelCache(nextCache);
+      setAgents(mergedAgents);
       const directOnline = incomingAgents.filter((a: Agent) => a.status === 'online').length;
       const totals = response.totals || {};
       const backendDirectOnline = totals.directOnline ?? totals.directOnlline ?? directOnline;
@@ -762,7 +793,7 @@ export const App = () => {
         setCurrentOrgName(response.grafanaOrgName || response.orgName);
       }
       // Also fetch bridges for hierarchical view
-      await fetchBridges();
+      await fetchBridges(nextCache);
     } catch (err: any) {
       console.error('Failed to fetch agents:', err);
       setError(err.message || 'Failed to fetch agents');

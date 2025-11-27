@@ -36,18 +36,27 @@ export const getDefaultTelemetrySettingsState = (): FleetTelemetrySettings => ({
   metrics: {
     enabled: false,
     datasourceUid: null,
+    datasourceOrgId: null,
     queries: buildDefaultMetricQueries('$pipeline'),
     stageQueries: buildDefaultStageQueries(),
   },
   logs: {
     enabled: false,
     datasourceUid: null,
+    datasourceOrgId: null,
     query: LOGS_QUERY_PLACEHOLDER,
   },
 });
 
 export const normalizeTelemetrySettingsState = (incoming: any): FleetTelemetrySettings => {
   const defaults = getDefaultTelemetrySettingsState();
+  const parseOrgId = (value: any): number | null => {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
   if (!incoming || typeof incoming !== 'object') {
     return defaults;
   }
@@ -55,6 +64,7 @@ export const normalizeTelemetrySettingsState = (incoming: any): FleetTelemetrySe
   const metrics: MetricsTelemetryConfig = {
     enabled: Boolean(incoming.metrics?.enabled),
     datasourceUid: typeof incoming.metrics?.datasourceUid === 'string' ? incoming.metrics.datasourceUid : (typeof incoming.metrics?.datasource_uid === 'string' ? incoming.metrics.datasource_uid : null),
+    datasourceOrgId: parseOrgId(incoming.metrics?.datasourceOrgId ?? incoming.metrics?.datasource_org_id),
     queries: { ...defaults.metrics.queries },
     stageQueries: cloneStageQueries(incoming.metrics?.stageQueries || incoming.metrics?.stage_queries || null),
   };
@@ -70,6 +80,7 @@ export const normalizeTelemetrySettingsState = (incoming: any): FleetTelemetrySe
   const logs: LogsTelemetryConfig = {
     enabled: Boolean(incoming.logs?.enabled),
     datasourceUid: typeof incoming.logs?.datasourceUid === 'string' ? incoming.logs.datasourceUid : (typeof incoming.logs?.datasource_uid === 'string' ? incoming.logs.datasource_uid : null),
+    datasourceOrgId: parseOrgId(incoming.logs?.datasourceOrgId ?? incoming.logs?.datasource_org_id),
     query: typeof incoming.logs?.query === 'string' && incoming.logs.query.trim() !== '' ? incoming.logs.query : LOGS_QUERY_PLACEHOLDER,
   };
 
@@ -78,4 +89,3 @@ export const normalizeTelemetrySettingsState = (incoming: any): FleetTelemetrySe
     logs,
   };
 };
-

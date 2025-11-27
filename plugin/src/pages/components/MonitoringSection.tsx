@@ -41,6 +41,12 @@ export function MonitoringSection({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const metricsSettings = telemetrySettings?.metrics ?? getDefaultTelemetrySettingsState().metrics;
   const logsSettings = telemetrySettings?.logs ?? getDefaultTelemetrySettingsState().logs;
+  const metricsDatasourceLabel = metricsSettings.datasourceUid
+    ? `Datasource: ${telemetryDatasourceHints.metrics || metricsSettings.datasourceUid}${metricsSettings.datasourceOrgId ? ` (org ${metricsSettings.datasourceOrgId})` : ''}`
+    : 'Datasource: not configured';
+  const logsDatasourceLabel = logsSettings.datasourceUid
+    ? `Datasource: ${telemetryDatasourceHints.logs || logsSettings.datasourceUid}${logsSettings.datasourceOrgId ? ` (org ${logsSettings.datasourceOrgId})` : ''}`
+    : 'Datasource: not configured';
 
   // Prevent selecting bridges - only collectors can be monitored (bridges don't have pipelines/configs)
   useEffect(() => {
@@ -1120,7 +1126,7 @@ export function MonitoringSection({
                           description="Visualize per-pipeline CPU, memory, and throughput via Prometheus or Mimir."
                           enabled={metricsSettings.enabled}
                           disabled={telemetryLoading}
-                          datasourceLabel={metricsSettings.datasourceUid ? `Datasource: ${telemetryDatasourceHints.metrics || metricsSettings.datasourceUid}` : 'Datasource: not configured'}
+                          datasourceLabel={metricsDatasourceLabel}
                           footerNote="Applies to both the pipeline cards and the per-stage throughput chips."
                           onToggle={() => onToggleMetrics(!metricsSettings.enabled)}
                           onConfigure={() => onConfigureTelemetry('metrics')}
@@ -1130,7 +1136,7 @@ export function MonitoringSection({
                           description="Use a Loki query template to inspect recent collector logs."
                           enabled={logsSettings.enabled}
                           disabled={telemetryLoading}
-                          datasourceLabel={logsSettings.datasourceUid ? `Datasource: ${telemetryDatasourceHints.logs || logsSettings.datasourceUid}` : 'Datasource: not configured'}
+                          datasourceLabel={logsDatasourceLabel}
                           footerNote="Fetches up to 50 log lines from the configured Loki datasource."
                           onToggle={() => onToggleLogs(!logsSettings.enabled)}
                           onConfigure={() => onConfigureTelemetry('logs')}

@@ -3,16 +3,10 @@ import { getBackendSrv } from '@grafana/runtime';
 import type { StageQueryKey, StageMetricTemplates } from '../types';
 import { extractPrometheusSample, formatStageRate, escapeSelectorValue } from '../utils/metrics';
 import { buildDefaultStageQueries } from '../utils/telemetry';
-import { createBackendSrv } from '../utils/api';
-import { detectRuntimeMode, detectGrafanaTransport } from '../utils/runtime';
 import { STAGE_SUMMARY } from './StageMetricsRail';
 
 const { useState, useEffect, useCallback } = React;
 
-const runtimeMode = detectRuntimeMode();
-const isRunningInGrafana = runtimeMode === 'grafana';
-const grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
-const backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
 const rawBackendSrv = getBackendSrv();
 
 export type StageMetricsGroupProps = {
@@ -22,9 +16,10 @@ export type StageMetricsGroupProps = {
   datasource: { id: number; uid: string; name: string } | null;
   templates: StageMetricTemplates;
   agentUid?: string;
+  datasourceOrgId?: number | null;
 };
 
-export const StageMetricsGroup: React.FC<StageMetricsGroupProps> = ({ kind, stages, pipelineType, datasource, templates, agentUid }) => {
+export const StageMetricsGroup: React.FC<StageMetricsGroupProps> = ({ kind, stages, pipelineType, datasource, templates, agentUid, datasourceOrgId }) => {
   const [values, setValues] = useState<Record<string, { inbound: string; outbound: string }>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,9 +48,10 @@ export const StageMetricsGroup: React.FC<StageMetricsGroupProps> = ({ kind, stag
       method: 'GET',
       url: `/api/datasources/proxy/${datasource.id}/api/v1/query`,
       params: { query, time: now },
+      headers: datasourceOrgId ? { 'X-Grafana-Org-Id': String(datasourceOrgId) } : undefined,
     });
     return extractPrometheusSample(response?.data);
-  }, [datasource]);
+  }, [datasource, datasourceOrgId]);
 
   const runQueries = useCallback(async () => {
     if (!datasource || stages.length === 0) {
