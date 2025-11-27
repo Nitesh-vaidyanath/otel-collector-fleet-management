@@ -2284,11 +2284,9 @@ export const App = () => {
                       // Load monitoring data for this agent to get metrics
                       const telemetryItems = detailPanelMonitoringData?.telemetry || [];
                       
-                      // Calculate aggregated metrics from telemetry
+                      // Calculate aggregated metrics from telemetry. If none are reported, show a hint instead of synthetic data.
                       let avgCPU = 0, avgMemory = 0, avgBandwidth = 0, avgThroughput = 0;
                       let metricsCount = 0;
-                      
-                      // Try to get metrics from telemetry (OwnMetrics - not yet implemented in opamp-go)
                       telemetryItems.forEach((item: any) => {
                         if (item.type === 'metrics' && item.data) {
                           const data = item.data;
@@ -2307,62 +2305,49 @@ export const App = () => {
                           }
                         }
                       });
-                      
                       if (metricsCount > 0) {
                         avgCPU = avgCPU / metricsCount;
                         avgMemory = avgMemory / metricsCount;
                         avgBandwidth = avgBandwidth / metricsCount;
                         avgThroughput = avgThroughput / metricsCount;
-                      } else {
-                        // OwnMetrics not available - calculate synthetic metrics from agent UID hash
-                        // This provides consistent metrics for UI display (same agent = same metrics)
-                        const agentUID = selectedAgent.agentUid || '';
-                        const hash = agentUID.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
-                        const seed = hash % 100;
-                        
-                        // Generate synthetic metrics (consistent per agent)
-                        avgCPU = (seed % 50) + 10; // 10-60%
-                        avgMemory = ((seed * 2) % 200) + 50; // 50-250 MB
-                        avgBandwidth = ((seed * 10) % 1000) + 100; // 100-1100 KB/s
-                        avgThroughput = ((seed * 50) % 5000) + 1000; // 1000-6000 events/s
                       }
-                      
                       return (
                         <div style={{ marginBottom: 24, padding: 16, background: '#F9FAFB', borderRadius: 6, border: '1px solid #E5E7EB' }}>
                           <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginBottom: 12 }}>
                             📊 Agent Performance Metrics
                           </div>
-                          {metricsCount === 0 && (
-                            <div style={{ marginBottom: 12, padding: 10, background: '#FEF3C7', borderRadius: 4, border: '1px solid #FCD34D', fontSize: 11, color: '#92400E' }}>
-                              ⚠️ <strong>Note:</strong> OwnMetrics is not yet implemented in opamp-go v0.22.0. Metrics shown are estimated from agent status. For real metrics, scrape the agent's Prometheus endpoint (port 8888).
+                          {metricsCount === 0 ? (
+                            <div style={{ marginBottom: 4, padding: 10, background: '#FEF3C7', borderRadius: 4, border: '1px solid #FCD34D', fontSize: 11, color: '#92400E' }}>
+                              No agent self-metrics reported yet. Enable the metrics overlay in the Monitoring tab and point it at your Prometheus/Mimir datasource to pull real usage gauges here.
+                            </div>
+                          ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                              <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                                <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>CPU Usage</div>
+                                <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                                  {avgCPU > 0 ? `${avgCPU.toFixed(1)}%` : 'N/A'}
+                                </div>
+                              </div>
+                              <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                                <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Memory Usage</div>
+                                <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                                  {avgMemory > 0 ? `${avgMemory.toFixed(0)} MB` : 'N/A'}
+                                </div>
+                              </div>
+                              <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                                <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Bandwidth</div>
+                                <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                                  {avgBandwidth > 0 ? `${avgBandwidth.toFixed(0)} KB/s` : 'N/A'}
+                                </div>
+                              </div>
+                              <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                                <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Throughput</div>
+                                <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
+                                  {avgThroughput > 0 ? `${avgThroughput.toFixed(0)}/s` : 'N/A'}
+                                </div>
+                              </div>
                             </div>
                           )}
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-                            <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
-                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>CPU Usage</div>
-                              <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgCPU > 0 ? `${avgCPU.toFixed(1)}%` : 'N/A'}
-                              </div>
-                            </div>
-                            <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
-                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Memory Usage</div>
-                              <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgMemory > 0 ? `${avgMemory.toFixed(0)} MB` : 'N/A'}
-                              </div>
-                            </div>
-                            <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
-                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Bandwidth</div>
-                              <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgBandwidth > 0 ? `${avgBandwidth.toFixed(0)} KB/s` : 'N/A'}
-                              </div>
-                            </div>
-                            <div style={{ padding: 12, background: 'white', borderRadius: 4, border: '1px solid #E5E7EB' }}>
-                              <div style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }}>Throughput</div>
-                              <div style={{ fontSize: 18, fontWeight: 600, color: '#111827' }}>
-                                {avgThroughput > 0 ? `${avgThroughput.toFixed(0)}/s` : 'N/A'}
-                              </div>
-                            </div>
-                          </div>
                         </div>
                       );
                     })()}
