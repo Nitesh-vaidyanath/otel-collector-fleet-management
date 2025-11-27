@@ -5,6 +5,7 @@ package main
 
 // This is the standalone OpAMP server main - used when running as separate service
 // All other files (handlers.go, opamp.go, etc.) are shared with plugin backend
+// Global variables (globalOpampManager, appLogger) are declared in globals.go
 
 import (
 	"context"
@@ -16,12 +17,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-)
-
-// Global variables - shared with handlers.go, opamp.go, etc.
-var (
-	globalOpampManager *OpampManager
-	appLogger          *Logger
 )
 
 func main() {
@@ -106,7 +101,7 @@ func main() {
 	// Pass TLS certificate and key if provided
 	certFilePath := *certFile
 	keyFilePath := *keyFile
-	
+
 	go func() {
 		if err := globalOpampManager.Start(*endpoint, certFilePath, keyFilePath); err != nil {
 			appLogger.Error("Failed to start OpAMP server", err)
@@ -141,8 +136,8 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	appLogger.Info("OpAMP server started successfully", map[string]interface{}{
-		"endpoint":       *endpoint,
-		"tls":            *enableTLS,
+		"endpoint":        *endpoint,
+		"tls":             *enableTLS,
 		"health_endpoint": "http://localhost:8080/health",
 	})
 
