@@ -396,6 +396,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			LIMIT 200
 		`, orgID)
 		if err != nil {
+			log.Printf("ERROR: agentsCollectionHandler query failed: %v", err)
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -453,6 +454,7 @@ func agentsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 				directOnline++
 			}
 		}
+		log.Printf("DEBUG: agentsCollectionHandler returning %d agents (org_id=%d, directOnline=%d)", len(list), orgID, directOnline)
 
 		// Count collectors managed by bridges (discovered collectors)
 		var managedCollectors int64

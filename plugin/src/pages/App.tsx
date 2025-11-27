@@ -706,6 +706,12 @@ export const App = () => {
       setError('');
       const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/agents');
       const incomingAgents = response.items || [];
+      console.log('DEBUG: fetchAgents received', incomingAgents.length, 'agents:', incomingAgents.map((a: Agent) => ({
+        agentUid: a.agentUid?.substring(0, 8),
+        name: a.name,
+        status: a.status,
+        labels: a.labels
+      })));
       setAgents(incomingAgents);
       const directOnline = incomingAgents.filter((a: Agent) => a.status === 'online').length;
       const totals = response.totals || {};
@@ -1049,10 +1055,10 @@ export const App = () => {
     [directAgents.length, supervisorAgents.length, unclassifiedAgents.length]
   );
 
-  // Group agents by deployment type
+  // Group agents by deployment type (only for non-bridge agents)
   const groupedAgents = groupByDeploymentType ? (() => {
     const groups: Record<string, Agent[]> = {};
-    filteredAgents.forEach(agent => {
+    nonBridgeAgents.forEach(agent => {
       const deploymentType = agent.labels?.['deployment.type'] || 
                             agent.labels?.['deployment-type'] ||
                             agent.labels?.['deployment_type'] ||
@@ -2003,9 +2009,50 @@ export const App = () => {
                   </>
                 )}
 
-                {renderAgentSection('Direct agents', directAgents)}
-                {renderAgentSection('Supervisors', supervisorAgents)}
-                {renderAgentSection('Unclassified agents', unclassifiedAgents)}
+                {/* Render agents - either grouped by deployment type or flat list by classification */}
+                {groupByDeploymentType && groupedAgents ? (
+                  // Grouped by deployment type
+                  Object.entries(groupedAgents).map(([deploymentType, agentsInGroup]) => {
+                    // Classify agents within this deployment type group
+                    const directInGroup = agentsInGroup.filter(a => {
+                      const classification = getAgentClassification(a);
+                      return classification === 'direct';
+                    });
+                    const supervisorsInGroup = agentsInGroup.filter(a => {
+                      const classification = getAgentClassification(a);
+                      return classification === 'supervisor';
+                    });
+                    const unclassifiedInGroup = agentsInGroup.filter(a => {
+                      const classification = getAgentClassification(a);
+                      return classification === 'unclassified';
+                    });
+                    
+                    return (
+                      <div key={deploymentType} style={{ marginTop: 16 }}>
+                        <div style={{
+                          padding: '12px 16px',
+                          background: '#F3F4F6',
+                          borderBottom: '1px solid #E5E7EB',
+                          fontWeight: 600,
+                          fontSize: 13,
+                          color: '#374151',
+                        }}>
+                          📁 {deploymentType} ({agentsInGroup.length})
+                        </div>
+                        {renderAgentSection('Direct agents', directInGroup)}
+                        {renderAgentSection('Supervisors', supervisorsInGroup)}
+                        {renderAgentSection('Unclassified agents', unclassifiedInGroup)}
+                      </div>
+                    );
+                  })
+                ) : (
+                  // Flat list by classification
+                  <>
+                    {renderAgentSection('Direct agents', directAgents)}
+                    {renderAgentSection('Supervisors', supervisorAgents)}
+                    {renderAgentSection('Unclassified agents', unclassifiedAgents)}
+                  </>
+                )}
               </div>
             )}
           </div>
