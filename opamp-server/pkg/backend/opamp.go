@@ -465,7 +465,7 @@ func resolveOrgFromBridgeHeaders(r *http.Request, tenantOverride string) (int64,
 	return 0, ""
 }
 
-func (m *OpampManager) registerAgent(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, currentConfig, currentConfigHash string) error {
+func (m *OpampManager) registerAgent(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, currentConfig, currentConfigHash string, orgIDOverride int64) error {
 	// Normalize UID for consistent storage
 	instanceUID = normalizeAgentUID(instanceUID)
 	db := mustDB()
@@ -486,7 +486,11 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 	labelsJSON, _ := json.Marshal(labels)
 	capabilitiesJSON, _ := json.Marshal(capabilities)
 
-	orgID, _ := resolveOrgIDFromLabels(labels)
+	// Use orgID from connection/header if provided, otherwise try to resolve from labels, default to 1
+	orgID := orgIDOverride
+	if orgID <= 0 {
+		orgID, _ = resolveOrgIDFromLabels(labels)
+	}
 
 	// Get org name
 	var orgName string
@@ -2436,7 +2440,17 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									// Bridge-discovered collectors are those ONLY in bridge's EffectiveConfig, never connecting directly
 									// Auto-register agent in database with current config
 									// This also updates last_seen_at, ensuring agent stays online
-									if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash); err != nil {
+									// Get orgID from connection if available, otherwise use orgOverrideID from headers
+									agentOrgID := orgOverrideID
+									if conn, exists := m.conns[instanceUID]; exists && conn.orgID > 0 {
+										agentOrgID = conn.orgID
+										log.Printf("DEBUG: Using orgID=%d from connection for agent %s", agentOrgID, instanceUID[:8])
+									} else if orgOverrideID > 0 {
+										log.Printf("DEBUG: Using orgID=%d from HTTP headers for agent %s", orgOverrideID, instanceUID[:8])
+									} else {
+										log.Printf("WARNING: No orgID found in headers or connection for agent %s, will try to resolve from labels (may default to org_id=1)", instanceUID[:8])
+									}
+									if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash, agentOrgID); err != nil {
 										log.Printf("Failed to register agent: %v", err)
 									} else {
 										// Ensure agent is marked online and last_seen_at is updated
