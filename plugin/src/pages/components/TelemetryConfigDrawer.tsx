@@ -1,5 +1,5 @@
 import React from 'react';
-import { CodeEditor } from '@grafana/ui';
+// Using plain textarea for PromQL input to avoid runtime issues with embedded editors
 import type { MetricsTelemetryConfig, LogsTelemetryConfig, StageQueryKey, StageQueryPair } from '../types';
 import { PipelineMetricKey } from '../../components/PipelineMetricsPanelView';
 import { STAGE_KEYS } from '../constants';
@@ -61,8 +61,6 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   const [datasources, setDatasources] = useState<Array<{ id: number; uid: string; name: string; type: string }>>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [metricNames, setMetricNames] = useState<string[]>([]);
-  const [labelKeys, setLabelKeys] = useState<string[]>([]);
   const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const parseOrgId = (value: string): number | null => {
@@ -121,8 +119,6 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
           : [];
         setDatasources(filtered);
         setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
-        setMetricNames([]);
-        setLabelKeys([]);
       } catch (err: any) {
         if (!cancelled) {
           console.error('Failed to load data sources', err);
@@ -143,47 +139,6 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   if (!open) {
     return null;
   }
-
-  const loadPromSuggestions = async (dsUid: string | null, orgId: number | null) => {
-    if (!dsUid) {
-      setMetricNames([]);
-      setLabelKeys([]);
-      return;
-    }
-    try {
-      const ds = datasources.find((d) => d.uid === dsUid);
-      if (!ds) {
-        setMetricNames([]);
-        setLabelKeys([]);
-        return;
-      }
-      const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
-      const metricResp = await backendSrv.get<{ status: string; data: string[] }>(
-        `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
-        { headers }
-      );
-      const labelsResp = await backendSrv.get<{ status: string; data: string[] }>(
-        `/api/datasources/proxy/${ds.id}/api/v1/labels`,
-        { headers }
-      );
-      if (Array.isArray(metricResp?.data)) {
-        setMetricNames(metricResp.data);
-      }
-      if (Array.isArray(labelsResp?.data)) {
-        setLabelKeys(labelsResp.data);
-      }
-    } catch (err) {
-      // best-effort; ignore failures
-    }
-  };
-
-  useEffect(() => {
-    if (mode === 'metrics') {
-      loadPromSuggestions(metricsConfig.datasourceUid, effectiveMetricsOrgId);
-    } else {
-      loadPromSuggestions(logsConfig.datasourceUid, effectiveLogsOrgId);
-    }
-  }, [mode, metricsConfig.datasourceUid, logsConfig.datasourceUid, effectiveMetricsOrgId, effectiveLogsOrgId, datasources]);
 
   return (
     <div
@@ -279,24 +234,16 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               {(Object.keys(metricsConfig.queries) as PipelineMetricKey[]).map((key) => (
                 <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                   <div>{key.toUpperCase()} query</div>
-                  <CodeEditor
-                    language="promql"
-                    height="120px"
+                  <textarea
                     value={metricsConfig.queries[key]}
-                    onBlur={(value) =>
+                    rows={5}
+                    onChange={(event) =>
                       onMetricsChange({
                         ...metricsConfig,
-                        queries: { ...metricsConfig.queries, [key]: value || '' },
+                        queries: { ...metricsConfig.queries, [key]: event.target.value },
                       })
                     }
-                    onSave={(value) =>
-                      onMetricsChange({
-                        ...metricsConfig,
-                        queries: { ...metricsConfig.queries, [key]: value || '' },
-                      })
-                    }
-                    showMiniMap={false}
-                    options={{ wordWrap: 'on' }}
+                    style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
                   />
                 </div>
               ))}
