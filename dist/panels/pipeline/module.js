@@ -260,21 +260,22 @@ var METRIC_LABELS = [
 ];
 var buildDefaultMetricQueries = (pipelineType, agentUid) => {
   const safeUid = agentUid && agentUid.trim() !== "" ? agentUid : "$collector_uid";
+  const safePod = "$collector_pod";
   const pipelineLabel = pipelineType && pipelineType.trim() !== "" ? pipelineType : "$pipeline";
   const prefix = "# Adjust selectors to match your collector metrics";
   return {
     cpu: `${prefix}
 # CPU utilisation for ${pipelineLabel}
-sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}"}[5m])) * 100`,
+sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m])) * 100`,
     memory: `${prefix}
 # Resident memory for ${pipelineLabel}
-avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}"}[5m]) / 1024 / 1024`,
+avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m]) / 1024 / 1024`,
     inbound: `${prefix}
 # Items accepted into ${pipelineLabel}
-sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`,
+sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`,
     outbound: `${prefix}
 # Items emitted from ${pipelineLabel}
-sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`
+sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`
   };
 };
 var extractPrometheusValue = (response) => {

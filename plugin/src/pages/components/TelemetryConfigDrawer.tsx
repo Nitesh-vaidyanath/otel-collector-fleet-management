@@ -1,5 +1,5 @@
 import React from 'react';
-import { QueryField } from '@grafana/ui';
+import { CodeEditor } from '@grafana/ui';
 import type { MetricsTelemetryConfig, LogsTelemetryConfig, StageQueryKey, StageQueryPair } from '../types';
 import { PipelineMetricKey } from '../../components/PipelineMetricsPanelView';
 import { STAGE_KEYS } from '../constants';
@@ -185,17 +185,6 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
     }
   }, [mode, metricsConfig.datasourceUid, logsConfig.datasourceUid, effectiveMetricsOrgId, effectiveLogsOrgId, datasources]);
 
-  const promTypeahead = async () => {
-    const metrics = metricNames.map((m) => ({ label: m, value: m }));
-    const labels = labelKeys.map((l) => ({ label: `${l}=`, value: `${l}=` }));
-    return {
-      suggestions: [
-        { label: 'Metrics', items: metrics },
-        { label: 'Labels', items: labels },
-      ],
-    } as any;
-  };
-
   return (
     <div
       style={{
@@ -290,17 +279,24 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               {(Object.keys(metricsConfig.queries) as PipelineMetricKey[]).map((key) => (
                 <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                   <div>{key.toUpperCase()} query</div>
-                  <QueryField
-                    query={metricsConfig.queries[key]}
-                    onChange={(value: string) =>
+                  <CodeEditor
+                    language="promql"
+                    height="120px"
+                    value={metricsConfig.queries[key]}
+                    onBlur={(value) =>
                       onMetricsChange({
                         ...metricsConfig,
-                        queries: { ...metricsConfig.queries, [key]: value },
+                        queries: { ...metricsConfig.queries, [key]: value || '' },
                       })
                     }
-                    onTypeahead={promTypeahead}
-                    placeholder="Enter PromQL query"
-                    portalOrigin="telemetry-config"
+                    onSave={(value) =>
+                      onMetricsChange({
+                        ...metricsConfig,
+                        queries: { ...metricsConfig.queries, [key]: value || '' },
+                      })
+                    }
+                    showMiniMap={false}
+                    options={{ wordWrap: 'on' }}
                   />
                 </div>
               ))}

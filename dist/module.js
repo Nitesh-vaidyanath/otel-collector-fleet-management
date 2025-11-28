@@ -278,21 +278,22 @@ var METRIC_LABELS = [
 ];
 var buildDefaultMetricQueries = (pipelineType, agentUid) => {
   const safeUid = agentUid && agentUid.trim() !== "" ? agentUid : "$collector_uid";
+  const safePod = "$collector_pod";
   const pipelineLabel = pipelineType && pipelineType.trim() !== "" ? pipelineType : "$pipeline";
   const prefix = "# Adjust selectors to match your collector metrics";
   return {
     cpu: `${prefix}
 # CPU utilisation for ${pipelineLabel}
-sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}"}[5m])) * 100`,
+sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m])) * 100`,
     memory: `${prefix}
 # Resident memory for ${pipelineLabel}
-avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}"}[5m]) / 1024 / 1024`,
+avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m]) / 1024 / 1024`,
     inbound: `${prefix}
 # Items accepted into ${pipelineLabel}
-sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`,
+sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`,
     outbound: `${prefix}
 # Items emitted from ${pipelineLabel}
-sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pipeline="${pipelineLabel}"}[5m]))`
+sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`
   };
 };
 var extractPrometheusValue = (response) => {
@@ -588,16 +589,16 @@ var PipelineMetricsPanelView = ({
 // pages/utils/telemetry.ts
 var buildDefaultStageQueries = () => ({
   receivers: {
-    inbound: 'sum(rate(otelcol_receiver_accepted_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))',
-    outbound: 'sum(rate(otelcol_receiver_failed_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))'
+    inbound: 'sum(rate(otelcol_receiver_accepted_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", receiver="$stage", pipeline="$pipeline"}[5m]))',
+    outbound: 'sum(rate(otelcol_receiver_failed_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", receiver="$stage", pipeline="$pipeline"}[5m]))'
   },
   processors: {
-    inbound: 'sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))',
-    outbound: 'sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))'
+    inbound: 'sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", processor="$stage"}[5m]))',
+    outbound: 'sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", processor="$stage"}[5m]))'
   },
   exporters: {
-    inbound: 'sum(rate(otelcol_exporter_send_failed_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m])) + sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))',
-    outbound: 'sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))'
+    inbound: 'sum(rate(otelcol_exporter_send_failed_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", exporter="$stage"}[5m])) + sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", exporter="$stage"}[5m]))',
+    outbound: 'sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", exporter="$stage"}[5m]))'
   }
 });
 var cloneStageQueries = (incoming) => {
@@ -3749,9 +3750,10 @@ var StageMetricsGroup = ({ kind, stages, pipelineType, datasource, templates, ag
       return "";
     }
     const resolvedCollector = agentUid && agentUid.trim() !== "" ? escapeSelectorValue(agentUid) : "$collector_uid";
+    const resolvedPod = agentUid && agentUid.trim() !== "" ? escapeSelectorValue(agentUid) : "$pod";
     const resolvedPipeline = pipelineType && pipelineType.trim() !== "" ? escapeSelectorValue(pipelineType) : "$pipeline";
     const resolvedStage = stageName && stageName.trim() !== "" ? escapeSelectorValue(stageName) : "$stage";
-    return rawQuery.replace(/\$collector_uid/g, resolvedCollector).replace(/\$pipeline/g, resolvedPipeline).replace(/\$stage/g, resolvedStage);
+    return rawQuery.replace(/\$collector_uid/g, resolvedCollector).replace(/\$collector_pod/g, resolvedPod).replace(/\$pod/g, resolvedPod).replace(/\$pipeline/g, resolvedPipeline).replace(/\$stage/g, resolvedStage);
   }, [agentUid, pipelineType]);
   const executeQuery = useCallback2(async (query, now) => {
     if (!datasource || !query || query.trim() === "") {
@@ -4750,6 +4752,7 @@ function MonitoringSection({
 
 // pages/components/TelemetryConfigDrawer.tsx
 var React2 = __REACT__.default || __REACT__;
+
 var PROM_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var LOKI_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["loki"]);
 var STAGE_SUMMARY2 = {
@@ -4784,6 +4787,8 @@ var TelemetryConfigDrawer = ({
   const [datasources, setDatasources] = useState2([]);
   const [loading, setLoading] = useState2(false);
   const [error, setError] = useState2(null);
+  const [metricNames, setMetricNames] = useState2([]);
+  const [labelKeys, setLabelKeys] = useState2([]);
   const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const parseOrgId = (value) => {
@@ -4837,6 +4842,8 @@ var TelemetryConfigDrawer = ({
         const filtered = Array.isArray(response) ? response.filter((ds) => mode === "metrics" ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)) : [];
         setDatasources(filtered);
         setError(filtered.length === 0 ? "No compatible data sources were found." : null);
+        setMetricNames([]);
+        setLabelKeys([]);
       } catch (err) {
         if (!cancelled) {
           console.error("Failed to load data sources", err);
@@ -4856,6 +4863,44 @@ var TelemetryConfigDrawer = ({
   if (!open) {
     return null;
   }
+  const loadPromSuggestions = async (dsUid, orgId) => {
+    if (!dsUid) {
+      setMetricNames([]);
+      setLabelKeys([]);
+      return;
+    }
+    try {
+      const ds = datasources.find((d) => d.uid === dsUid);
+      if (!ds) {
+        setMetricNames([]);
+        setLabelKeys([]);
+        return;
+      }
+      const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
+      const metricResp = await backendSrv4.get(
+        `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
+        { headers }
+      );
+      const labelsResp = await backendSrv4.get(
+        `/api/datasources/proxy/${ds.id}/api/v1/labels`,
+        { headers }
+      );
+      if (Array.isArray(metricResp?.data)) {
+        setMetricNames(metricResp.data);
+      }
+      if (Array.isArray(labelsResp?.data)) {
+        setLabelKeys(labelsResp.data);
+      }
+    } catch (err) {
+    }
+  };
+  useEffect2(() => {
+    if (mode === "metrics") {
+      loadPromSuggestions(metricsConfig.datasourceUid, effectiveMetricsOrgId);
+    } else {
+      loadPromSuggestions(logsConfig.datasourceUid, effectiveLogsOrgId);
+    }
+  }, [mode, metricsConfig.datasourceUid, logsConfig.datasourceUid, effectiveMetricsOrgId, effectiveLogsOrgId, datasources]);
   return /* @__PURE__ */ React2.createElement(
     "div",
     {
@@ -4902,7 +4947,9 @@ var TelemetryConfigDrawer = ({
           value: effectiveMetricsOrgId ?? "",
           onChange: (event) => onMetricsChange({
             ...metricsConfig,
-            datasourceOrgId: parseOrgId(event.target.value)
+            datasourceOrgId: parseOrgId(event.target.value),
+            datasourceUid: null
+            // reset selection when org changes
           }),
           style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
         },
@@ -4921,16 +4968,22 @@ var TelemetryConfigDrawer = ({
         },
         /* @__PURE__ */ React2.createElement("option", { value: "" }, "Select datasource"),
         datasources.map((ds) => /* @__PURE__ */ React2.createElement("option", { key: ds.uid, value: ds.uid }, ds.name, " (", ds.type, ")"))
-      )), Object.keys(metricsConfig.queries).map((key) => /* @__PURE__ */ React2.createElement("label", { key, style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, key.toUpperCase(), " query", /* @__PURE__ */ React2.createElement(
-        "textarea",
+      )), Object.keys(metricsConfig.queries).map((key) => /* @__PURE__ */ React2.createElement("div", { key, style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("div", null, key.toUpperCase(), " query"), /* @__PURE__ */ React2.createElement(
+        CodeEditor,
         {
+          language: "promql",
+          height: "120px",
           value: metricsConfig.queries[key],
-          rows: 5,
-          onChange: (event) => onMetricsChange({
+          onBlur: (value) => onMetricsChange({
             ...metricsConfig,
-            queries: { ...metricsConfig.queries, [key]: event.target.value }
+            queries: { ...metricsConfig.queries, [key]: value || "" }
           }),
-          style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
+          onSave: (value) => onMetricsChange({
+            ...metricsConfig,
+            queries: { ...metricsConfig.queries, [key]: value || "" }
+          }),
+          showMiniMap: false,
+          options: { wordWrap: "on" }
         }
       ))), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827", marginTop: 4 } }, "Per-stage throughput templates"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569", lineHeight: 1.5 } }, "These queries power the inbound/outbound chips for each receiver, processor, and exporter. Use placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " to interpolate the active component names."), STAGE_KEYS.map((key) => /* @__PURE__ */ React2.createElement("div", { key: `stage-query-${key}`, style: { border: "1px solid #E5E7EB", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827" } }, STAGE_SUMMARY2[key].title), /* @__PURE__ */ React2.createElement(
         "button",
@@ -4962,7 +5015,9 @@ var TelemetryConfigDrawer = ({
           value: effectiveLogsOrgId ?? "",
           onChange: (event) => onLogsChange({
             ...logsConfig,
-            datasourceOrgId: parseOrgId(event.target.value)
+            datasourceOrgId: parseOrgId(event.target.value),
+            datasourceUid: null
+            // reset selection when org changes
           }),
           style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
         },
