@@ -1151,6 +1151,7 @@ export function MonitoringSection({
                         orgName={monitoringData?.agent?.orgName}
                         metricsSettings={metricsSettings}
                         onConfigureMetrics={() => onConfigureTelemetry('metrics')}
+                        agentLabels={monitoringData?.agent?.labels || monitoringData?.agent?.agent?.labels}
                       />
                       <div style={{ marginTop: 16 }}>
                         <LogsPanelView

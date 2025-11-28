@@ -46,16 +46,24 @@ const METRIC_LABELS: Array<{ key: PipelineMetricKey; label: string; helper: stri
   { key: 'outbound', label: 'Outbound Throughput', helper: 'Example metric: otelcol_processor_outgoing_items_total' },
 ];
 
-export const buildDefaultMetricQueries = (pipelineType: string, agentUid?: string): PipelineMetricQueries => {
+export const buildDefaultMetricQueries = (pipelineType: string, agentUid?: string, podName?: string): PipelineMetricQueries => {
   const safeUid = agentUid && agentUid.trim() !== '' ? agentUid : '$collector_uid';
-  const safePod = '$collector_pod';
+  const safePod = podName || '$collector_pod';
   const pipelineLabel = pipelineType && pipelineType.trim() !== '' ? pipelineType : '$pipeline';
   const prefix = '# Adjust selectors to match your collector metrics';
+  // Build label selector with pod and other common labels (matching Grafana dashboard examples)
+  // Include common labels: pod, cluster, team, service_instance_id
+  const baseLabels = `service_instance_id="${safeUid}"`;
+  const podLabel = podName ? `pod="${podName}"` : `pod=~"${safePod}"`;
+  const labelSelector = `${baseLabels}, ${podLabel}`;
+  // For queries that should work across all pods, use pod=~".*" or omit pod filter
+  const allPodsSelector = `${baseLabels}`;
+  
   return {
-    cpu: `${prefix}\n# CPU utilisation for ${pipelineLabel}\nsum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m])) * 100`,
-    memory: `${prefix}\n# Resident memory for ${pipelineLabel}\navg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m]) / 1024 / 1024`,
-    inbound: `${prefix}\n# Items accepted into ${pipelineLabel}\nsum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`,
-    outbound: `${prefix}\n# Items emitted from ${pipelineLabel}\nsum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`,
+    cpu: `${prefix}\n# CPU usage per pod (Total & Per-Pod)\n# Total\nsum(rate(otelcol_process_cpu_seconds_total{${allPodsSelector}}[5m]))\n# Per-Pod\nrate(otelcol_process_cpu_seconds_total{${labelSelector}}[5m])`,
+    memory: `${prefix}\n# Memory usage per pod (Total & Per-Pod)\n# Total\nsum(otelcol_process_memory_rss{${allPodsSelector}} / 1024 / 1024)\n# Per-Pod\notelcol_process_memory_rss{${labelSelector}} / 1024 / 1024`,
+    inbound: `${prefix}\n# Incoming items per pod/processor (Total & Per-Pod)\n# Total\nsum(rate(otelcol_processor_incoming_items{${allPodsSelector}, pipeline="${pipelineLabel}"}[5m])) by (processor)\n# Per-Pod\nsum(rate(otelcol_processor_incoming_items{${labelSelector}, pipeline="${pipelineLabel}"}[5m])) by (pod, processor)`,
+    outbound: `${prefix}\n# Outgoing items per pod/processor (Total & Per-Pod)\n# Total\nsum(rate(otelcol_processor_outgoing_items{${allPodsSelector}, pipeline="${pipelineLabel}"}[5m])) by (processor)\n# Per-Pod\nsum(rate(otelcol_processor_outgoing_items{${labelSelector}, pipeline="${pipelineLabel}"}[5m])) by (pod, processor)`,
   };
 };
 
@@ -397,6 +405,9 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
         
         // Run instant query for current value
         try {
+          if (orgHeaders) {
+            console.log(`DEBUG: Running query for ${key} with org ID ${orgHeaders['X-Grafana-Org-Id']}`);
+          }
           const instantResponse = await rawBackendSrv.datasourceRequest({
             method: 'GET',
             url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query`,
@@ -441,6 +452,18 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
       runQueries();
     }
   }, [readOnly, selectedDatasource, runQueries]);
+
+  // Re-run queries when org ID changes (to refresh with new org context)
+  useEffect(() => {
+    if (readOnly && selectedDatasource && autoRunRef.current && datasourceOrgId !== null && datasourceOrgId !== undefined) {
+      console.log(`DEBUG: Org ID changed to ${datasourceOrgId}, re-running queries with org headers:`, orgHeaders);
+      autoRunRef.current = false; // Reset to allow re-run
+      setTimeout(() => {
+        autoRunRef.current = true;
+        runQueries();
+      }, 100);
+    }
+  }, [datasourceOrgId, readOnly, selectedDatasource, runQueries, orgHeaders]);
 
   const handleDatasourceChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
     const id = Number(event.target.value);

@@ -15,6 +15,7 @@ export const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   orgName,
   metricsSettings,
   onConfigureMetrics,
+  agentLabels,
 }: {
   config: string;
   pipelines: any[];
@@ -24,7 +25,17 @@ export const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
   orgName?: string;
   metricsSettings: MetricsTelemetryConfig;
   onConfigureMetrics: () => void;
+  agentLabels?: Record<string, string>;
 }) {
+  // Extract pod name from labels (check multiple possible label keys)
+  const podName = agentLabels ? (
+    agentLabels['pod'] || 
+    agentLabels['k8s.pod.name'] || 
+    agentLabels['k8s_pod_name'] ||
+    agentLabels['host.name'] ||
+    undefined
+  ) : undefined;
+
   const pipelineFlows = useMemo(() => {
     const flows: Array<{ type: string; receivers: string[]; processors: string[]; exporters: string[] }> = [];
     if (!config) {
@@ -184,7 +195,7 @@ export const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
             <div style={{ marginTop: 16 }}>
               {metricsSettings?.enabled && metricsSettings.datasourceUid ? (
                 <PipelineMetricsPanelView
-                  key={`${flow.type}-${metricsSettings.datasourceUid}`}
+                  key={`${flow.type}-${metricsSettings.datasourceUid}-${metricsSettings.datasourceOrgId || 'default'}`}
                   pipelineType={flow.type}
                   agentUid={agentUid}
                   agentName={agentName}
@@ -194,7 +205,7 @@ export const PipelineFlowDiagram = React.memo(function PipelineFlowDiagram({
                   defaultQueries={
                     metricsSettings.queries && Object.keys(metricsSettings.queries).length > 0
                       ? metricsSettings.queries
-                      : buildDefaultMetricQueries(flow.type, agentUid)
+                      : buildDefaultMetricQueries(flow.type, agentUid, podName)
                   }
                   defaultDatasourceUid={metricsSettings.datasourceUid}
                   datasourceOrgId={metricsSettings.datasourceOrgId}
