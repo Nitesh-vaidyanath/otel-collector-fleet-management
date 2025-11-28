@@ -4772,15 +4772,20 @@ var TelemetryConfigDrawer = ({
   mode,
   metricsConfig,
   logsConfig,
+  currentOrgId,
+  orgOptions,
   onMetricsChange,
   onLogsChange,
   onSave,
   onClose,
-  saving
+  saving,
+  canSave
 }) => {
   const [datasources, setDatasources] = useState2([]);
   const [loading, setLoading] = useState2(false);
   const [error, setError] = useState2(null);
+  const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
+  const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const parseOrgId = (value) => {
     const trimmed = value.trim();
     if (trimmed === "") {
@@ -4819,7 +4824,7 @@ var TelemetryConfigDrawer = ({
       setError(null);
       return;
     }
-    const orgId = mode === "metrics" ? metricsConfig.datasourceOrgId : logsConfig.datasourceOrgId;
+    const orgId = mode === "metrics" ? effectiveMetricsOrgId : effectiveLogsOrgId;
     const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
     let cancelled = false;
     const loadDatasources = async () => {
@@ -4891,20 +4896,19 @@ var TelemetryConfigDrawer = ({
         },
         "\xD7"
       )),
-      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 } }, mode === "metrics" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Prometheus/Mimir datasource and adjust the default queries to match your labels. Placeholders like ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " are substituted at runtime."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Datasource org ID (optional)", /* @__PURE__ */ React2.createElement(
-        "input",
+      /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 } }, mode === "metrics" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Prometheus/Mimir datasource and adjust the default queries to match your labels. Placeholders like ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " are substituted at runtime."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Datasource org", /* @__PURE__ */ React2.createElement(
+        "select",
         {
-          type: "number",
-          min: "1",
-          value: metricsConfig.datasourceOrgId ?? "",
+          value: effectiveMetricsOrgId ?? "",
           onChange: (event) => onMetricsChange({
             ...metricsConfig,
             datasourceOrgId: parseOrgId(event.target.value)
           }),
-          placeholder: "Defaults to current org",
           style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
-        }
-      ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "Use this to list datasources from another Grafana org (requires your user to have access).")), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Data source", /* @__PURE__ */ React2.createElement(
+        },
+        /* @__PURE__ */ React2.createElement("option", { value: "" }, "Current org", currentOrgId ? ` (#${currentOrgId})` : ""),
+        orgOptions.filter((o) => o.id !== currentOrgId).map((org) => /* @__PURE__ */ React2.createElement("option", { key: org.id, value: org.id }, org.name || `Org ${org.id}`, " (#", org.id, ")"))
+      ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "Pick another Grafana org to discover datasources there (requires access).")), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Data source", /* @__PURE__ */ React2.createElement(
         "select",
         {
           value: metricsConfig.datasourceUid ?? "",
@@ -4952,19 +4956,18 @@ var TelemetryConfigDrawer = ({
           onChange: (event) => handleStageQueryChange(key, "outbound", event.target.value),
           style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
         }
-      ))))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Provide a Loki query template and adjust its labels to your environment. Supported placeholders: ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$collector_name"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$org_name"), "."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Datasource org ID (optional)", /* @__PURE__ */ React2.createElement(
-        "input",
+      ))))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Provide a Loki query template and adjust its labels to your environment. Supported placeholders: ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$collector_name"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$org_name"), "."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Datasource org", /* @__PURE__ */ React2.createElement(
+        "select",
         {
-          type: "number",
-          min: "1",
-          value: logsConfig.datasourceOrgId ?? "",
+          value: effectiveLogsOrgId ?? "",
           onChange: (event) => onLogsChange({
             ...logsConfig,
             datasourceOrgId: parseOrgId(event.target.value)
           }),
-          placeholder: "Defaults to current org",
           style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
-        }
+        },
+        /* @__PURE__ */ React2.createElement("option", { value: "" }, "Current org", currentOrgId ? ` (#${currentOrgId})` : ""),
+        orgOptions.filter((o) => o.id !== currentOrgId).map((org) => /* @__PURE__ */ React2.createElement("option", { key: org.id, value: org.id }, org.name || `Org ${org.id}`, " (#", org.id, ")"))
       ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "Set this when the Loki datasource you need lives in another Grafana org.")), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Loki data source", /* @__PURE__ */ React2.createElement(
         "select",
         {
@@ -5000,10 +5003,10 @@ var TelemetryConfigDrawer = ({
         {
           type: "button",
           onClick: () => onSave(mode),
-          disabled: saving,
-          style: { padding: "8px 16px", borderRadius: 6, border: "none", background: saving ? "#A5B4FC" : "#4F46E5", color: "#FFFFFF", cursor: saving ? "not-allowed" : "pointer" }
+          disabled: saving || !canSave,
+          style: { padding: "8px 16px", borderRadius: 6, border: "none", background: saving || !canSave ? "#A5B4FC" : "#4F46E5", color: "#FFFFFF", cursor: saving || !canSave ? "not-allowed" : "pointer" }
         },
-        saving ? "Saving\u2026" : "Save"
+        saving ? "Saving\u2026" : canSave ? "Save" : "View only"
       ))
     )
   );
@@ -8215,6 +8218,7 @@ var App = () => {
   const [telemetryDrawerOpen, setTelemetryDrawerOpen] = useState2(false);
   const [telemetryDrawerMode, setTelemetryDrawerMode] = useState2("metrics");
   const [telemetryDatasourceHints, setTelemetryDatasourceHints] = useState2({});
+  const [orgOptions, setOrgOptions] = useState2([]);
   const [labelCache, setLabelCache] = useState2(/* @__PURE__ */ new Map());
   const selectedAgentTenantName = useMemo2(() => currentOrgName.trim(), [currentOrgName]);
   const displayUserName = useMemo2(() => {
@@ -8285,7 +8289,18 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     try {
       const response = await backendSrv5.get("/telemetry-settings");
       const incoming = response?.settings ?? response;
-      setTelemetrySettings(normalizeTelemetrySettingsState(incoming));
+      const normalized = normalizeTelemetrySettingsState(incoming);
+      setTelemetrySettings((prev) => ({
+        ...normalized,
+        metrics: {
+          ...normalized.metrics,
+          datasourceOrgId: normalized.metrics.datasourceOrgId ?? selectedOrgId ?? prev.metrics.datasourceOrgId ?? null
+        },
+        logs: {
+          ...normalized.logs,
+          datasourceOrgId: normalized.logs.datasourceOrgId ?? selectedOrgId ?? prev.logs.datasourceOrgId ?? null
+        }
+      }));
       if (incoming?.hints && typeof incoming.hints === "object") {
         setTelemetryDatasourceHints(incoming.hints);
       }
@@ -8330,6 +8345,25 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     setTelemetryDrawerMode(mode);
     setTelemetryDrawerOpen(true);
   };
+  const loadOrgOptions = useCallback2(async () => {
+    try {
+      const orgs = await rawBackendSrv5.get("/api/orgs");
+      if (Array.isArray(orgs) && orgs.length > 0) {
+        const mapped = orgs.filter((o) => typeof o.id === "number").map((o) => ({ id: o.id, name: String(o.name || `Org ${o.id}`) }));
+        setOrgOptions((prev) => {
+          const ids = new Set(prev.map((p) => p.id));
+          const merged = [...prev];
+          mapped.forEach((m) => {
+            if (!ids.has(m.id)) {
+              merged.push(m);
+            }
+          });
+          return merged;
+        });
+      }
+    } catch (err) {
+    }
+  }, []);
   const fetchBridges = async (baseCache) => {
     try {
       const response = await backendSrv5.get("/api/plugins/otel-collector-agent-fleet-management/resources/bridges");
@@ -8473,6 +8507,9 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       const orgName = org && org.name ? String(org.name) : "";
       setGrafanaOrgName(orgName);
       setTenantHeaderValue(orgName);
+      if (org && typeof org.id === "number") {
+        setOrgOptions([{ id: org.id, name: orgName }]);
+      }
     } catch (err) {
       console.error("Failed to load Grafana org context:", err);
     }
@@ -8480,6 +8517,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   useEffect2(() => {
     const init = async () => {
       await loadGrafanaOrgContext();
+      await loadOrgOptions();
       await loadUserContext();
       await fetchAgents();
       await loadTelemetrySettings();
@@ -8707,6 +8745,8 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   };
   const renderAgentRow = (agent) => {
     const classification = getAgentClassification(agent);
+    const osLabel = agent.labels?.["os"] || agent.labels?.["os.type"] || agent.labels?.["k8s.node.os"] || null;
+    const archLabel = agent.labels?.["arch"] || agent.labels?.["host.arch"] || agent.labels?.["k8s.node.arch"] || null;
     return /* @__PURE__ */ React2.createElement(
       "div",
       {
@@ -8747,7 +8787,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         },
         agent.agentUid
       ), renderClassificationBadge(classification)),
-      /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, agent.labels && Object.keys(agent.labels).length > 0 ? Object.entries(agent.labels).map(([key, value]) => /* @__PURE__ */ React2.createElement(
+      /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } }, osLabel && /* @__PURE__ */ React2.createElement("span", { style: { background: "#EFF6FF", color: "#1E40AF", border: "1px solid #BFDBFE", padding: "3px 8px", borderRadius: 6, fontSize: 11 } }, "os: ", osLabel), archLabel && /* @__PURE__ */ React2.createElement("span", { style: { background: "#F0FDF4", color: "#166534", border: "1px solid #86EFAC", padding: "3px 8px", borderRadius: 6, fontSize: 11 } }, "arch: ", archLabel), agent.labels && Object.keys(agent.labels).length > 0 ? Object.entries(agent.labels).map(([key, value]) => /* @__PURE__ */ React2.createElement(
         "button",
         {
           key,
@@ -9377,6 +9417,8 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       mode: telemetryDrawerMode,
       metricsConfig: telemetrySettings.metrics,
       logsConfig: telemetrySettings.logs,
+      currentOrgId: selectedOrgId,
+      orgOptions,
       onMetricsChange: (next) => setTelemetrySettings((prev) => ({
         ...prev,
         metrics: next
@@ -9390,7 +9432,8 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         setTelemetryDrawerOpen(false);
       },
       onClose: () => setTelemetryDrawerOpen(false),
-      saving: telemetrySaving
+      saving: telemetrySaving,
+      canSave: isAdmin
     }
   ), showDetailsPanel && selectedAgent && /* @__PURE__ */ React2.createElement("div", { style: {
     position: "fixed",

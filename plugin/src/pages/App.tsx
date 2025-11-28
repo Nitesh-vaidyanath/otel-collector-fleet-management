@@ -649,6 +649,7 @@ export const App = () => {
   const [telemetryDrawerOpen, setTelemetryDrawerOpen] = useState(false);
   const [telemetryDrawerMode, setTelemetryDrawerMode] = useState<'metrics' | 'logs'>('metrics');
   const [telemetryDatasourceHints, setTelemetryDatasourceHints] = useState<{ metrics?: string; logs?: string }>({});
+  const [orgOptions, setOrgOptions] = useState<Array<{ id: number; name: string }>>([]);
   const [labelCache, setLabelCache] = useState<Map<string, Record<string, string>>>(new Map());
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
   const displayUserName = useMemo(() => {
@@ -722,7 +723,19 @@ export const App = () => {
     try {
       const response = await backendSrv.get('/telemetry-settings');
       const incoming = (response as any)?.settings ?? response;
-      setTelemetrySettings(normalizeTelemetrySettingsState(incoming));
+      const normalized = normalizeTelemetrySettingsState(incoming);
+      // Default org selection to current Grafana org if unset
+      setTelemetrySettings((prev) => ({
+        ...normalized,
+        metrics: {
+          ...normalized.metrics,
+          datasourceOrgId: normalized.metrics.datasourceOrgId ?? selectedOrgId ?? prev.metrics.datasourceOrgId ?? null,
+        },
+        logs: {
+          ...normalized.logs,
+          datasourceOrgId: normalized.logs.datasourceOrgId ?? selectedOrgId ?? prev.logs.datasourceOrgId ?? null,
+        },
+      }));
       if (incoming?.hints && typeof incoming.hints === 'object') {
         setTelemetryDatasourceHints(incoming.hints);
       }
@@ -771,6 +784,29 @@ export const App = () => {
     setTelemetryDrawerMode(mode);
     setTelemetryDrawerOpen(true);
   };
+
+  const loadOrgOptions = useCallback(async () => {
+    try {
+      const orgs = await rawBackendSrv.get('/api/orgs');
+      if (Array.isArray(orgs) && orgs.length > 0) {
+        const mapped = orgs
+          .filter((o: any) => typeof o.id === 'number')
+          .map((o: any) => ({ id: o.id, name: String(o.name || `Org ${o.id}`) }));
+        setOrgOptions((prev) => {
+          const ids = new Set(prev.map((p) => p.id));
+          const merged = [...prev];
+          mapped.forEach((m) => {
+            if (!ids.has(m.id)) {
+              merged.push(m);
+            }
+          });
+          return merged;
+        });
+      }
+    } catch (err) {
+      // Non-admins may not list orgs; keep existing options
+    }
+  }, []);
 
   const fetchBridges = async (baseCache?: Map<string, Record<string, string>>) => {
     try {
@@ -924,6 +960,9 @@ export const App = () => {
       const orgName = (org && org.name) ? String(org.name) : '';
       setGrafanaOrgName(orgName);
       setTenantHeaderValue(orgName);
+      if (org && typeof org.id === 'number') {
+        setOrgOptions([{ id: org.id, name: orgName }]);
+      }
     } catch (err) {
       console.error('Failed to load Grafana org context:', err);
     }
@@ -932,6 +971,7 @@ export const App = () => {
   useEffect(() => {
     const init = async () => {
       await loadGrafanaOrgContext();
+      await loadOrgOptions();
       await loadUserContext();
       await fetchAgents();
       await loadTelemetrySettings();
@@ -1200,6 +1240,8 @@ export const App = () => {
 
   const renderAgentRow = (agent: Agent) => {
     const classification = getAgentClassification(agent);
+    const osLabel = agent.labels?.['os'] || agent.labels?.['os.type'] || agent.labels?.['k8s.node.os'] || null;
+    const archLabel = agent.labels?.['arch'] || agent.labels?.['host.arch'] || agent.labels?.['k8s.node.arch'] || null;
     return (
       <div
         key={agent.id}
@@ -1242,6 +1284,16 @@ export const App = () => {
         </div>
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {osLabel && (
+            <span style={{ background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE', padding: '3px 8px', borderRadius: 6, fontSize: 11 }}>
+              os: {osLabel}
+            </span>
+          )}
+          {archLabel && (
+            <span style={{ background: '#F0FDF4', color: '#166534', border: '1px solid #86EFAC', padding: '3px 8px', borderRadius: 6, fontSize: 11 }}>
+              arch: {archLabel}
+            </span>
+          )}
           {agent.labels && Object.keys(agent.labels).length > 0 ? (
             Object.entries(agent.labels).map(([key, value]) => (
               <button
@@ -2185,6 +2237,8 @@ export const App = () => {
         mode={telemetryDrawerMode}
         metricsConfig={telemetrySettings.metrics}
         logsConfig={telemetrySettings.logs}
+        currentOrgId={selectedOrgId}
+        orgOptions={orgOptions}
         onMetricsChange={(next) =>
           setTelemetrySettings((prev) => ({
             ...prev,
@@ -2203,6 +2257,7 @@ export const App = () => {
         }}
         onClose={() => setTelemetryDrawerOpen(false)}
         saving={telemetrySaving}
+        canSave={isAdmin}
       />
 
       {/* Details Panel (Slide-in) */}

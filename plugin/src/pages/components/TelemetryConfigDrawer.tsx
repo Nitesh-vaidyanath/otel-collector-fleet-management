@@ -33,11 +33,14 @@ export type TelemetryConfigDrawerProps = {
   mode: 'metrics' | 'logs';
   metricsConfig: MetricsTelemetryConfig;
   logsConfig: LogsTelemetryConfig;
+  currentOrgId: number | null;
+  orgOptions: Array<{ id: number; name: string }>;
   onMetricsChange: (next: MetricsTelemetryConfig) => void;
   onLogsChange: (next: LogsTelemetryConfig) => void;
   onSave: (mode: 'metrics' | 'logs') => void;
   onClose: () => void;
   saving: boolean;
+  canSave: boolean;
 };
 
 export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
@@ -45,15 +48,20 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   mode,
   metricsConfig,
   logsConfig,
+  currentOrgId,
+  orgOptions,
   onMetricsChange,
   onLogsChange,
   onSave,
   onClose,
   saving,
+  canSave,
 }) => {
   const [datasources, setDatasources] = useState<Array<{ id: number; uid: string; name: string; type: string }>>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
+  const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const parseOrgId = (value: string): number | null => {
     const trimmed = value.trim();
     if (trimmed === '') {
@@ -95,7 +103,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
       setError(null);
       return;
     }
-    const orgId = mode === 'metrics' ? metricsConfig.datasourceOrgId : logsConfig.datasourceOrgId;
+    const orgId = mode === 'metrics' ? effectiveMetricsOrgId : effectiveLogsOrgId;
     const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
     let cancelled = false;
     const loadDatasources = async () => {
@@ -176,22 +184,28 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                 Select a Prometheus/Mimir datasource and adjust the default queries to match your labels. Placeholders like <code>$collector_uid</code>, <code>$pipeline</code>, and <code>$stage</code> are substituted at runtime.
               </div>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
-                Datasource org ID (optional)
-                <input
-                  type="number"
-                  min="1"
-                  value={metricsConfig.datasourceOrgId ?? ''}
+                Datasource org
+                <select
+                  value={effectiveMetricsOrgId ?? ''}
                   onChange={(event) =>
                     onMetricsChange({
                       ...metricsConfig,
                       datasourceOrgId: parseOrgId(event.target.value),
                     })
                   }
-                  placeholder="Defaults to current org"
                   style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
-                />
+                >
+                  <option value="">Current org{currentOrgId ? ` (#${currentOrgId})` : ''}</option>
+                  {orgOptions
+                    .filter((o) => o.id !== currentOrgId)
+                    .map((org) => (
+                      <option key={org.id} value={org.id}>
+                        {org.name || `Org ${org.id}`} (#{org.id})
+                      </option>
+                    ))}
+                </select>
                 <span style={{ fontSize: 11, color: '#6B7280' }}>
-                  Use this to list datasources from another Grafana org (requires your user to have access).
+                  Pick another Grafana org to discover datasources there (requires access).
                 </span>
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
@@ -275,20 +289,26 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                 Provide a Loki query template and adjust its labels to your environment. Supported placeholders: <code>$collector_uid</code>, <code>$collector_name</code>, <code>$org_name</code>.
               </div>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
-                Datasource org ID (optional)
-                <input
-                  type="number"
-                  min="1"
-                  value={logsConfig.datasourceOrgId ?? ''}
+                Datasource org
+                <select
+                  value={effectiveLogsOrgId ?? ''}
                   onChange={(event) =>
                     onLogsChange({
                       ...logsConfig,
                       datasourceOrgId: parseOrgId(event.target.value),
                     })
                   }
-                  placeholder="Defaults to current org"
                   style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
-                />
+                >
+                  <option value="">Current org{currentOrgId ? ` (#${currentOrgId})` : ''}</option>
+                  {orgOptions
+                    .filter((o) => o.id !== currentOrgId)
+                    .map((org) => (
+                      <option key={org.id} value={org.id}>
+                        {org.name || `Org ${org.id}`} (#{org.id})
+                      </option>
+                    ))}
+                </select>
                 <span style={{ fontSize: 11, color: '#6B7280' }}>
                   Set this when the Loki datasource you need lives in another Grafana org.
                 </span>
@@ -340,10 +360,10 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
           <button
             type="button"
             onClick={() => onSave(mode)}
-            disabled={saving}
-            style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: saving ? '#A5B4FC' : '#4F46E5', color: '#FFFFFF', cursor: saving ? 'not-allowed' : 'pointer' }}
+            disabled={saving || !canSave}
+            style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: saving || !canSave ? '#A5B4FC' : '#4F46E5', color: '#FFFFFF', cursor: saving || !canSave ? 'not-allowed' : 'pointer' }}
           >
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : canSave ? 'Save' : 'View only'}
           </button>
         </div>
       </div>
