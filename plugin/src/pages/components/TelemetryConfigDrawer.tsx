@@ -1,11 +1,11 @@
 import React from 'react';
-import { CodeEditor } from '@grafana/ui';
 import type { MetricsTelemetryConfig, LogsTelemetryConfig, StageQueryKey, StageQueryPair } from '../types';
 import { PipelineMetricKey } from '../../components/PipelineMetricsPanelView';
 import { STAGE_KEYS } from '../constants';
 import { buildDefaultStageQueries } from '../utils/telemetry';
 import { createBackendSrv } from '../utils/api';
 import { detectRuntimeMode, detectGrafanaTransport } from '../utils/runtime';
+import { PromQLQueryEditor } from './PromQLQueryEditor';
 
 const PROM_DATASOURCE_TYPES = new Set(['prometheus', 'mimir', 'grafana-mimir-datasource', 'thanos']);
 const LOKI_DATASOURCE_TYPES = new Set(['loki']);
@@ -285,25 +285,17 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               {(Object.keys(metricsConfig.queries) as PipelineMetricKey[]).map((key) => (
                 <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                   <div style={{ fontWeight: 600 }}>{key.toUpperCase()} query</div>
-                  <div style={{ border: '1px solid #CBD5F5', borderRadius: 6, overflow: 'hidden' }}>
-                    <CodeEditor
+                  <div style={{ position: 'relative', border: '1px solid #CBD5F5', borderRadius: 6, overflow: 'hidden', background: '#FFFFFF' }}>
+                    <PromQLQueryEditor
                       value={metricsConfig.queries[key] || ''}
-                      language="promql"
+                      onChange={(newValue) =>
+                        onMetricsChange({
+                          ...metricsConfig,
+                          queries: { ...metricsConfig.queries, [key]: newValue },
+                        })
+                      }
+                      placeholder="Enter PromQL query..."
                       height="200px"
-                      onBlur={(value) =>
-                        onMetricsChange({
-                          ...metricsConfig,
-                          queries: { ...metricsConfig.queries, [key]: value },
-                        })
-                      }
-                      onSave={(value) =>
-                        onMetricsChange({
-                          ...metricsConfig,
-                          queries: { ...metricsConfig.queries, [key]: value },
-                        })
-                      }
-                      showMiniMap={false}
-                      showLineNumbers={true}
                     />
                   </div>
                   {mode === 'metrics' && metricNames.length > 0 && (
