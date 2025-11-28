@@ -63,6 +63,8 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
+  const [metricNames, setMetricNames] = useState<string[]>([]);
+  const [labelKeys, setLabelKeys] = useState<string[]>([]);
   const parseOrgId = (value: string): number | null => {
     const trimmed = value.trim();
     if (trimmed === '') {
@@ -98,7 +100,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
     });
   };
 
-  useEffect(() => {
+  const loadDatasources = useCallback(async () => {
     if (!open) {
       setDatasources([]);
       setError(null);
@@ -135,6 +137,49 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
       cancelled = true;
     };
   }, [open, mode, metricsConfig.datasourceOrgId, logsConfig.datasourceOrgId]);
+
+  useEffect(() => {
+    loadDatasources();
+  }, [loadDatasources]);
+
+  const loadPromMetadata = useCallback(
+    async (dsUid: string | null, orgId: number | null) => {
+      if (!dsUid) {
+        setMetricNames([]);
+        setLabelKeys([]);
+        return;
+      }
+      try {
+        const ds = datasources.find((d) => d.uid === dsUid);
+        if (!ds) {
+          setMetricNames([]);
+          setLabelKeys([]);
+          return;
+        }
+        const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
+        const metricResp = await backendSrv.get<{ data?: string[]; status?: string }>(
+          `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
+          { headers }
+        );
+        const labelsResp = await backendSrv.get<{ data?: string[]; status?: string }>(
+          `/api/datasources/proxy/${ds.id}/api/v1/labels`,
+          { headers }
+        );
+        setMetricNames(Array.isArray(metricResp?.data) ? metricResp.data : []);
+        setLabelKeys(Array.isArray(labelsResp?.data) ? labelsResp.data : []);
+      } catch {
+        setMetricNames([]);
+        setLabelKeys([]);
+      }
+    },
+    [datasources]
+  );
+
+  useEffect(() => {
+    if (mode === 'metrics') {
+      loadPromMetadata(metricsConfig.datasourceUid, effectiveMetricsOrgId);
+    }
+  }, [mode, metricsConfig.datasourceUid, effectiveMetricsOrgId, loadPromMetadata]);
 
   if (!open) {
     return null;
@@ -245,6 +290,52 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                     }
                     style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
                   />
+                  {mode === 'metrics' && metricNames.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, color: '#475569' }}>
+                      {metricNames.slice(0, 12).map((name) => (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() =>
+                            onMetricsChange({
+                              ...metricsConfig,
+                              queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${name}` },
+                            })
+                          }
+                          style={{
+                            border: '1px solid #CBD5F5',
+                            borderRadius: 4,
+                            padding: '2px 6px',
+                            background: '#F8FAFC',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                      {labelKeys.slice(0, 8).map((lbl) => (
+                        <button
+                          key={lbl}
+                          type="button"
+                          onClick={() =>
+                            onMetricsChange({
+                              ...metricsConfig,
+                              queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${lbl}=\\\"\\\"` },
+                            })
+                          }
+                          style={{
+                            border: '1px solid #E5E7EB',
+                            borderRadius: 4,
+                            padding: '2px 6px',
+                            background: '#FFFFFF',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
               <div style={{ fontSize: 12, fontWeight: 600, color: '#111827', marginTop: 4 }}>Per-stage throughput templates</div>

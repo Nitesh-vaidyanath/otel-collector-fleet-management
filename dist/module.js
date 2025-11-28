@@ -263,7 +263,7 @@ var createBackendSrv = (isRunningInGrafana6, grafanaTransport6) => ({
 });
 
 // components/PipelineMetricsPanelView.tsx
-var { useCallback, useEffect, useMemo, useRef, useState } = React;
+var { useCallback: useCallback2, useEffect, useMemo, useRef, useState } = React;
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var runtimeMode = detectRuntimeMode();
 var isRunningInGrafana = runtimeMode === "grafana";
@@ -427,14 +427,14 @@ var PipelineMetricsPanelView = ({
       onDatasourceChange?.(match);
     }
   }, [datasources, defaultDatasourceUid, onDatasourceChange, selectedDatasource]);
-  const updateQuery = useCallback((key, value) => {
+  const updateQuery = useCallback2((key, value) => {
     setQueries((prev) => {
       const next = { ...prev, [key]: value };
       onQueriesChange?.(next);
       return next;
     });
   }, [onQueriesChange]);
-  const runQueries = useCallback(async () => {
+  const runQueries = useCallback2(async () => {
     if (!selectedDatasource) {
       setError("Select a datasource before running queries.");
       return;
@@ -474,7 +474,7 @@ var PipelineMetricsPanelView = ({
       runQueries();
     }
   }, [readOnly, selectedDatasource, runQueries]);
-  const handleDatasourceChange = useCallback((event) => {
+  const handleDatasourceChange = useCallback2((event) => {
     const id = Number(event.target.value);
     const match = datasources.find((item) => item.id === id) || null;
     setSelectedDatasource(match);
@@ -4752,7 +4752,6 @@ function MonitoringSection({
 
 // pages/components/TelemetryConfigDrawer.tsx
 var React2 = __REACT__.default || __REACT__;
-
 var PROM_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var LOKI_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["loki"]);
 var STAGE_SUMMARY2 = {
@@ -4787,10 +4786,10 @@ var TelemetryConfigDrawer = ({
   const [datasources, setDatasources] = useState2([]);
   const [loading, setLoading] = useState2(false);
   const [error, setError] = useState2(null);
-  const [metricNames, setMetricNames] = useState2([]);
-  const [labelKeys, setLabelKeys] = useState2([]);
   const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
+  const [metricNames, setMetricNames] = useState2([]);
+  const [labelKeys, setLabelKeys] = useState2([]);
   const parseOrgId = (value) => {
     const trimmed = value.trim();
     if (trimmed === "") {
@@ -4823,7 +4822,7 @@ var TelemetryConfigDrawer = ({
       }
     });
   };
-  useEffect2(() => {
+  const loadDatasources = useCallback(async () => {
     if (!open) {
       setDatasources([]);
       setError(null);
@@ -4832,7 +4831,7 @@ var TelemetryConfigDrawer = ({
     const orgId = mode === "metrics" ? effectiveMetricsOrgId : effectiveLogsOrgId;
     const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
     let cancelled = false;
-    const loadDatasources = async () => {
+    const loadDatasources2 = async () => {
       setLoading(true);
       try {
         const response = await backendSrv4.get("/api/datasources", { headers });
@@ -4842,8 +4841,6 @@ var TelemetryConfigDrawer = ({
         const filtered = Array.isArray(response) ? response.filter((ds) => mode === "metrics" ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)) : [];
         setDatasources(filtered);
         setError(filtered.length === 0 ? "No compatible data sources were found." : null);
-        setMetricNames([]);
-        setLabelKeys([]);
       } catch (err) {
         if (!cancelled) {
           console.error("Failed to load data sources", err);
@@ -4855,52 +4852,54 @@ var TelemetryConfigDrawer = ({
         }
       }
     };
-    loadDatasources();
+    loadDatasources2();
     return () => {
       cancelled = true;
     };
   }, [open, mode, metricsConfig.datasourceOrgId, logsConfig.datasourceOrgId]);
-  if (!open) {
-    return null;
-  }
-  const loadPromSuggestions = async (dsUid, orgId) => {
-    if (!dsUid) {
-      setMetricNames([]);
-      setLabelKeys([]);
-      return;
-    }
-    try {
-      const ds = datasources.find((d) => d.uid === dsUid);
-      if (!ds) {
+  useEffect2(() => {
+    loadDatasources();
+  }, [loadDatasources]);
+  const loadPromMetadata = useCallback(
+    async (dsUid, orgId) => {
+      if (!dsUid) {
         setMetricNames([]);
         setLabelKeys([]);
         return;
       }
-      const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
-      const metricResp = await backendSrv4.get(
-        `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
-        { headers }
-      );
-      const labelsResp = await backendSrv4.get(
-        `/api/datasources/proxy/${ds.id}/api/v1/labels`,
-        { headers }
-      );
-      if (Array.isArray(metricResp?.data)) {
-        setMetricNames(metricResp.data);
+      try {
+        const ds = datasources.find((d) => d.uid === dsUid);
+        if (!ds) {
+          setMetricNames([]);
+          setLabelKeys([]);
+          return;
+        }
+        const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
+        const metricResp = await backendSrv4.get(
+          `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
+          { headers }
+        );
+        const labelsResp = await backendSrv4.get(
+          `/api/datasources/proxy/${ds.id}/api/v1/labels`,
+          { headers }
+        );
+        setMetricNames(Array.isArray(metricResp?.data) ? metricResp.data : []);
+        setLabelKeys(Array.isArray(labelsResp?.data) ? labelsResp.data : []);
+      } catch {
+        setMetricNames([]);
+        setLabelKeys([]);
       }
-      if (Array.isArray(labelsResp?.data)) {
-        setLabelKeys(labelsResp.data);
-      }
-    } catch (err) {
-    }
-  };
+    },
+    [datasources]
+  );
   useEffect2(() => {
     if (mode === "metrics") {
-      loadPromSuggestions(metricsConfig.datasourceUid, effectiveMetricsOrgId);
-    } else {
-      loadPromSuggestions(logsConfig.datasourceUid, effectiveLogsOrgId);
+      loadPromMetadata(metricsConfig.datasourceUid, effectiveMetricsOrgId);
     }
-  }, [mode, metricsConfig.datasourceUid, logsConfig.datasourceUid, effectiveMetricsOrgId, effectiveLogsOrgId, datasources]);
+  }, [mode, metricsConfig.datasourceUid, effectiveMetricsOrgId, loadPromMetadata]);
+  if (!open) {
+    return null;
+  }
   return /* @__PURE__ */ React2.createElement(
     "div",
     {
@@ -4969,23 +4968,53 @@ var TelemetryConfigDrawer = ({
         /* @__PURE__ */ React2.createElement("option", { value: "" }, "Select datasource"),
         datasources.map((ds) => /* @__PURE__ */ React2.createElement("option", { key: ds.uid, value: ds.uid }, ds.name, " (", ds.type, ")"))
       )), Object.keys(metricsConfig.queries).map((key) => /* @__PURE__ */ React2.createElement("div", { key, style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("div", null, key.toUpperCase(), " query"), /* @__PURE__ */ React2.createElement(
-        CodeEditor,
+        "textarea",
         {
-          language: "promql",
-          height: "120px",
           value: metricsConfig.queries[key],
-          onBlur: (value) => onMetricsChange({
+          rows: 5,
+          onChange: (event) => onMetricsChange({
             ...metricsConfig,
-            queries: { ...metricsConfig.queries, [key]: value || "" }
+            queries: { ...metricsConfig.queries, [key]: event.target.value }
           }),
-          onSave: (value) => onMetricsChange({
-            ...metricsConfig,
-            queries: { ...metricsConfig.queries, [key]: value || "" }
-          }),
-          showMiniMap: false,
-          options: { wordWrap: "on" }
+          style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
         }
-      ))), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827", marginTop: 4 } }, "Per-stage throughput templates"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569", lineHeight: 1.5 } }, "These queries power the inbound/outbound chips for each receiver, processor, and exporter. Use placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " to interpolate the active component names."), STAGE_KEYS.map((key) => /* @__PURE__ */ React2.createElement("div", { key: `stage-query-${key}`, style: { border: "1px solid #E5E7EB", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827" } }, STAGE_SUMMARY2[key].title), /* @__PURE__ */ React2.createElement(
+      ), mode === "metrics" && metricNames.length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11, color: "#475569" } }, metricNames.slice(0, 12).map((name) => /* @__PURE__ */ React2.createElement(
+        "button",
+        {
+          key: name,
+          type: "button",
+          onClick: () => onMetricsChange({
+            ...metricsConfig,
+            queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${name}` }
+          }),
+          style: {
+            border: "1px solid #CBD5F5",
+            borderRadius: 4,
+            padding: "2px 6px",
+            background: "#F8FAFC",
+            cursor: "pointer"
+          }
+        },
+        name
+      )), labelKeys.slice(0, 8).map((lbl) => /* @__PURE__ */ React2.createElement(
+        "button",
+        {
+          key: lbl,
+          type: "button",
+          onClick: () => onMetricsChange({
+            ...metricsConfig,
+            queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${lbl}=\\"\\"` }
+          }),
+          style: {
+            border: "1px solid #E5E7EB",
+            borderRadius: 4,
+            padding: "2px 6px",
+            background: "#FFFFFF",
+            cursor: "pointer"
+          }
+        },
+        lbl
+      ))))), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827", marginTop: 4 } }, "Per-stage throughput templates"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569", lineHeight: 1.5 } }, "These queries power the inbound/outbound chips for each receiver, processor, and exporter. Use placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " to interpolate the active component names."), STAGE_KEYS.map((key) => /* @__PURE__ */ React2.createElement("div", { key: `stage-query-${key}`, style: { border: "1px solid #E5E7EB", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827" } }, STAGE_SUMMARY2[key].title), /* @__PURE__ */ React2.createElement(
         "button",
         {
           type: "button",
