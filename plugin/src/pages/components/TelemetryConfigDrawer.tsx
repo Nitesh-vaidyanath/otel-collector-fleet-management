@@ -27,7 +27,7 @@ const isRunningInGrafana = runtimeMode === 'grafana';
 const grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
 const backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
 
-const { useState, useEffect } = React;
+const { useState, useEffect, useCallback, useMemo } = React;
 
 export type TelemetryConfigDrawerProps = {
   open: boolean;
