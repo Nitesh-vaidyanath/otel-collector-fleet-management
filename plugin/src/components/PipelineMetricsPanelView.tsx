@@ -90,6 +90,31 @@ const extractPrometheusValue = (response: any): number | null => {
   return null;
 };
 
+const extractPrometheusTimeSeries = (response: any): Array<{ time: number; value: number }> => {
+  if (!response || response.status !== 'success') {
+    return [];
+  }
+  const data = response.data;
+  if (!data || data.resultType !== 'matrix' || !Array.isArray(data.result)) {
+    return [];
+  }
+  const series: Array<{ time: number; value: number }> = [];
+  for (const result of data.result) {
+    if (result.values && Array.isArray(result.values)) {
+      for (const [timestamp, value] of result.values) {
+        const time = parseFloat(timestamp);
+        const val = parseFloat(value);
+        if (Number.isFinite(time) && Number.isFinite(val)) {
+          series.push({ time, value: val });
+        }
+      }
+    }
+  }
+  // Sort by time
+  series.sort((a, b) => a.time - b.time);
+  return series;
+};
+
 const formatValue = (key: PipelineMetricKey, value: number | null): string => {
   if (value === null || Number.isNaN(value)) {
     return '—';
@@ -105,6 +130,137 @@ const formatValue = (key: PipelineMetricKey, value: number | null): string => {
     default:
       return value.toFixed(2);
   }
+};
+
+// Simple SVG-based time series chart component
+const TimeSeriesChart: React.FC<{
+  data: Array<{ time: number; value: number }>;
+  label: string;
+  color?: string;
+  height?: number;
+}> = ({ data, label, color = '#2563EB', height = 120 }) => {
+  if (!data || data.length === 0) {
+    return (
+      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9CA3AF', fontSize: 12 }}>
+        No data available
+      </div>
+    );
+  }
+
+  const padding = { top: 20, right: 20, bottom: 30, left: 50 };
+  const width = 400;
+  const chartHeight = height - padding.top - padding.bottom;
+  const chartWidth = width - padding.left - padding.right;
+
+  const minTime = Math.min(...data.map(d => d.time));
+  const maxTime = Math.max(...data.map(d => d.time));
+  const minValue = Math.min(...data.map(d => d.value));
+  const maxValue = Math.max(...data.map(d => d.value));
+  const valueRange = maxValue - minValue || 1;
+
+  const scaleX = (time: number) => ((time - minTime) / (maxTime - minTime || 1)) * chartWidth;
+  const scaleY = (value: number) => chartHeight - ((value - minValue) / valueRange) * chartHeight;
+
+  const points = data.map(d => `${scaleX(d.time) + padding.left},${scaleY(d.value) + padding.top}`).join(' ');
+
+  const formatTime = (timestamp: number) => {
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleTimeString();
+  };
+
+  const formatValue = (val: number) => {
+    if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
+    if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
+    return val.toFixed(1);
+  };
+
+  return (
+    <div style={{ width: '100%', height, background: '#FFFFFF', borderRadius: 6, border: '1px solid #E2E8F0', padding: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: '#1F2937', marginBottom: 8 }}>{label}</div>
+      <svg width={width} height={height} style={{ display: 'block' }}>
+        {/* Grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+          const y = padding.top + ratio * chartHeight;
+          return (
+            <line
+              key={`grid-${ratio}`}
+              x1={padding.left}
+              y1={y}
+              x2={width - padding.right}
+              y2={y}
+              stroke="#E5E7EB"
+              strokeWidth={1}
+            />
+          );
+        })}
+        {/* Y-axis labels */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+          const value = minValue + ratio * valueRange;
+          const y = padding.top + (1 - ratio) * chartHeight;
+          return (
+            <text
+              key={`y-label-${ratio}`}
+              x={padding.left - 5}
+              y={y + 4}
+              textAnchor="end"
+              fontSize="10"
+              fill="#6B7280"
+            >
+              {formatValue(value)}
+            </text>
+          );
+        })}
+        {/* Chart line */}
+        <polyline
+          points={points}
+          fill="none"
+          stroke={color}
+          strokeWidth={2}
+        />
+        {/* Data points */}
+        {data.map((d, idx) => (
+          <circle
+            key={idx}
+            cx={scaleX(d.time) + padding.left}
+            cy={scaleY(d.value) + padding.top}
+            r={2}
+            fill={color}
+          />
+        ))}
+        {/* X-axis */}
+        <line
+          x1={padding.left}
+          y1={height - padding.bottom}
+          x2={width - padding.right}
+          y2={height - padding.bottom}
+          stroke="#9CA3AF"
+          strokeWidth={1}
+        />
+        {/* Time labels */}
+        {data.length > 0 && (
+          <>
+            <text
+              x={padding.left}
+              y={height - 5}
+              fontSize="10"
+              fill="#6B7280"
+            >
+              {formatTime(data[0].time)}
+            </text>
+            <text
+              x={width - padding.right}
+              y={height - 5}
+              fontSize="10"
+              fill="#6B7280"
+              textAnchor="end"
+            >
+              {formatTime(data[data.length - 1].time)}
+            </text>
+          </>
+        )}
+      </svg>
+    </div>
+  );
 };
 
 export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> = ({
@@ -131,6 +287,8 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
   const [error, setError] = useState<string | null>(null);
   const [lastRunAt, setLastRunAt] = useState<number | null>(null);
   const [values, setValues] = useState<Record<PipelineMetricKey, string>>({ cpu: '—', memory: '—', inbound: '—', outbound: '—' });
+  const [timeSeriesData, setTimeSeriesData] = useState<Record<PipelineMetricKey, any[]>>({ cpu: [], memory: [], inbound: [], outbound: [] });
+  const [viewMode, setViewMode] = useState<'values' | 'charts'>('charts');
   const autoRunRef = useRef<boolean>(false);
   const orgHeaders = useMemo(
     () => (datasourceOrgId ? { 'X-Grafana-Org-Id': String(datasourceOrgId) } : undefined),
@@ -142,6 +300,13 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
       setQueries(defaultQueries);
     }
   }, [defaultQueries]);
+
+  // Clear selected datasource when org changes to force refresh
+  useEffect(() => {
+    if (datasourceOrgId !== null) {
+      setSelectedDatasource(null);
+    }
+  }, [datasourceOrgId]);
 
   useEffect(() => {
     let mounted = true;
@@ -158,19 +323,20 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
           : [];
         setDatasources(available);
         setDatasourceError(available.length === 0 ? 'No Prometheus-compatible data sources were found.' : null);
-        if (!selectedDatasource) {
-          if (defaultDatasourceUid) {
-            const match = available.find((ds) => ds.uid === defaultDatasourceUid);
-            if (match) {
-              setSelectedDatasource(match);
-              onDatasourceChange?.(match);
-              return;
-            }
+        
+        // Always try to select default datasource when org changes or datasource list loads
+        if (defaultDatasourceUid) {
+          const match = available.find((ds) => ds.uid === defaultDatasourceUid);
+          if (match) {
+            setSelectedDatasource(match);
+            onDatasourceChange?.(match);
+            return;
           }
-          if (available.length > 0 && !readOnly) {
-            setSelectedDatasource(available[0]);
-            onDatasourceChange?.(available[0]);
-          }
+        }
+        // If no default and no selection, select first available
+        if (!selectedDatasource && available.length > 0 && !readOnly) {
+          setSelectedDatasource(available[0]);
+          onDatasourceChange?.(available[0]);
         }
       } catch (err: any) {
         if (!mounted) {
@@ -184,7 +350,7 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     return () => {
       mounted = false;
     };
-  }, [defaultDatasourceUid, onDatasourceChange, readOnly, selectedDatasource, orgHeaders]);
+  }, [defaultDatasourceUid, onDatasourceChange, readOnly, orgHeaders, datasourceOrgId]);
 
   useEffect(() => {
     if (!defaultDatasourceUid || !datasources || datasources.length === 0) {
@@ -217,23 +383,49 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
     setError(null);
     try {
       const now = Math.floor(Date.now() / 1000);
+      const start = now - 3600; // 1 hour range for time series
       const results: Record<PipelineMetricKey, string> = { cpu: '—', memory: '—', inbound: '—', outbound: '—' };
+      const timeSeries: Record<PipelineMetricKey, any[]> = { cpu: [], memory: [], inbound: [], outbound: [] };
+      
       for (const { key } of METRIC_LABELS) {
         const query = queries[key];
         if (!query || query.trim() === '') {
           results[key] = '—';
+          timeSeries[key] = [];
           continue;
         }
-        const response = await rawBackendSrv.datasourceRequest({
-          method: 'GET',
-          url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query`,
-          params: { query, time: now },
-          headers: orgHeaders,
-        });
-        const value = extractPrometheusValue(response?.data);
-        results[key] = formatValue(key, value);
+        
+        // Run instant query for current value
+        try {
+          const instantResponse = await rawBackendSrv.datasourceRequest({
+            method: 'GET',
+            url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query`,
+            params: { query, time: now },
+            headers: orgHeaders,
+          });
+          const value = extractPrometheusValue(instantResponse?.data);
+          results[key] = formatValue(key, value);
+        } catch (err) {
+          console.warn(`Instant query failed for ${key}:`, err);
+        }
+        
+        // Run range query for time series chart
+        try {
+          const rangeResponse = await rawBackendSrv.datasourceRequest({
+            method: 'GET',
+            url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query_range`,
+            params: { query, start, end: now, step: '60' },
+            headers: orgHeaders,
+          });
+          const seriesData = extractPrometheusTimeSeries(rangeResponse?.data);
+          timeSeries[key] = seriesData;
+        } catch (err) {
+          console.warn(`Range query failed for ${key}:`, err);
+          timeSeries[key] = [];
+        }
       }
       setValues(results);
+      setTimeSeriesData(timeSeries);
       setLastRunAt(Date.now());
     } catch (err: any) {
       console.error('Failed to execute Prometheus queries', err);
@@ -364,25 +556,73 @@ export const PipelineMetricsPanelView: React.FC<PipelineMetricsPanelViewProps> =
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-              {METRIC_LABELS.map(({ key, label }) => (
-                <div
-                  key={key}
-                  style={{
-                    padding: 12,
-                    borderRadius: 6,
-                    background: '#FFFFFF',
-                    border: '1px solid #E2E8F0',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                  }}
-                >
-                  <div style={{ fontSize: 11, color: '#64748B' }}>{label}</div>
-                  <div style={{ fontSize: 18, fontWeight: 600, color: '#0F172A' }}>{values[key]}</div>
-                </div>
-              ))}
+            {/* View mode toggle */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: '#64748B' }}>View:</span>
+              <button
+                type="button"
+                onClick={() => setViewMode('values')}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: 4,
+                  border: '1px solid #CBD5F5',
+                  background: viewMode === 'values' ? '#2563EB' : '#FFFFFF',
+                  color: viewMode === 'values' ? '#FFFFFF' : '#1F2937',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                Values
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('charts')}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: 4,
+                  border: '1px solid #CBD5F5',
+                  background: viewMode === 'charts' ? '#2563EB' : '#FFFFFF',
+                  color: viewMode === 'charts' ? '#FFFFFF' : '#1F2937',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                Charts
+              </button>
             </div>
+
+            {viewMode === 'values' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+                {METRIC_LABELS.map(({ key, label }) => (
+                  <div
+                    key={key}
+                    style={{
+                      padding: 12,
+                      borderRadius: 6,
+                      background: '#FFFFFF',
+                      border: '1px solid #E2E8F0',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: '#64748B' }}>{label}</div>
+                    <div style={{ fontSize: 18, fontWeight: 600, color: '#0F172A' }}>{values[key]}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 16 }}>
+                {METRIC_LABELS.map(({ key, label }) => (
+                  <TimeSeriesChart
+                    key={key}
+                    data={timeSeriesData[key] || []}
+                    label={label}
+                    color={key === 'cpu' ? '#EF4444' : key === 'memory' ? '#3B82F6' : key === 'inbound' ? '#10B981' : '#F59E0B'}
+                  />
+                ))}
+              </div>
+            )}
 
             <div style={{ fontSize: 11, color: '#64748B', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <span>Last updated: {lastRunAt ? new Date(lastRunAt).toLocaleString() : 'Not run yet'}</span>
