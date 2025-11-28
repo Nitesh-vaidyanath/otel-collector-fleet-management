@@ -4,16 +4,16 @@ import type { StageMetricTemplates, StageQueryPair, StageQueryKey, FleetTelemetr
 
 export const buildDefaultStageQueries = (): StageMetricTemplates => ({
   receivers: {
-    inbound: 'sum(rate(otelcol_receiver_accepted_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))',
-    outbound: 'sum(rate(otelcol_receiver_failed_log_records_total{service_instance_id="$collector_uid", receiver="$stage", pipeline="$pipeline"}[5m]))',
+    inbound: 'sum(rate(otelcol_receiver_accepted_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", receiver="$stage", pipeline="$pipeline"}[5m]))',
+    outbound: 'sum(rate(otelcol_receiver_failed_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", receiver="$stage", pipeline="$pipeline"}[5m]))',
   },
   processors: {
-    inbound: 'sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))',
-    outbound: 'sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pipeline="$pipeline", processor="$stage"}[5m]))',
+    inbound: 'sum(rate(otelcol_processor_incoming_items_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", processor="$stage"}[5m]))',
+    outbound: 'sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", processor="$stage"}[5m]))',
   },
   exporters: {
-    inbound: 'sum(rate(otelcol_exporter_send_failed_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m])) + sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))',
-    outbound: 'sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pipeline="$pipeline", exporter="$stage"}[5m]))',
+    inbound: 'sum(rate(otelcol_exporter_send_failed_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", exporter="$stage"}[5m])) + sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", exporter="$stage"}[5m]))',
+    outbound: 'sum(rate(otelcol_exporter_sent_log_records_total{service_instance_id="$collector_uid", pod=~"$pod", pipeline="$pipeline", exporter="$stage"}[5m]))',
   },
 });
 

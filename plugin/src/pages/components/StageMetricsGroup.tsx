@@ -32,10 +32,13 @@ export const StageMetricsGroup: React.FC<StageMetricsGroupProps> = ({ kind, stag
       return '';
     }
     const resolvedCollector = agentUid && agentUid.trim() !== '' ? escapeSelectorValue(agentUid) : '$collector_uid';
+    const resolvedPod = agentUid && agentUid.trim() !== '' ? escapeSelectorValue(agentUid) : '$pod';
     const resolvedPipeline = pipelineType && pipelineType.trim() !== '' ? escapeSelectorValue(pipelineType) : '$pipeline';
     const resolvedStage = stageName && stageName.trim() !== '' ? escapeSelectorValue(stageName) : '$stage';
     return rawQuery
       .replace(/\$collector_uid/g, resolvedCollector)
+      .replace(/\$collector_pod/g, resolvedPod)
+      .replace(/\$pod/g, resolvedPod)
       .replace(/\$pipeline/g, resolvedPipeline)
       .replace(/\$stage/g, resolvedStage);
   }, [agentUid, pipelineType]);

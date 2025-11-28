@@ -1,4 +1,5 @@
 import React from 'react';
+import { QueryField } from '@grafana/ui';
 import type { MetricsTelemetryConfig, LogsTelemetryConfig, StageQueryKey, StageQueryPair } from '../types';
 import { PipelineMetricKey } from '../../components/PipelineMetricsPanelView';
 import { STAGE_KEYS } from '../constants';
@@ -60,6 +61,8 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   const [datasources, setDatasources] = useState<Array<{ id: number; uid: string; name: string; type: string }>>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [metricNames, setMetricNames] = useState<string[]>([]);
+  const [labelKeys, setLabelKeys] = useState<string[]>([]);
   const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
   const parseOrgId = (value: string): number | null => {
@@ -118,6 +121,8 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
           : [];
         setDatasources(filtered);
         setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
+        setMetricNames([]);
+        setLabelKeys([]);
       } catch (err: any) {
         if (!cancelled) {
           console.error('Failed to load data sources', err);
@@ -138,6 +143,58 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   if (!open) {
     return null;
   }
+
+  const loadPromSuggestions = async (dsUid: string | null, orgId: number | null) => {
+    if (!dsUid) {
+      setMetricNames([]);
+      setLabelKeys([]);
+      return;
+    }
+    try {
+      const ds = datasources.find((d) => d.uid === dsUid);
+      if (!ds) {
+        setMetricNames([]);
+        setLabelKeys([]);
+        return;
+      }
+      const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
+      const metricResp = await backendSrv.get<{ status: string; data: string[] }>(
+        `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
+        { headers }
+      );
+      const labelsResp = await backendSrv.get<{ status: string; data: string[] }>(
+        `/api/datasources/proxy/${ds.id}/api/v1/labels`,
+        { headers }
+      );
+      if (Array.isArray(metricResp?.data)) {
+        setMetricNames(metricResp.data);
+      }
+      if (Array.isArray(labelsResp?.data)) {
+        setLabelKeys(labelsResp.data);
+      }
+    } catch (err) {
+      // best-effort; ignore failures
+    }
+  };
+
+  useEffect(() => {
+    if (mode === 'metrics') {
+      loadPromSuggestions(metricsConfig.datasourceUid, effectiveMetricsOrgId);
+    } else {
+      loadPromSuggestions(logsConfig.datasourceUid, effectiveLogsOrgId);
+    }
+  }, [mode, metricsConfig.datasourceUid, logsConfig.datasourceUid, effectiveMetricsOrgId, effectiveLogsOrgId, datasources]);
+
+  const promTypeahead = async () => {
+    const metrics = metricNames.map((m) => ({ label: m, value: m }));
+    const labels = labelKeys.map((l) => ({ label: `${l}=`, value: `${l}=` }));
+    return {
+      suggestions: [
+        { label: 'Metrics', items: metrics },
+        { label: 'Labels', items: labels },
+      ],
+    } as any;
+  };
 
   return (
     <div
@@ -191,6 +248,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                     onMetricsChange({
                       ...metricsConfig,
                       datasourceOrgId: parseOrgId(event.target.value),
+                      datasourceUid: null, // reset selection when org changes
                     })
                   }
                   style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
@@ -230,20 +288,21 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                 </select>
               </label>
               {(Object.keys(metricsConfig.queries) as PipelineMetricKey[]).map((key) => (
-                <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
-                  {key.toUpperCase()} query
-                  <textarea
-                    value={metricsConfig.queries[key]}
-                    rows={5}
-                    onChange={(event) =>
+                <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
+                  <div>{key.toUpperCase()} query</div>
+                  <QueryField
+                    query={metricsConfig.queries[key]}
+                    onChange={(value: string) =>
                       onMetricsChange({
                         ...metricsConfig,
-                        queries: { ...metricsConfig.queries, [key]: event.target.value },
+                        queries: { ...metricsConfig.queries, [key]: value },
                       })
                     }
-                    style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
+                    onTypeahead={promTypeahead}
+                    placeholder="Enter PromQL query"
+                    portalOrigin="telemetry-config"
                   />
-                </label>
+                </div>
               ))}
               <div style={{ fontSize: 12, fontWeight: 600, color: '#111827', marginTop: 4 }}>Per-stage throughput templates</div>
               <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.5 }}>
@@ -296,6 +355,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                     onLogsChange({
                       ...logsConfig,
                       datasourceOrgId: parseOrgId(event.target.value),
+                      datasourceUid: null, // reset selection when org changes
                     })
                   }
                   style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
