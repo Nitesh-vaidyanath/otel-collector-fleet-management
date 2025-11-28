@@ -1,5 +1,5 @@
 import React from 'react';
-// Using plain textarea for PromQL input to avoid runtime issues with embedded editors
+import { CodeEditor } from '@grafana/ui';
 import type { MetricsTelemetryConfig, LogsTelemetryConfig, StageQueryKey, StageQueryPair } from '../types';
 import { PipelineMetricKey } from '../../components/PipelineMetricsPanelView';
 import { STAGE_KEYS } from '../constants';
@@ -108,35 +108,23 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
     }
     const orgId = mode === 'metrics' ? effectiveMetricsOrgId : effectiveLogsOrgId;
     const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
-    let cancelled = false;
-    const loadDatasources = async () => {
-      setLoading(true);
-      try {
-        const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources', { headers });
-        if (cancelled) {
-          return;
-        }
-        const filtered = Array.isArray(response)
-          ? response.filter((ds) => (mode === 'metrics' ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)))
-          : [];
-        setDatasources(filtered);
-        setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
-      } catch (err: any) {
-        if (!cancelled) {
-          console.error('Failed to load data sources', err);
-          setError(err?.message || 'Failed to load data sources.');
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-    loadDatasources();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, mode, metricsConfig.datasourceOrgId, logsConfig.datasourceOrgId]);
+    setLoading(true);
+    try {
+      console.log(`DEBUG: Loading datasources for org ID: ${orgId}, mode: ${mode}, headers:`, headers);
+      const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources', { headers });
+      const filtered = Array.isArray(response)
+        ? response.filter((ds) => (mode === 'metrics' ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)))
+        : [];
+      console.log(`DEBUG: Loaded ${filtered.length} datasources for org ${orgId}`);
+      setDatasources(filtered);
+      setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
+    } catch (err: any) {
+      console.error('Failed to load data sources', err);
+      setError(err?.message || 'Failed to load data sources.');
+    } finally {
+      setLoading(false);
+    }
+  }, [open, mode, effectiveMetricsOrgId, effectiveLogsOrgId]);
 
   useEffect(() => {
     loadDatasources();
@@ -233,13 +221,15 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                 Datasource org
                 <select
                   value={effectiveMetricsOrgId ?? ''}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const newOrgId = parseOrgId(event.target.value);
+                    console.log(`DEBUG: Org ID changed to ${newOrgId}, resetting datasource`);
                     onMetricsChange({
                       ...metricsConfig,
-                      datasourceOrgId: parseOrgId(event.target.value),
+                      datasourceOrgId: newOrgId,
                       datasourceUid: null, // reset selection when org changes
-                    })
-                  }
+                    });
+                  }}
                   style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
                 >
                   <option value="">Current org{currentOrgId ? ` (#${currentOrgId})` : ''}</option>
@@ -257,39 +247,65 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Data source
-                <select
-                  value={metricsConfig.datasourceUid ?? ''}
-                  onChange={(event) =>
-                    onMetricsChange({
-                      ...metricsConfig,
-                      datasourceUid: event.target.value || null,
-                    })
-                  }
-                  disabled={loading || datasources.length === 0}
-                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
-                >
-                  <option value="">Select datasource</option>
-                  {datasources.map((ds) => (
-                    <option key={ds.uid} value={ds.uid}>
-                      {ds.name} ({ds.type})
-                    </option>
-                  ))}
-                </select>
+                {loading ? (
+                  <div style={{ padding: '6px 10px', fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 6 }}>
+                    Loading datasources...
+                  </div>
+                ) : error ? (
+                  <div style={{ padding: '6px 10px', fontSize: 12, color: '#DC2626', background: '#FEE2E2', borderRadius: 6 }}>
+                    {error}
+                  </div>
+                ) : (
+                  <select
+                    value={metricsConfig.datasourceUid ?? ''}
+                    onChange={(event) => {
+                      console.log(`DEBUG: Datasource changed to ${event.target.value}`);
+                      onMetricsChange({
+                        ...metricsConfig,
+                        datasourceUid: event.target.value || null,
+                      });
+                    }}
+                    disabled={datasources.length === 0}
+                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #CBD5F5', fontSize: 12 }}
+                  >
+                    <option value="">Select datasource ({datasources.length} available)</option>
+                    {datasources.map((ds) => (
+                      <option key={ds.uid} value={ds.uid}>
+                        {ds.name} ({ds.type})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {effectiveMetricsOrgId && (
+                  <span style={{ fontSize: 11, color: '#6B7280' }}>
+                    Loading datasources from org {effectiveMetricsOrgId}
+                  </span>
+                )}
               </label>
               {(Object.keys(metricsConfig.queries) as PipelineMetricKey[]).map((key) => (
                 <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
-                  <div>{key.toUpperCase()} query</div>
-                  <textarea
-                    value={metricsConfig.queries[key]}
-                    rows={5}
-                    onChange={(event) =>
-                      onMetricsChange({
-                        ...metricsConfig,
-                        queries: { ...metricsConfig.queries, [key]: event.target.value },
-                      })
-                    }
-                    style={{ borderRadius: 6, border: '1px solid #CBD5F5', fontFamily: 'monospace', fontSize: 12, padding: 8 }}
-                  />
+                  <div style={{ fontWeight: 600 }}>{key.toUpperCase()} query</div>
+                  <div style={{ border: '1px solid #CBD5F5', borderRadius: 6, overflow: 'hidden' }}>
+                    <CodeEditor
+                      value={metricsConfig.queries[key] || ''}
+                      language="promql"
+                      height="200px"
+                      onBlur={(value) =>
+                        onMetricsChange({
+                          ...metricsConfig,
+                          queries: { ...metricsConfig.queries, [key]: value },
+                        })
+                      }
+                      onSave={(value) =>
+                        onMetricsChange({
+                          ...metricsConfig,
+                          queries: { ...metricsConfig.queries, [key]: value },
+                        })
+                      }
+                      showMiniMap={false}
+                      showLineNumbers={true}
+                    />
+                  </div>
                   {mode === 'metrics' && metricNames.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11, color: '#475569' }}>
                       {metricNames.slice(0, 12).map((name) => (
