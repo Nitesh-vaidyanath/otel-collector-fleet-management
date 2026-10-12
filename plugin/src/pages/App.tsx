@@ -650,7 +650,6 @@ export const App = () => {
   const [telemetryDrawerMode, setTelemetryDrawerMode] = useState<'metrics' | 'logs'>('metrics');
   const [telemetryDatasourceHints, setTelemetryDatasourceHints] = useState<{ metrics?: string; logs?: string }>({});
   const [orgOptions, setOrgOptions] = useState<Array<{ id: number; name: string }>>([]);
-  const [labelCache, setLabelCache] = useState<Map<string, Record<string, string>>>(new Map());
   const selectedAgentTenantName = useMemo(() => currentOrgName.trim(), [currentOrgName]);
   const displayUserName = useMemo(() => {
     const raw = (userContext.name || '').trim();
@@ -693,49 +692,15 @@ export const App = () => {
     }
   };
 
-  const mergeAgentLabels = useCallback((incomingAgents: Agent[], baseCache: Map<string, Record<string, string>>) => {
-    const nextCache = new Map(baseCache);
-    const mergedAgents = incomingAgents.map((agent) => {
-      const mergedLabels = { ...(nextCache.get(agent.agentUid) || {}), ...(agent.labels || {}) };
-      nextCache.set(agent.agentUid, mergedLabels);
-      return { ...agent, labels: mergedLabels };
-    });
-    return { mergedAgents, nextCache };
-  }, []);
-
-  const mergeBridgeLabels = useCallback((incomingBridges: Bridge[], baseCache: Map<string, Record<string, string>>) => {
-    const nextCache = new Map(baseCache);
-    const mergedBridges = incomingBridges.map((bridge) => {
-      const mergedBridgeLabels = { ...(nextCache.get(bridge.agentUid) || {}), ...(bridge.labels || {}) };
-      nextCache.set(bridge.agentUid, mergedBridgeLabels);
-      const collectors = (bridge.collectors || []).map((collector) => {
-        const mergedCollectorLabels = { ...(nextCache.get(collector.agentUid) || {}), ...(collector.labels || {}) };
-        nextCache.set(collector.agentUid, mergedCollectorLabels);
-        return { ...collector, labels: mergedCollectorLabels };
-      });
-      return { ...bridge, labels: mergedBridgeLabels, collectors };
-    });
-    return { mergedBridges, nextCache };
-  }, []);
-
   const loadTelemetrySettings = useCallback(async () => {
     setTelemetryLoading(true);
     try {
       const response = await backendSrv.get('/telemetry-settings');
       const incoming = (response as any)?.settings ?? response;
       const normalized = normalizeTelemetrySettingsState(incoming);
-      // Default org selection to current Grafana org if unset
-      setTelemetrySettings((prev) => ({
-        ...normalized,
-        metrics: {
-          ...normalized.metrics,
-          datasourceOrgId: normalized.metrics.datasourceOrgId ?? selectedOrgId ?? prev.metrics.datasourceOrgId ?? null,
-        },
-        logs: {
-          ...normalized.logs,
-          datasourceOrgId: normalized.logs.datasourceOrgId ?? selectedOrgId ?? prev.logs.datasourceOrgId ?? null,
-        },
-      }));
+      // Null is the persisted representation of “use the current org”. Resolve
+      // it only for requests in the drawer; never persist the ambient org ID.
+      setTelemetrySettings(normalized);
       if (incoming?.hints && typeof incoming.hints === 'object') {
         setTelemetryDatasourceHints(incoming.hints);
       }
@@ -808,7 +773,7 @@ export const App = () => {
     }
   }, []);
 
-  const fetchBridges = async (baseCache?: Map<string, Record<string, string>>) => {
+  const fetchBridges = async () => {
     try {
       const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/bridges');
       console.log('DEBUG: Fetched bridges response:', { bridges: response.bridges, count: response.bridges?.length || 0 });
@@ -822,10 +787,7 @@ export const App = () => {
           });
         });
       }
-      const startingCache = baseCache ?? labelCache;
-      const { mergedBridges, nextCache } = mergeBridgeLabels(response.bridges || [], startingCache);
-      setLabelCache(nextCache);
-      setBridges(mergedBridges);
+      setBridges(response.bridges || []);
     } catch (err: any) {
       console.error('Failed to fetch bridges:', err);
       // Don't set error - bridges endpoint might not exist yet
@@ -843,9 +805,7 @@ export const App = () => {
         status: a.status,
         labels: a.labels
       })));
-      const { mergedAgents, nextCache } = mergeAgentLabels(incomingAgents, labelCache);
-      setLabelCache(nextCache);
-      setAgents(mergedAgents);
+      setAgents(incomingAgents);
       const directOnline = incomingAgents.filter((a: Agent) => a.status === 'online').length;
       const totals = response.totals || {};
       const backendDirectOnline = totals.directOnline ?? totals.directOnlline ?? directOnline;
@@ -895,7 +855,7 @@ export const App = () => {
         setCurrentOrgName(response.grafanaOrgName || response.orgName);
       }
       // Also fetch bridges for hierarchical view
-      await fetchBridges(nextCache);
+      await fetchBridges();
     } catch (err: any) {
       console.error('Failed to fetch agents:', err);
       setError(err.message || 'Failed to fetch agents');

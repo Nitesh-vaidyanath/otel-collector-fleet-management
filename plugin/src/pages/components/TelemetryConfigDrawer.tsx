@@ -6,6 +6,8 @@ import { buildDefaultStageQueries } from '../utils/telemetry';
 import { createBackendSrv } from '../utils/api';
 import { detectRuntimeMode, detectGrafanaTransport } from '../utils/runtime';
 import { PromQLQueryEditor } from './PromQLQueryEditor';
+import { insertLabelMatcher, insertMetricSuggestion } from '../utils/promql';
+import { createRequestEpoch, datasourceOrgHeaders, datasourceOrgSelectValue, resolveDatasourceOrgId } from '../utils/telemetryOrg';
 
 const PROM_DATASOURCE_TYPES = new Set(['prometheus', 'mimir', 'grafana-mimir-datasource', 'thanos']);
 const LOKI_DATASOURCE_TYPES = new Set(['loki']);
@@ -27,7 +29,7 @@ const isRunningInGrafana = runtimeMode === 'grafana';
 const grafanaTransport = detectGrafanaTransport(isRunningInGrafana);
 const backendSrv = createBackendSrv(isRunningInGrafana, grafanaTransport);
 
-const { useState, useEffect, useCallback, useMemo } = React;
+const { useState, useEffect, useRef } = React;
 
 export type TelemetryConfigDrawerProps = {
   open: boolean;
@@ -61,10 +63,15 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
   const [datasources, setDatasources] = useState<Array<{ id: number; uid: string; name: string; type: string }>>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
-  const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const datasourceRequest = useRef(createRequestEpoch());
+  const metadataRequest = useRef(createRequestEpoch());
+  const effectiveMetricsOrgId = resolveDatasourceOrgId(metricsConfig.datasourceOrgId, currentOrgId);
+  const effectiveLogsOrgId = resolveDatasourceOrgId(logsConfig.datasourceOrgId, currentOrgId);
   const [metricNames, setMetricNames] = useState<string[]>([]);
   const [labelKeys, setLabelKeys] = useState<string[]>([]);
+  const [queryHint, setQueryHint] = useState<string | null>(null);
   const parseOrgId = (value: string): number | null => {
     const trimmed = value.trim();
     if (trimmed === '') {
@@ -100,74 +107,88 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
     });
   };
 
-  const loadDatasources = useCallback(async () => {
+  const applyMetricSuggestion = (key: PipelineMetricKey, metric: string) => {
+    const result = insertMetricSuggestion(metricsConfig.queries[key] || '', metric);
+    setQueryHint(result.hint || null);
+    if (result.changed) onMetricsChange({ ...metricsConfig, queries: { ...metricsConfig.queries, [key]: result.query } });
+  };
+
+  const applyLabelSuggestion = (key: PipelineMetricKey, label: string) => {
+    const result = insertLabelMatcher(metricsConfig.queries[key] || '', label);
+    setQueryHint(result.hint || null);
+    if (result.changed) onMetricsChange({ ...metricsConfig, queries: { ...metricsConfig.queries, [key]: result.query } });
+  };
+
+  useEffect(() => {
+    const requestId = datasourceRequest.current.begin();
+    setDatasources([]);
+    setError(null);
     if (!open) {
-      setDatasources([]);
-      setError(null);
-      return;
+      setLoading(false);
+      return () => {
+        datasourceRequest.current.invalidate(requestId);
+      };
     }
     const orgId = mode === 'metrics' ? effectiveMetricsOrgId : effectiveLogsOrgId;
-    const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
+    const requestOptions = datasourceOrgHeaders(orgId);
     setLoading(true);
-    try {
-      console.log(`DEBUG: Loading datasources for org ID: ${orgId}, mode: ${mode}, headers:`, headers);
-      const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources', { headers });
-      const filtered = Array.isArray(response)
-        ? response.filter((ds) => (mode === 'metrics' ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)))
-        : [];
-      console.log(`DEBUG: Loaded ${filtered.length} datasources for org ${orgId}`);
-      setDatasources(filtered);
-      setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
-    } catch (err: any) {
-      console.error('Failed to load data sources', err);
-      setError(err?.message || 'Failed to load data sources.');
-    } finally {
-      setLoading(false);
-    }
+    void (async () => {
+      try {
+        const response = await backendSrv.get<Array<{ id: number; uid: string; name: string; type: string }>>('/api/datasources', requestOptions);
+        if (!datasourceRequest.current.isCurrent(requestId)) return;
+        const filtered = Array.isArray(response)
+          ? response.filter((ds) => (mode === 'metrics' ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)))
+          : [];
+        setDatasources(filtered);
+        setError(filtered.length === 0 ? 'No compatible data sources were found.' : null);
+      } catch (err: any) {
+        if (datasourceRequest.current.isCurrent(requestId)) setError(err?.message || 'Failed to load data sources.');
+      } finally {
+        if (datasourceRequest.current.isCurrent(requestId)) setLoading(false);
+      }
+    })();
+    return () => {
+      datasourceRequest.current.invalidate(requestId);
+    };
   }, [open, mode, effectiveMetricsOrgId, effectiveLogsOrgId]);
 
   useEffect(() => {
-    loadDatasources();
-  }, [loadDatasources]);
-
-  const loadPromMetadata = useCallback(
-    async (dsUid: string | null, orgId: number | null) => {
-      if (!dsUid) {
-        setMetricNames([]);
-        setLabelKeys([]);
-        return;
-      }
+    const requestId = metadataRequest.current.begin();
+    setMetricNames([]);
+    setLabelKeys([]);
+    setMetadataError(null);
+    const dsUid = metricsConfig.datasourceUid;
+    const orgId = effectiveMetricsOrgId;
+    const ds = datasources.find((item) => item.uid === dsUid);
+    if (!open || mode !== 'metrics' || !dsUid || !ds) {
+      setMetadataLoading(false);
+      return () => {
+        metadataRequest.current.invalidate(requestId);
+      };
+    }
+    const requestOptions = datasourceOrgHeaders(orgId);
+    setMetadataLoading(true);
+    void (async () => {
       try {
-        const ds = datasources.find((d) => d.uid === dsUid);
-        if (!ds) {
-          setMetricNames([]);
-          setLabelKeys([]);
-          return;
-        }
-        const headers = orgId ? { 'X-Grafana-Org-Id': String(orgId) } : undefined;
         const metricResp = await backendSrv.get<{ data?: string[]; status?: string }>(
-          `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
-          { headers }
+          `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`, requestOptions
         );
         const labelsResp = await backendSrv.get<{ data?: string[]; status?: string }>(
-          `/api/datasources/proxy/${ds.id}/api/v1/labels`,
-          { headers }
+          `/api/datasources/proxy/${ds.id}/api/v1/labels`, requestOptions
         );
+        if (!metadataRequest.current.isCurrent(requestId)) return;
         setMetricNames(Array.isArray(metricResp?.data) ? metricResp.data : []);
         setLabelKeys(Array.isArray(labelsResp?.data) ? labelsResp.data : []);
-      } catch {
-        setMetricNames([]);
-        setLabelKeys([]);
+      } catch (err: any) {
+        if (metadataRequest.current.isCurrent(requestId)) setMetadataError(err?.message || 'Failed to load Prometheus metadata.');
+      } finally {
+        if (metadataRequest.current.isCurrent(requestId)) setMetadataLoading(false);
       }
-    },
-    [datasources]
-  );
-
-  useEffect(() => {
-    if (mode === 'metrics') {
-      loadPromMetadata(metricsConfig.datasourceUid, effectiveMetricsOrgId);
-    }
-  }, [mode, metricsConfig.datasourceUid, effectiveMetricsOrgId, loadPromMetadata]);
+    })();
+    return () => {
+      metadataRequest.current.invalidate(requestId);
+    };
+  }, [open, mode, metricsConfig.datasourceUid, effectiveMetricsOrgId, datasources]);
 
   if (!open) {
     return null;
@@ -220,7 +241,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Datasource org
                 <select
-                  value={effectiveMetricsOrgId ?? ''}
+                  value={datasourceOrgSelectValue(metricsConfig.datasourceOrgId, currentOrgId)}
                   onChange={(event) => {
                     const newOrgId = parseOrgId(event.target.value);
                     console.log(`DEBUG: Org ID changed to ${newOrgId}, resetting datasource`);
@@ -289,10 +310,10 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                     <PromQLQueryEditor
                       value={metricsConfig.queries[key] || ''}
                       onChange={(newValue) =>
-                        onMetricsChange({
+                        (setQueryHint(null), onMetricsChange({
                           ...metricsConfig,
                           queries: { ...metricsConfig.queries, [key]: newValue },
-                        })
+                        }))
                       }
                       placeholder="Enter PromQL query..."
                       height="200px"
@@ -304,12 +325,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                         <button
                           key={name}
                           type="button"
-                          onClick={() =>
-                            onMetricsChange({
-                              ...metricsConfig,
-                              queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${name}` },
-                            })
-                          }
+                          onClick={() => applyMetricSuggestion(key, name)}
                           style={{
                             border: '1px solid #CBD5F5',
                             borderRadius: 4,
@@ -325,12 +341,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                         <button
                           key={lbl}
                           type="button"
-                          onClick={() =>
-                            onMetricsChange({
-                              ...metricsConfig,
-                              queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${lbl}=\\\"\\\"` },
-                            })
-                          }
+                          onClick={() => applyLabelSuggestion(key, lbl)}
                           style={{
                             border: '1px solid #E5E7EB',
                             borderRadius: 4,
@@ -344,6 +355,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
                       ))}
                     </div>
                   )}
+                  {queryHint && <div style={{ fontSize: 11, color: '#92400E' }}>{queryHint}</div>}
                 </div>
               ))}
               <div style={{ fontSize: 12, fontWeight: 600, color: '#111827', marginTop: 4 }}>Per-stage throughput templates</div>
@@ -392,7 +404,7 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
               <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: '#1F2937' }}>
                 Datasource org
                 <select
-                  value={effectiveLogsOrgId ?? ''}
+                  value={datasourceOrgSelectValue(logsConfig.datasourceOrgId, currentOrgId)}
                   onChange={(event) =>
                     onLogsChange({
                       ...logsConfig,
@@ -450,6 +462,8 @@ export const TelemetryConfigDrawer: React.FC<TelemetryConfigDrawerProps> = ({
           {error && (
             <div style={{ padding: 10, borderRadius: 6, border: '1px solid #FECACA', background: '#FEF2F2', fontSize: 12, color: '#B91C1C' }}>{error}</div>
           )}
+          {metadataLoading && <div style={{ fontSize: 11, color: '#6B7280' }}>Loading Prometheus metrics and labels…</div>}
+          {metadataError && <div style={{ fontSize: 11, color: '#B91C1C' }}>{metadataError}</div>}
         </div>
         <div style={{ padding: 16, borderTop: '1px solid #E5E7EB', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button

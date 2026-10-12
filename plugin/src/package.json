@@ -3,7 +3,10 @@
   "version": "0.2.0",
   "private": true,
   "scripts": {
-    "build": "node ./scripts/build.js"
+    "build": "node ./scripts/build.js",
+    "test:unit": "node --test ./scripts/unit.test.cjs",
+    "test:browser": "node --test ./scripts/browser-smoke.test.cjs",
+    "test": "node --test ./scripts/unit.test.cjs ./scripts/browser-smoke.test.cjs"
   },
   "dependencies": {
     "@grafana/data": "^11.0.0",

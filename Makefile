@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help build build-backend build-frontend build-plugin build-test test test-unit test-e2e test-opamp clean docker-build docker-up docker-down docker-test docker-clean dev dev-up dev-down
+.PHONY: help build build-backend build-frontend build-plugin build-test test test-safe test-unit test-frontend test-e2e test-opamp clean docker-build docker-up docker-down docker-test docker-clean dev dev-up dev-down
 
 # Default target
 help:
@@ -10,8 +10,10 @@ help:
 	@echo "  build-frontend     - Build Grafana plugin frontend"
 	@echo "  build-plugin       - Build complete plugin (backend + frontend)"
 	@echo "  build-test         - Build test Docker image"
-	@echo "  test               - Run all tests"
+	@echo "  test               - Run isolated backend and frontend unit tests"
+	@echo "  test-safe          - Run isolated backend and frontend unit tests"
 	@echo "  test-unit          - Run unit tests"
+	@echo "  test-frontend      - Run pure frontend helper and AMD transform tests"
 	@echo "  test-e2e           - Run E2E tests"
 	@echo "  test-opamp         - Test OpAMP agent connections"
 	@echo "  docker-build       - Build all Docker images"
@@ -63,13 +65,21 @@ build-test:
 	@echo "✓ Test image built"
 
 # Test targets
-test: test-unit test-e2e
-	@echo "✓ All tests complete"
+test: test-safe
+	@echo "✓ Safe unit tests complete"
+
+test-safe: test-unit test-frontend
+	@echo "✓ Safe isolated tests complete"
 
 test-unit:
-	@echo ">> Running unit tests"
-	@cd opamp-server && go test -v -coverprofile=../coverage.out ./pkg/backend/...
+	@echo ">> Running isolated backend unit tests"
+	@cd opamp-server && go test -race ./pkg/backend/...
 	@echo "✓ Unit tests complete"
+
+test-frontend:
+	@echo ">> Running isolated frontend helper and AMD component tests"
+	@cd plugin/src && node --test ./scripts/unit.test.cjs ./scripts/browser-smoke.test.cjs
+	@echo "✓ Frontend unit tests complete"
 
 test-e2e:
 	@echo ">> Running E2E tests"

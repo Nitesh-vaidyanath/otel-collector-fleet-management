@@ -2169,12 +2169,13 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 	result := map[string]any{
 		"agentUid": uid,
 	}
-
 	// Get current config from agents table
 	var currentConfig sql.NullString
 	var currentConfigHash sql.NullString
-	row := db.QueryRow(`SELECT current_config_yaml, current_config_hash FROM agents WHERE org_id=? AND agent_uid=?`, c.OrgID, uid)
-	if err := row.Scan(&currentConfig, &currentConfigHash); err != nil {
+	var storedStatus, storedError, confirmedHash sql.NullString
+	var storedStatusAt sql.NullTime
+	row := db.QueryRow(`SELECT current_config_yaml,current_config_hash,remote_config_status,remote_config_error,effective_config_hash,remote_config_status_at FROM agents WHERE org_id=? AND agent_uid=?`, c.OrgID, uid)
+	if err := row.Scan(&currentConfig, &currentConfigHash, &storedStatus, &storedError, &confirmedHash, &storedStatusAt); err != nil {
 		http.Error(w, "agent not found", 404)
 		return
 	}
@@ -2185,6 +2186,12 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 	} else {
 		result["hasConfig"] = false
 	}
+	report, reportErr := readRemoteConfigReport(db, c.OrgID, uid)
+	if reportErr != nil {
+		http.Error(w, "remote configuration status unavailable", http.StatusInternalServerError)
+		return
+	}
+	report = usePersistedRemoteConfigReport(report, nullableString(storedStatus), nullableString(storedError), nullableString(confirmedHash), storedStatusAt)
 
 	// Check for pending configs in queue
 	var pendingConfigYAML, pendingConfigHash, lastError sql.NullString
@@ -2215,68 +2222,15 @@ func agentConfigSyncStatusHandler(w http.ResponseWriter, r *http.Request, c reqC
 		}
 		if pendingConfigHash.Valid {
 			result["pendingConfig"].(map[string]any)["hash"] = pendingConfigHash.String
-			// Compare with current hash
-			if currentConfigHash.Valid && currentConfigHash.String == pendingConfigHash.String {
-				result["pendingConfig"].(map[string]any)["hashMatch"] = true
-				result["pendingConfig"].(map[string]any)["status"] = "synced"
-			} else {
-				result["pendingConfig"].(map[string]any)["hashMatch"] = false
-				result["pendingConfig"].(map[string]any)["status"] = "pending_sync"
-			}
+			d := decideConfigSync(report.Status, report.Error, report.Hash, pendingConfigHash.String)
+			result["pendingConfig"].(map[string]any)["hashMatch"] = d.HashMatch
+			result["pendingConfig"].(map[string]any)["status"] = d.SyncStatus
 		}
 	} else {
 		result["pendingConfig"] = map[string]any{"hasPending": false}
 	}
 
-	// Get latest RemoteConfigStatus from agent_telemetry (dedicated telemetry type)
-	var telemetryData sql.NullString
-	var reportedAt sql.NullTime
-	statusSource := "remote_config_status"
-	row3 := db.QueryRow(`
-		SELECT telemetry_data, reported_at 
-		FROM agent_telemetry 
-		WHERE agent_uid=? AND org_id=? AND telemetry_type='remote_config_status' 
-		ORDER BY reported_at DESC LIMIT 1
-	`, uid, c.OrgID)
-	err := row3.Scan(&telemetryData, &reportedAt)
-	if err == sql.ErrNoRows {
-		// Fall back to legacy entries stored under "health"
-		statusSource = "health"
-		row3 = db.QueryRow(`
-			SELECT telemetry_data, reported_at 
-			FROM agent_telemetry 
-			WHERE agent_uid=? AND org_id=? AND telemetry_type='health' 
-			ORDER BY reported_at DESC LIMIT 1
-		`, uid, c.OrgID)
-		err = row3.Scan(&telemetryData, &reportedAt)
-	}
-
-	if err == nil && telemetryData.Valid {
-		var data map[string]interface{}
-		if json.Unmarshal([]byte(telemetryData.String), &data) == nil {
-			if status, ok := data["status"].(string); ok {
-				result["remoteConfigStatus"] = status
-			}
-			if hash, ok := data["last_remote_config_hash"].(string); ok && hash != "" {
-				result["remoteConfigHash"] = hash
-				if currentConfigHash.Valid {
-					result["hashMatch"] = (hash == currentConfigHash.String)
-					if hash == currentConfigHash.String {
-						result["syncStatus"] = "synced"
-					} else {
-						result["syncStatus"] = "not_synced"
-					}
-				}
-			}
-			if errMsg, ok := data["error_message"].(string); ok && errMsg != "" {
-				result["remoteConfigError"] = errMsg
-			}
-		}
-		if reportedAt.Valid {
-			result["lastStatusReport"] = reportedAt.Time.Format(time.RFC3339)
-		}
-		result["remoteConfigStatusSource"] = statusSource
-	}
+	attachRemoteConfigDecision(result, report, nullableString(currentConfigHash))
 
 	jsonOK(w, result)
 }
@@ -2296,12 +2250,15 @@ func agentCurrentConfigHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	var currentConfig sql.NullString
 	var currentConfigHash sql.NullString
 	var runningConfigID, runningConfigVersion sql.NullInt64
+	var effectiveConfigHash, dbRemoteStatus, dbRemoteError sql.NullString
+	var dbRemoteStatusAt sql.NullTime
 	row := db.QueryRow(`
-		SELECT current_config_yaml, current_config_hash, running_config_id, running_config_version 
+		SELECT current_config_yaml, current_config_hash, running_config_id, running_config_version,
+		       effective_config_hash, remote_config_status, remote_config_error, remote_config_status_at
 		FROM agents 
 		WHERE org_id=? AND agent_uid=?
 	`, c.OrgID, uid)
-	if err := row.Scan(&currentConfig, &currentConfigHash, &runningConfigID, &runningConfigVersion); err != nil {
+	if err := row.Scan(&currentConfig, &currentConfigHash, &runningConfigID, &runningConfigVersion, &effectiveConfigHash, &dbRemoteStatus, &dbRemoteError, &dbRemoteStatusAt); err != nil {
 		http.Error(w, "agent not found", 404)
 		return
 	}
@@ -2309,6 +2266,12 @@ func agentCurrentConfigHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	result := map[string]any{
 		"agentUid": uid,
 	}
+	report, reportErr := readRemoteConfigReport(db, c.OrgID, uid)
+	if reportErr != nil {
+		http.Error(w, "remote configuration status unavailable", http.StatusInternalServerError)
+		return
+	}
+	report = usePersistedRemoteConfigReport(report, nullableString(dbRemoteStatus), nullableString(dbRemoteError), nullableString(effectiveConfigHash), dbRemoteStatusAt)
 	if currentConfig.Valid && currentConfig.String != "" {
 		result["config"] = currentConfig.String
 		result["hasConfig"] = true
@@ -2326,7 +2289,9 @@ func agentCurrentConfigHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 		result["runningConfigVersion"] = runningConfigVersion.Int64
 	}
 
-	// Find which database config version matches the agent's current config
+	// Preserve the historical matching-version metadata, but evaluate sync against
+	// the latest approved checksum regardless of whether the current checksum also
+	// matches an older approved version.
 	if currentConfigHash.Valid {
 		var dbConfigID, dbConfigVersion sql.NullInt64
 		var dbConfigName sql.NullString
@@ -2342,78 +2307,30 @@ func agentCurrentConfigHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 			if dbConfigName.Valid {
 				result["matchingDbConfigName"] = dbConfigName.String
 			}
-		} else {
-			// Check if there's any approved config that doesn't match
-			row3 := db.QueryRow(`
-				SELECT id, version, name, checksum 
-				FROM agent_configs 
-				WHERE org_id=? AND agent_uid=? AND approval_status='approved'
-				ORDER BY version DESC LIMIT 1
-			`, c.OrgID, uid)
-			var latestConfigID, latestConfigVersion sql.NullInt64
-			var latestConfigName, latestConfigChecksum sql.NullString
-			if err := row3.Scan(&latestConfigID, &latestConfigVersion, &latestConfigName, &latestConfigChecksum); err == nil {
-				result["latestDbConfigId"] = latestConfigID.Int64
-				result["latestDbConfigVersion"] = latestConfigVersion.Int64
-				if latestConfigName.Valid {
-					result["latestDbConfigName"] = latestConfigName.String
-				}
-				if latestConfigChecksum.Valid {
-					result["latestDbConfigHash"] = latestConfigChecksum.String
-					result["hashMatch"] = (latestConfigChecksum.String == currentConfigHash.String)
-					if latestConfigChecksum.String != currentConfigHash.String {
-						result["syncStatus"] = "mismatch"
-						result["mismatchReason"] = "Agent config hash does not match latest approved database config"
-					} else {
-						result["syncStatus"] = "synced"
-					}
-				}
-			}
+		} else if err != sql.ErrNoRows {
+			http.Error(w, "approved configuration status unavailable", http.StatusInternalServerError)
+			return
+		}
+	}
+	latestApproved, err := readLatestApprovedConfig(db, c.OrgID, uid)
+	if err != nil {
+		http.Error(w, "approved configuration status unavailable", http.StatusInternalServerError)
+		return
+	}
+	expectedConfigHash := nullableString(latestApproved.Hash)
+	if latestApproved.ID.Valid && (!currentConfigHash.Valid || expectedConfigHash != currentConfigHash.String) {
+		result["latestDbConfigId"] = latestApproved.ID.Int64
+		result["latestDbConfigVersion"] = latestApproved.Version.Int64
+		if latestApproved.Name.Valid {
+			result["latestDbConfigName"] = latestApproved.Name.String
+		}
+		if latestApproved.Hash.Valid {
+			result["latestDbConfigHash"] = latestApproved.Hash.String
 		}
 	}
 
-	// Get latest RemoteConfigStatus from agent_telemetry
-	var telemetryData sql.NullString
-	var reportedAt sql.NullTime
-	row4 := db.QueryRow(`
-		SELECT telemetry_data, reported_at 
-		FROM agent_telemetry 
-		WHERE agent_uid=? AND org_id=? AND telemetry_type='health' 
-		ORDER BY reported_at DESC LIMIT 1
-	`, uid, c.OrgID)
-	if err := row4.Scan(&telemetryData, &reportedAt); err == nil && telemetryData.Valid {
-		var data map[string]interface{}
-		if json.Unmarshal([]byte(telemetryData.String), &data) == nil {
-			if status, ok := data["status"].(string); ok {
-				result["remoteConfigStatus"] = status
-			}
-			if hash, ok := data["last_remote_config_hash"].(string); ok && hash != "" {
-				result["remoteConfigHash"] = hash
-				// Compare with current hash to verify sync
-				if currentConfigHash.Valid {
-					hashMatch := (hash == currentConfigHash.String)
-					result["opampHashMatch"] = hashMatch
-					result["hashMatch"] = hashMatch // Also provide as hashMatch for frontend compatibility
-					if !hashMatch {
-						result["syncStatus"] = "not_synced"
-						result["syncIssue"] = "Agent's reported RemoteConfig hash does not match current config hash"
-					}
-				} else {
-					// No current config hash - can't verify
-					result["hashMatch"] = false
-				}
-			} else {
-				// No remote config hash reported yet
-				result["hashMatch"] = false
-			}
-			if errMsg, ok := data["error_message"].(string); ok && errMsg != "" {
-				result["remoteConfigError"] = errMsg
-			}
-		}
-		if reportedAt.Valid {
-			result["lastStatusReport"] = reportedAt.Time.Format(time.RFC3339)
-		}
-	}
+	d := attachRemoteConfigDecision(result, report, expectedConfigHash)
+	result["opampHashMatch"] = d.HashMatch
 
 	jsonOK(w, result)
 }
@@ -2458,20 +2375,12 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	result := map[string]any{
 		"agentUid": uid,
 	}
-
-	// Include RemoteConfigStatus in response
-	if remoteConfigStatus.Valid {
-		result["remoteConfigStatus"] = remoteConfigStatus.String
+	report, reportErr := readRemoteConfigReport(db, c.OrgID, uid)
+	if reportErr != nil {
+		http.Error(w, "remote configuration status unavailable", http.StatusInternalServerError)
+		return
 	}
-	if remoteConfigError.Valid && remoteConfigError.String != "" {
-		result["remoteConfigError"] = remoteConfigError.String
-	}
-	if effectiveConfigHash.Valid {
-		result["remoteConfigHash"] = effectiveConfigHash.String
-	}
-	if remoteConfigStatusAt.Valid {
-		result["lastStatusReport"] = remoteConfigStatusAt.Time.Format(time.RFC3339)
-	}
+	report = usePersistedRemoteConfigReport(report, nullableString(remoteConfigStatus), nullableString(remoteConfigError), nullableString(effectiveConfigHash), remoteConfigStatusAt)
 
 	// Get latest approved config from database
 	var dbConfig sql.NullString
@@ -2487,6 +2396,7 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	if err := row2.Scan(&dbConfigID, &dbConfigVersion, &dbConfigName, &dbConfig, &dbConfigHash); err != nil {
 		result["hasDbConfig"] = false
 		result["message"] = "No approved configuration found in database for this agent"
+		attachRemoteConfigDecision(result, report, "")
 		jsonOK(w, result)
 		return
 	}
@@ -2511,38 +2421,18 @@ func agentConfigCompareHandler(w http.ResponseWriter, r *http.Request, c reqCtx)
 	if agentConfig.Valid {
 		result["agentConfig"] = agentConfig.String
 		result["hasAgentConfig"] = true
-
-		// Compare hashes - prefer effective_config_hash from RemoteConfigStatus if available
-		// effective_config_hash is what the agent actually applied (from RemoteConfigStatus)
-		// current_config_hash is what the agent reported in EffectiveConfig
-		hashToCompare := agentConfigHash.String
-		if effectiveConfigHash.Valid && effectiveConfigHash.String != "" {
-			// Use effective hash from RemoteConfigStatus if available (more accurate)
-			hashToCompare = effectiveConfigHash.String
-		}
-
-		if hashToCompare != "" && dbConfigHash.Valid {
-			result["hashMatch"] = (hashToCompare == dbConfigHash.String)
-			if hashToCompare == dbConfigHash.String {
-				result["syncStatus"] = "synced"
-			} else {
-				result["syncStatus"] = "mismatch"
-				// Generate diff (database config vs agent config)
-				diff := generateDiff(dbConfig.String, agentConfig.String)
-				result["diff"] = diff
-				result["previous"] = dbConfig.String
-				result["current"] = agentConfig.String
-			}
-		} else if dbConfigHash.Valid {
-			// No hash from agent yet - can't verify sync
-			result["hashMatch"] = false
-			result["syncStatus"] = "unknown"
+		if dbConfigHash.Valid && agentConfigHash.Valid && agentConfigHash.String != "" && agentConfigHash.String != dbConfigHash.String {
+			diff := generateDiff(dbConfig.String, agentConfig.String)
+			result["diff"] = diff
+			result["previous"] = dbConfig.String
+			result["current"] = agentConfig.String
 		}
 	} else {
 		result["hasAgentConfig"] = false
 		result["agentConfig"] = ""
 		result["message"] = "Agent has no current configuration"
 	}
+	attachRemoteConfigDecision(result, report, nullableString(dbConfigHash))
 
 	jsonOK(w, result)
 }

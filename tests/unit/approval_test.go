@@ -1,3 +1,5 @@
+//go:build legacy_mysql_integration
+
 package main
 
 import (

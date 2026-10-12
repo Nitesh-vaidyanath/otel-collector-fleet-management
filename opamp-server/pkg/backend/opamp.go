@@ -70,158 +70,44 @@ func pruneAgentTelemetry(db *sql.DB) {
 }
 
 func logAgentToServerDebug(instanceUID string, message *protobufs.AgentToServer) {
-	// Always log detailed AgentToServer message (not just when appLogger is enabled)
-	log.Printf("===== AgentToServer MESSAGE (UID: %s) =====", instanceUID[:8])
-	log.Printf("InstanceUid (hex): %s (length: %d bytes)", instanceUID, len(message.InstanceUid))
-	log.Printf("Capabilities (bits): 0x%x (decimal: %d)", message.Capabilities, message.Capabilities)
-
-	// Log AgentDescription
-	if message.AgentDescription != nil {
-		log.Printf("AgentDescription:")
-		log.Printf("  IdentifyingAttributes count: %d", len(message.AgentDescription.IdentifyingAttributes))
-		for i, attr := range message.AgentDescription.IdentifyingAttributes {
-			if attr.Value != nil {
-				val := attr.Value.GetStringValue()
-				log.Printf("    [%d] %s = %q", i, attr.Key, val)
-			} else {
-				log.Printf("    [%d] %s = <nil>", i, attr.Key)
-			}
-		}
-		log.Printf("  NonIdentifyingAttributes count: %d", len(message.AgentDescription.NonIdentifyingAttributes))
-		for i, attr := range message.AgentDescription.NonIdentifyingAttributes {
-			if attr.Value != nil {
-				val := attr.Value.GetStringValue()
-				log.Printf("    [%d] %s = %q", i, attr.Key, val)
-			} else {
-				log.Printf("    [%d] %s = <nil>", i, attr.Key)
-			}
-		}
-	} else {
-		log.Printf("AgentDescription: <nil>")
+	if message == nil || !IsDebugLoggingEnabled() {
+		return
 	}
-
-	// Log Health
+	componentCount, configCount, configBytes := 0, 0, 0
 	if message.Health != nil {
-		log.Printf("Health:")
-		log.Printf("  Healthy: %v", message.Health.Healthy)
-		log.Printf("  StartTimeUnixNano: %d", message.Health.StartTimeUnixNano)
-		log.Printf("  StatusTimeUnixNano: %d", message.Health.StatusTimeUnixNano)
-		log.Printf("  LastError: %q", message.Health.LastError)
-		if message.Health.ComponentHealthMap != nil {
-			log.Printf("  ComponentHealthMap count: %d", len(message.Health.ComponentHealthMap))
-			for key, health := range message.Health.ComponentHealthMap {
-				if health != nil {
-					log.Printf("    [%s] Healthy: %v, Status: %q, LastError: %q", key, health.Healthy, health.Status, health.LastError)
-				} else {
-					log.Printf("    [%s] <nil>", key)
-				}
-			}
-		} else {
-			log.Printf("  ComponentHealthMap: <nil>")
-		}
-	} else {
-		log.Printf("Health: <nil>")
+		componentCount = len(message.Health.ComponentHealthMap)
 	}
-
-	// Log EffectiveConfig
 	if message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
-		if cfgMap := message.EffectiveConfig.ConfigMap.ConfigMap; cfgMap != nil {
-			log.Printf("EffectiveConfig:")
-			log.Printf("  ConfigMap count: %d", len(cfgMap))
-			for key, cfgFile := range cfgMap {
-				if cfgFile != nil {
-					bodySize := 0
-					if cfgFile.Body != nil {
-						bodySize = len(cfgFile.Body)
-					}
-					log.Printf("    [%s] ContentType: %q, Body size: %d bytes", key, cfgFile.ContentType, bodySize)
-					// Log first 200 chars of body for debugging
-					if cfgFile.Body != nil && len(cfgFile.Body) > 0 {
-						bodyPreview := string(cfgFile.Body)
-						if len(bodyPreview) > 200 {
-							bodyPreview = bodyPreview[:200] + "..."
-						}
-						log.Printf("      Body preview: %q", bodyPreview)
-					}
-				} else {
-					log.Printf("    [%s] <nil>", key)
-				}
+		configCount = len(message.EffectiveConfig.ConfigMap.ConfigMap)
+		for _, obj := range message.EffectiveConfig.ConfigMap.ConfigMap {
+			if obj != nil {
+				configBytes += len(obj.Body)
 			}
-		} else {
-			log.Printf("EffectiveConfig.ConfigMap: <nil>")
 		}
-	} else {
-		log.Printf("EffectiveConfig: <nil>")
 	}
-
-	// Log RemoteConfigStatus
+	fields := map[string]interface{}{
+		"instanceUidPrefix": uidPrefix(instanceUID), "capabilities": fmt.Sprintf("0x%x", message.Capabilities),
+		"hasAgentDescription": message.AgentDescription != nil, "hasHealth": message.Health != nil,
+		"healthComponentCount": componentCount, "hasEffectiveConfig": message.EffectiveConfig != nil,
+		"configMapCount": configCount, "configBodyBytes": configBytes,
+		"hasRemoteConfigStatus":        message.RemoteConfigStatus != nil,
+		"hasConnectionSettingsRequest": message.ConnectionSettingsRequest != nil,
+		"hasPackageStatuses":           message.PackageStatuses != nil,
+	}
+	if message.AgentDescription != nil {
+		fields["identifyingAttributeCount"] = len(message.AgentDescription.IdentifyingAttributes)
+		fields["nonIdentifyingAttributeCount"] = len(message.AgentDescription.NonIdentifyingAttributes)
+	}
 	if message.RemoteConfigStatus != nil {
-		log.Printf("RemoteConfigStatus:")
-		log.Printf("  Status: %v", message.RemoteConfigStatus.Status)
-		log.Printf("  LastRemoteConfigHash: %x", message.RemoteConfigStatus.LastRemoteConfigHash)
-		log.Printf("  ErrorMessage: %q", message.RemoteConfigStatus.ErrorMessage)
-	} else {
-		log.Printf("RemoteConfigStatus: <nil>")
+		fields["remoteConfigStatus"] = canonicalRemoteConfigStatus(message.RemoteConfigStatus.Status)
+		fields["remoteConfigHashLength"] = len(message.RemoteConfigStatus.LastRemoteConfigHash)
+		fields["hasRemoteConfigError"] = message.RemoteConfigStatus.ErrorMessage != ""
 	}
-
-	// Log ConnectionSettingsRequest
-	if message.ConnectionSettingsRequest != nil {
-		log.Printf("ConnectionSettingsRequest: present")
-	} else {
-		log.Printf("ConnectionSettingsRequest: <nil>")
+	if appLogger != nil {
+		appLogger.Debug("AgentToServer message metadata", fields)
+		return
 	}
-
-	// Log PackageStatuses (if available)
-	if message.PackageStatuses != nil {
-		log.Printf("PackageStatuses: present")
-	} else {
-		log.Printf("PackageStatuses: <nil>")
-	}
-
-	log.Printf("==========================================")
-
-	// Also log to appLogger if available (for structured logging)
-	if appLogger != nil && IsDebugLoggingEnabled() {
-		fields := map[string]interface{}{
-			"instanceUid":           instanceUID,
-			"capabilities":          fmt.Sprintf("0x%x", message.Capabilities),
-			"hasAgentDescription":   message.AgentDescription != nil,
-			"hasHealth":             message.Health != nil,
-			"hasRemoteConfigStatus": message.RemoteConfigStatus != nil,
-			"hasEffectiveConfig":    message.EffectiveConfig != nil,
-			"connectionSettingsReq": message.ConnectionSettingsRequest != nil,
-		}
-
-		if message.AgentDescription != nil {
-			fields["agentDescription"] = map[string]interface{}{
-				"identifyingAttributes":    len(message.AgentDescription.IdentifyingAttributes),
-				"nonIdentifyingAttributes": len(message.AgentDescription.NonIdentifyingAttributes),
-			}
-		}
-
-		if message.Health != nil {
-			componentCount := 0
-			if message.Health.ComponentHealthMap != nil {
-				componentCount = len(message.Health.ComponentHealthMap)
-			}
-			fields["health"] = map[string]interface{}{
-				"healthy":         message.Health.Healthy,
-				"lastError":       message.Health.LastError,
-				"componentCounts": componentCount,
-			}
-		}
-
-		if message.RemoteConfigStatus != nil {
-			fields["remoteConfigStatus"] = map[string]interface{}{
-				"status":      message.RemoteConfigStatus.Status.String(),
-				"error":       message.RemoteConfigStatus.ErrorMessage,
-				"hashLength":  len(message.RemoteConfigStatus.LastRemoteConfigHash),
-				"hashPreview": hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash),
-			}
-		}
-
-		appLogger.Debug("AgentToServer message", fields)
-	}
+	log.Printf("DEBUG AgentToServer metadata: uid=%s description=%v health_components=%d config_maps=%d config_bytes=%d remote_status=%v", uidPrefix(instanceUID), message.AgentDescription != nil, componentCount, configCount, configBytes, message.RemoteConfigStatus != nil)
 }
 
 func resolveOrgIDFromLabels(labels map[string]string) (int64, string) {
@@ -347,7 +233,7 @@ func determineConfigMapKey(isKubernetes bool, namespace, collectorName string) (
 
 // registerBridge registers an OpAMP Bridge in the bridges table (NOT agents table)
 // Bridges are NOT collectors - they manage collectors
-func (m *OpampManager) registerBridge(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, tenantOverride string, orgOverrideID int64) error {
+func (m *OpampManager) registerBridge(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, tenantOverride string, orgOverrideID int64, descriptionProvided bool) error {
 	// Normalize UID for consistent storage
 	instanceUID = normalizeAgentUID(instanceUID)
 	db := mustDB()
@@ -411,17 +297,7 @@ func (m *OpampManager) registerBridge(instanceUID, name, version string, labels 
 
 	// UPSERT bridge into bridges table
 	var err error
-	_, err = db.Exec(`
-		INSERT INTO bridges (org_id, bridge_uid, name, version, status, last_seen_at, labels_json, capabilities_json)
-		VALUES (?, ?, ?, ?, 'online', NOW(), ?, ?)
-		ON DUPLICATE KEY UPDATE 
-			name = IF(VALUES(name) != '' AND VALUES(name) != VALUES(bridge_uid), VALUES(name), name),
-			version = IF(VALUES(version) != '' AND VALUES(version) != 'unknown', VALUES(version), version),
-			status = IF(status = 'degraded', 'degraded', 'online'),
-			last_seen_at = NOW(),
-			labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
-			capabilities_json = VALUES(capabilities_json)
-	`, orgID, instanceUID, name, version, string(labelsJSON), string(capabilitiesJSON))
+	_, err = execLabelSnapshot(db, bridgeUpsertSQL, []any{orgID, instanceUID, name, version, string(labelsJSON), string(capabilitiesJSON)}, descriptionProvided)
 	if err != nil {
 		log.Printf("Failed to register bridge %s: %v", instanceUID, err)
 		return err
@@ -465,7 +341,7 @@ func resolveOrgFromBridgeHeaders(r *http.Request, tenantOverride string) (int64,
 	return 0, ""
 }
 
-func (m *OpampManager) registerAgent(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, currentConfig, currentConfigHash string, orgIDOverride int64) error {
+func (m *OpampManager) registerAgent(instanceUID, name, version string, labels map[string]string, capabilities map[string]interface{}, currentConfig, currentConfigHash string, orgIDOverride int64, descriptionProvided bool) error {
 	// Normalize UID for consistent storage
 	instanceUID = normalizeAgentUID(instanceUID)
 	db := mustDB()
@@ -591,51 +467,20 @@ func (m *OpampManager) registerAgent(instanceUID, name, version string, labels m
 			}
 		}
 
-		_, err := db.Exec(`
-			INSERT INTO agents (org_id, org_name, agent_uid, name, version, status, last_seen_at, labels_json, capabilities_json, current_config_yaml, current_config_hash)
-			VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)
-			ON DUPLICATE KEY UPDATE 
-				name = IF(VALUES(name) != '' AND VALUES(name) != VALUES(agent_uid), VALUES(name), name),
-				version = IF(VALUES(version) != '' AND VALUES(version) != 'unknown', VALUES(version), version),
-				status = IF(VALUES(status) = 'unclassified', 'unclassified', IF(status = 'degraded', 'degraded', 'online')),
-				last_seen_at = NOW(),
-				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
-				capabilities_json = IF(CHAR_LENGTH(VALUES(capabilities_json)) > 2 AND VALUES(capabilities_json) != '{}', VALUES(capabilities_json), capabilities_json),
-				org_name = VALUES(org_name),
-				org_id = VALUES(org_id),
-				-- Only update config if hash changed (indicates config drift or update)
-				current_config_yaml = CASE 
-					WHEN current_config_hash IS NULL THEN VALUES(current_config_yaml)
-					WHEN current_config_hash != VALUES(current_config_hash) THEN VALUES(current_config_yaml)
-					ELSE current_config_yaml
-				END,
-				current_config_hash = COALESCE(VALUES(current_config_hash), current_config_hash)
-		`, orgID, orgName, instanceUID, name, version, agentStatus, labelsJSONStr, capabilitiesJSONStr, currentConfig, currentConfigHash)
+		_, err := execLabelSnapshot(db, agentConfigUpsertSQL, []any{orgID, orgName, instanceUID, name, version, agentStatus, labelsJSONStr, capabilitiesJSONStr, currentConfig, currentConfigHash}, descriptionProvided)
 		if err != nil {
 			log.Printf("Failed to register agent %s: %v", instanceUID, err)
 			return err
 		}
 	} else {
-		_, err := db.Exec(`
-			INSERT INTO agents (org_id, org_name, agent_uid, name, version, status, last_seen_at, labels_json, capabilities_json)
-			VALUES (?, ?, ?, ?, ?, 'online', NOW(), ?, ?)
-			ON DUPLICATE KEY UPDATE 
-				name = IF(VALUES(name) != '' AND VALUES(name) != VALUES(agent_uid), VALUES(name), name),
-				version = IF(VALUES(version) != '' AND VALUES(version) != 'unknown', VALUES(version), version),
-			status = IF(status = 'degraded', 'degraded', 'online'),
-				last_seen_at = NOW(),
-				labels_json = IF(CHAR_LENGTH(VALUES(labels_json)) > 2 AND VALUES(labels_json) != '{}', VALUES(labels_json), labels_json),
-				capabilities_json = IF(CHAR_LENGTH(VALUES(capabilities_json)) > 2 AND VALUES(capabilities_json) != '{}', VALUES(capabilities_json), capabilities_json),
-				org_name = VALUES(org_name),
-				org_id = VALUES(org_id)
-		`, orgID, orgName, instanceUID, name, version, labelsJSONStr, capabilitiesJSONStr)
+		_, err := execLabelSnapshot(db, agentHeartbeatUpsertSQL, []any{orgID, orgName, instanceUID, name, version, labelsJSONStr, capabilitiesJSONStr}, descriptionProvided)
 		if err != nil {
 			log.Printf("Failed to register agent %s: %v", instanceUID, err)
 			return err
 		}
 	}
 
-	log.Printf("Registered/Updated agent: %s (version: %s, labels: %s, org_id: %d)", instanceUID, version, labelsJSONStr, orgID)
+	log.Printf("Registered/Updated agent: %s (version: %s, label_count: %d, org_id: %d)", uidPrefix(instanceUID), version, len(labels), orgID)
 	return nil
 }
 
@@ -1308,18 +1153,19 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 	// Extract RemoteConfigStatus (status of remote config application)
 	// REFERENCE ARCHITECTURE: Track desired vs effective config for drift detection
 	if message.RemoteConfigStatus != nil {
-		statusStr := message.RemoteConfigStatus.Status.String()
+		statusStr := canonicalRemoteConfigStatus(message.RemoteConfigStatus.Status)
 		hasRemoteConfig := len(message.RemoteConfigStatus.LastRemoteConfigHash) > 0
-		effectiveHashStr := hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash)
+		offeredHash := hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash)
 		errorMsg := message.RemoteConfigStatus.ErrorMessage
+		persistedStatus, errorMsg, accepted := persistedRemoteConfigState(message.RemoteConfigStatus.Status, offeredHash, errorMsg)
 
 		// Log RemoteConfigStatus for debugging
-		log.Printf("DEBUG: Agent %s RemoteConfigStatus: status=%s, has_config=%v, effective_hash=%s, error=%s",
-			instanceUID, statusStr, hasRemoteConfig, effectiveHashStr, errorMsg)
+		log.Printf("DEBUG: Agent %s RemoteConfigStatus: status=%s, has_config=%v, hash_length=%d, has_error=%v",
+			uidPrefix(instanceUID), statusStr, hasRemoteConfig, len(message.RemoteConfigStatus.LastRemoteConfigHash), errorMsg != "")
 
 		// Enhanced error detection for label issues
 		if errorMsg != "" && strings.Contains(errorMsg, "opentelemetry.io/opamp-managed") {
-			log.Printf("❌ LABEL ERROR DETECTED for agent %s: %s", instanceUID, errorMsg)
+			log.Printf("❌ LABEL ERROR DETECTED for agent %s (details omitted)", uidPrefix(instanceUID))
 			log.Printf("   This error means the OpenTelemetryCollector CRD is missing or has the wrong label value.")
 			log.Printf("   QUICK FIX: Run these commands to fix all collectors:")
 			log.Printf("   kubectl label opentelemetrycollector <name> -n default opentelemetry.io/opamp-managed=opamp-bridge --overwrite")
@@ -1329,7 +1175,7 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 		// Enhanced error detection for DaemonSet webhook errors
 		isDaemonSetError := errorMsg != "" && strings.Contains(strings.ToLower(errorMsg), "daemonset") && strings.Contains(errorMsg, "does not support modification")
 		if isDaemonSetError {
-			log.Printf("❌ DAEMONSET WEBHOOK ERROR DETECTED for agent %s: %s", instanceUID, errorMsg)
+			log.Printf("❌ DAEMONSET WEBHOOK ERROR DETECTED for agent %s (details omitted)", uidPrefix(instanceUID))
 			log.Printf("   This error occurs when trying to update a DaemonSet collector via OpAMP Bridge.")
 			log.Printf("   Known Issue: https://github.com/open-telemetry/opentelemetry-operator/issues/4481")
 			log.Printf("   WORKAROUND: Use kubectl patch to update DaemonSet collectors:")
@@ -1341,14 +1187,14 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 			// but the bridge also manages collector B (DaemonSet), the bridge might report FAILED even though
 			// collector A succeeded. We need to check if we pushed to a non-DaemonSet collector.
 			// Check all collectors that have this desired_config_hash (the ones we recently pushed to)
-			if effectiveHashStr != "" {
+			if offeredHash != "" {
 				checkDB := mustDB()
 				// Find collectors that have this desired_config_hash (ones we pushed to)
 				rows, err := checkDB.Query(`
 					SELECT agent_uid, labels_json FROM agents 
 					WHERE desired_config_hash = ? AND agent_uid != ?
 					ORDER BY remote_config_status_at DESC
-				`, effectiveHashStr, instanceUID)
+				`, offeredHash, instanceUID)
 				checkDB.Close()
 
 				if err == nil {
@@ -1393,24 +1239,14 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 		// Update agents table with RemoteConfigStatus for drift detection
 		// CRITICAL: If status is APPLIED and errorMsg is empty, clear the error field
 		// This ensures successful configs don't leave stale error messages
-		if effectiveHashStr != "" {
-			_, _ = db.Exec(`
+		_, _ = db.Exec(`
 				UPDATE agents 
-				SET effective_config_hash=?, 
+				SET effective_config_hash=CASE WHEN ? THEN ? ELSE effective_config_hash END,
 				    remote_config_status=?,
 				    remote_config_error=?,
 				    remote_config_status_at=NOW()
 				WHERE agent_uid=?
-			`, effectiveHashStr, statusStr, errorMsg, instanceUID)
-		} else {
-			_, _ = db.Exec(`
-				UPDATE agents 
-				SET remote_config_status=?,
-				    remote_config_error=?,
-				    remote_config_status_at=NOW()
-				WHERE agent_uid=?
-			`, statusStr, errorMsg, instanceUID)
-		}
+			`, accepted, offeredHash, persistedStatus, errorMsg, instanceUID)
 
 		// Update agent status based on RemoteConfigStatus
 		// If status is APPLIED with no error → mark as online (config successfully applied)
@@ -1418,7 +1254,7 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 		var currentStatusRC string
 		statusRCRow := db.QueryRow(`SELECT status FROM agents WHERE agent_uid=? LIMIT 1`, instanceUID)
 		if err := statusRCRow.Scan(&currentStatusRC); err == nil {
-			if statusStr == "APPLIED" && errorMsg == "" {
+			if accepted {
 				// Config successfully applied - mark as online if currently degraded or offline
 				if currentStatusRC == "degraded" || currentStatusRC == "offline" {
 					log.Printf("✓ Agent %s config successfully applied (status=APPLIED) - marking as online", instanceUID[:8])
@@ -1430,11 +1266,11 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 				isDaemonSetError := strings.Contains(strings.ToLower(errorMsg), "daemonset") && strings.Contains(errorMsg, "does not support modification")
 				if !isDaemonSetError {
 					if currentStatusRC == "online" {
-						log.Printf("WARNING: Agent %s RemoteConfigStatus error: status=%s, error=%s - marking as degraded", instanceUID[:8], statusStr, errorMsg)
+						log.Printf("WARNING: Agent %s RemoteConfigStatus not accepted: status=%s, has_error=%v - marking as degraded", uidPrefix(instanceUID), statusStr, errorMsg != "")
 						m.updateAgentStatus(instanceUID, "degraded")
 					}
 				} else {
-					log.Printf("INFO: Agent %s RemoteConfigStatus error is DaemonSet-related (expected): status=%s, error=%s - NOT marking as degraded", instanceUID[:8], statusStr, errorMsg)
+					log.Printf("INFO: Agent %s RemoteConfigStatus is DaemonSet-related (expected): status=%s - NOT marking as degraded", uidPrefix(instanceUID), statusStr)
 					log.Printf("  This is a known limitation. See: https://github.com/open-telemetry/opentelemetry-operator/issues/4481")
 				}
 			}
@@ -1444,7 +1280,7 @@ func (m *OpampManager) storeAgentTelemetry(instanceUID string, message *protobuf
 		configStatusData, _ := json.Marshal(map[string]interface{}{
 			"status":                  statusStr,
 			"has_remote_config":       hasRemoteConfig,
-			"last_remote_config_hash": effectiveHashStr,
+			"last_remote_config_hash": offeredHash,
 			"error_message":           errorMsg,
 		})
 		_, _ = db.Exec(`
@@ -1873,7 +1709,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 												// Collector sends "otelcol-contrib", "otelcol", etc. here
 												// Bridge sends "io.opentelemetry.operator-opamp-bridge" here
 												collectorServiceName = val
-												log.Printf("DEBUG: service.name in IdentifyingAttributes: '%s'", val)
+												log.Printf("DEBUG: service.name identifying attribute present")
 											}
 											// When service.name is "otelcol-contrib" or similar, service.version is the collector version
 											if (collectorServiceName == "otelcol-contrib" || collectorServiceName == "otelcol" ||
@@ -1886,7 +1722,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 												if attr.Key == "service.version" {
 													version = val
 													collectorVersion = val // Use same version for bridge
-													log.Printf("DEBUG: OpAMP Bridge version extracted: %s", val)
+													log.Printf("DEBUG: OpAMP Bridge version identifying attribute present")
 												}
 											}
 											if version == "" && (attr.Key == "service.version" || attr.Key == "version") {
@@ -2176,29 +2012,12 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 										}
 									}
 
-									// Debug: Log all attributes to understand what Collector sends
-									log.Printf("DEBUG: Agent %s NonIdentifyingAttributes: %d items", instanceUID, len(message.AgentDescription.NonIdentifyingAttributes))
-									for i, attr := range message.AgentDescription.NonIdentifyingAttributes {
-										if i < 15 { // Log first 15 attributes
-											attrVal := ""
-											if attr.Value != nil {
-												attrVal = attr.Value.GetStringValue()
-											}
-											log.Printf("DEBUG:   [%d] %s = %q", i, attr.Key, attrVal)
-										}
-									}
+									log.Printf("DEBUG: Agent %s non-identifying attribute count: %d", uidPrefix(instanceUID), len(message.AgentDescription.NonIdentifyingAttributes))
 								}
 
 								// Debug: Log IdentifyingAttributes too
 								if message.AgentDescription != nil && message.AgentDescription.IdentifyingAttributes != nil {
-									log.Printf("DEBUG: Agent %s IdentifyingAttributes: %d items", instanceUID, len(message.AgentDescription.IdentifyingAttributes))
-									for i, attr := range message.AgentDescription.IdentifyingAttributes {
-										attrVal := ""
-										if attr.Value != nil {
-											attrVal = attr.Value.GetStringValue()
-										}
-										log.Printf("DEBUG:   [%d] %s = %q", i, attr.Key, attrVal)
-									}
+									log.Printf("DEBUG: Agent %s identifying attribute count: %d", uidPrefix(instanceUID), len(message.AgentDescription.IdentifyingAttributes))
 								}
 
 								// Store basic agent info
@@ -2400,9 +2219,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 								}
 
+								descriptionProvided := message.AgentDescription != nil
 								if isOpAMPBridge {
 									// This is a bridge - register in bridges table, NOT agents table
-									if err := m.registerBridge(instanceUID, name, version, labels, capabilities, tenantOverride, orgOverrideID); err != nil {
+									if err := m.registerBridge(instanceUID, name, version, labels, capabilities, tenantOverride, orgOverrideID, descriptionProvided); err != nil {
 										log.Printf("Failed to register bridge: %v", err)
 									} else {
 										log.Printf("✓ Registered OpAMP Bridge: %s (name: %s, version: %s)", instanceUID[:8], name, version)
@@ -2450,7 +2270,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									} else {
 										log.Printf("WARNING: No orgID found in headers or connection for agent %s, will try to resolve from labels (may default to org_id=1)", instanceUID[:8])
 									}
-									if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash, agentOrgID); err != nil {
+									if err := m.registerAgent(instanceUID, name, version, labels, capabilities, currentConfig, currentConfigHash, agentOrgID, descriptionProvided); err != nil {
 										log.Printf("Failed to register agent: %v", err)
 									} else {
 										// Ensure agent is marked online and last_seen_at is updated
@@ -2973,7 +2793,7 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 				log.Printf("  Agent name: %s", agentName.String)
 			}
 			if labelsJSON.Valid {
-				log.Printf("  Agent labels: %s", labelsJSON.String)
+				log.Printf("  Agent label snapshot bytes: %d", len(labelsJSON.String))
 			}
 			return fmt.Errorf("agent %s is not connected. Available connections: %v", agentUID, availableUIDs)
 		}
@@ -3138,7 +2958,7 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	log.Printf("DEBUG: PushConfig - agentUID=%s, agentName=%s, isKubernetes=%v",
 		agentUID, agentName.String, isKubernetes)
 	if labelsJSON.Valid && labelsJSON.String != "" {
-		log.Printf("DEBUG: PushConfig - labels: %s", labelsJSON.String)
+		log.Printf("DEBUG: PushConfig - label snapshot bytes: %d", len(labelsJSON.String))
 	}
 
 	// Safety check: If agent name contains any OpAMP Bridge indicator, treat as Kubernetes
@@ -3217,10 +3037,10 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		if len(agentLabels) > 0 {
 			if val, ok := agentLabels["opentelemetry.io/opamp-managed"]; ok && val != "" {
 				hasOpAMPLabelInLabels = true
-				log.Printf("DEBUG: Collector %s/%s has opamp-managed label in OpAMP labels: %s", collectorNamespace, collectorName, val)
+				log.Printf("DEBUG: Collector %s/%s has opamp-managed label in OpAMP labels", collectorNamespace, collectorName)
 			} else if val, ok := agentLabels["opamp-managed"]; ok && val != "" {
 				hasOpAMPLabelInLabels = true
-				log.Printf("DEBUG: Collector %s/%s has opamp-managed label (short form) in OpAMP labels: %s", collectorNamespace, collectorName, val)
+				log.Printf("DEBUG: Collector %s/%s has opamp-managed label (short form) in OpAMP labels", collectorNamespace, collectorName)
 			}
 		}
 
@@ -3249,37 +3069,8 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 		ContentType: "text/yaml",
 	}
 
-	// DEBUG: Log detailed config information being sent to bridge
-	log.Printf("DEBUG: ===== CONFIG PUSH TO BRIDGE =====")
-	log.Printf("DEBUG: Agent UID: %s", agentUID)
-	log.Printf("DEBUG: Agent Name: %s", agentName.String)
-	log.Printf("DEBUG: Is Kubernetes: %v", isKubernetes)
-	log.Printf("DEBUG: Collector Namespace: %s", collectorNamespace)
-	log.Printf("DEBUG: Collector Name: %s", collectorName)
-	log.Printf("DEBUG: Config Key: %s", configKey)
-	log.Printf("DEBUG: Config Hash: %s", configHash)
-	log.Printf("DEBUG: Config Size: %d bytes", len(configYAML))
-
-	// Show ConfigMap keys
-	configKeys := make([]string, 0, len(configMap))
-	for k := range configMap {
-		configKeys = append(configKeys, k)
-	}
-	log.Printf("DEBUG: ConfigMap Keys: %v", configKeys)
-
-	if isKubernetes {
-		log.Printf("DEBUG: For Kubernetes collector: Config key format is 'namespace/name' = '%s'", configKey)
-		log.Printf("DEBUG: Bridge will apply this config to OpenTelemetryCollector CRD: %s/%s", collectorNamespace, collectorName)
-		log.Printf("DEBUG: ===== FULL CONFIG YAML (CRD spec.config) =====")
-		log.Printf("DEBUG: %s", configYAML)
-		log.Printf("DEBUG: ===== END FULL CONFIG YAML =====")
-	} else {
-		log.Printf("DEBUG: For Docker/VM agent: Config key is '%s' (typically 'collector.yaml')", configKey)
-		log.Printf("DEBUG: ===== FULL CONFIG YAML =====")
-		log.Printf("DEBUG: %s", configYAML)
-		log.Printf("DEBUG: ===== END FULL CONFIG YAML =====")
-	}
-	log.Printf("DEBUG: ===== END CONFIG PUSH DEBUG =====")
+	log.Printf("DEBUG: Config push metadata: agent=%s kubernetes=%v key_count=%d config_bytes=%d hash=%s target=%s/%s",
+		uidPrefix(agentUID), isKubernetes, len(configMap), len(configYAML), configHash, collectorNamespace, collectorName)
 
 	// Validate ConfigMap structure per OpAMP spec
 	if len(configMap) == 0 {
@@ -3396,47 +3187,8 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	}
 
 	// DEBUG: Log full OpAMP ServerToAgent message structure
-	log.Printf("DEBUG: ===== OPAMP SERVERTOAGENT MESSAGE (COMPLETE STRUCTURE) =====")
-	log.Printf("DEBUG: Message Type: ServerToAgent (protobuf)")
-	log.Printf("DEBUG: InstanceUid: %s (hex), length: %d bytes, raw: %q", hex.EncodeToString(agentInstanceUID), len(agentInstanceUID), string(agentInstanceUID))
-	log.Printf("DEBUG: Capabilities: 0x%x (hex), binary: %b, decimal: %d", msg.Capabilities, msg.Capabilities, msg.Capabilities)
-	log.Printf("DEBUG: RemoteConfig field present: %v", msg.RemoteConfig != nil)
-	if msg.RemoteConfig != nil {
-		log.Printf("DEBUG: RemoteConfig.Config field present: %v", msg.RemoteConfig.Config != nil)
-		if msg.RemoteConfig.Config != nil {
-			log.Printf("DEBUG: RemoteConfig.Config.ConfigMap entries count: %d", len(msg.RemoteConfig.Config.ConfigMap))
-			for configKey, configFile := range msg.RemoteConfig.Config.ConfigMap {
-				log.Printf("DEBUG:   ConfigMap Entry Key: %q", configKey)
-				log.Printf("DEBUG:     AgentConfigFile.ContentType: %q", configFile.ContentType)
-				log.Printf("DEBUG:     AgentConfigFile.Body length: %d bytes", len(configFile.Body))
-				// Show full body for small configs, or first 1000 chars for large ones
-				bodyPreviewLen := 1000
-				if len(configFile.Body) < bodyPreviewLen {
-					bodyPreviewLen = len(configFile.Body)
-					log.Printf("DEBUG:     AgentConfigFile.Body (FULL, %d bytes):", len(configFile.Body))
-				} else {
-					log.Printf("DEBUG:     AgentConfigFile.Body (first %d of %d bytes):", bodyPreviewLen, len(configFile.Body))
-				}
-				log.Printf("DEBUG: %s", string(configFile.Body[:bodyPreviewLen]))
-				if len(configFile.Body) > bodyPreviewLen {
-					log.Printf("DEBUG:     ... (remaining %d bytes truncated)", len(configFile.Body)-bodyPreviewLen)
-				}
-			}
-		} else {
-			log.Printf("DEBUG: ERROR: RemoteConfig.Config is nil!")
-		}
-		log.Printf("DEBUG: RemoteConfig.ConfigHash: %s (hex), length: %d bytes", hex.EncodeToString(msg.RemoteConfig.ConfigHash), len(msg.RemoteConfig.ConfigHash))
-	} else {
-		log.Printf("DEBUG: ERROR: RemoteConfig is nil!")
-	}
-	log.Printf("DEBUG: ===== END OPAMP SERVERTOAGENT MESSAGE =====")
-
-	// DEBUG: Log full config YAML being sent (complete, not truncated) - this is the same as what's in ConfigMap
-	log.Printf("DEBUG: ===== FULL CONFIG YAML BEING SENT TO BRIDGE (COMPLETE, UNTRUNCATED) =====")
-	log.Printf("DEBUG: This is the exact YAML content that will be sent in the OpAMP RemoteConfig message")
-	log.Printf("DEBUG: Config size: %d bytes", len(configYAML))
-	log.Printf("DEBUG: %s", configYAML)
-	log.Printf("DEBUG: ===== END FULL CONFIG YAML =====")
+	log.Printf("DEBUG: OpAMP RemoteConfig metadata: uid=%s capability_bits=0x%x map_entries=%d body_bytes=%d hash_bytes=%d",
+		uidPrefix(agentUID), msg.Capabilities, len(configMap), len(configYAML), len(configHashBytes))
 
 	// Send config to agent via OpAMP connection
 	ctx := context.Background()

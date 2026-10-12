@@ -157,7 +157,10 @@ const buildEntry = async ({ entry, outRelative, copyTarget, name }) => {
   }
 };
 
-(async () => {
+module.exports = { transformToAmd };
+
+if (require.main === module) {
+  (async () => {
   try {
     fs.mkdirSync(publicDir, { recursive: true });
     for (const entry of entries) {
@@ -168,4 +171,5 @@ const buildEntry = async ({ entry, outRelative, copyTarget, name }) => {
     console.error(err);
     process.exit(1);
   }
-})();
+  })();
+}

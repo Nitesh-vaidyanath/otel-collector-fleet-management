@@ -263,7 +263,7 @@ var createBackendSrv = (isRunningInGrafana6, grafanaTransport6) => ({
 });
 
 // components/PipelineMetricsPanelView.tsx
-var { useCallback: useCallback2, useEffect, useMemo, useRef, useState } = React;
+var { useCallback, useEffect, useMemo, useRef, useState } = React;
 var SUPPORTED_METRICS_DATASOURCES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var runtimeMode = detectRuntimeMode();
 var isRunningInGrafana = runtimeMode === "grafana";
@@ -276,24 +276,40 @@ var METRIC_LABELS = [
   { key: "inbound", label: "Inbound Throughput", helper: "Example metric: otelcol_processor_incoming_items_total" },
   { key: "outbound", label: "Outbound Throughput", helper: "Example metric: otelcol_processor_outgoing_items_total" }
 ];
-var buildDefaultMetricQueries = (pipelineType, agentUid) => {
+var buildDefaultMetricQueries = (pipelineType, agentUid, podName) => {
   const safeUid = agentUid && agentUid.trim() !== "" ? agentUid : "$collector_uid";
-  const safePod = "$collector_pod";
+  const safePod = podName || "$collector_pod";
   const pipelineLabel = pipelineType && pipelineType.trim() !== "" ? pipelineType : "$pipeline";
   const prefix = "# Adjust selectors to match your collector metrics";
+  const baseLabels = `service_instance_id="${safeUid}"`;
+  const podLabel = podName ? `pod="${podName}"` : `pod=~"${safePod}"`;
+  const labelSelector = `${baseLabels}, ${podLabel}`;
+  const allPodsSelector = `${baseLabels}`;
   return {
     cpu: `${prefix}
-# CPU utilisation for ${pipelineLabel}
-sum(rate(otelcol_process_cpu_seconds_total{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m])) * 100`,
+# CPU usage per pod (Total & Per-Pod)
+# Total
+sum(rate(otelcol_process_cpu_seconds_total{${allPodsSelector}}[5m]))
+# Per-Pod
+rate(otelcol_process_cpu_seconds_total{${labelSelector}}[5m])`,
     memory: `${prefix}
-# Resident memory for ${pipelineLabel}
-avg_over_time(otelcol_process_memory_rss_bytes{service_instance_id="${safeUid}", pod=~"${safePod}"}[5m]) / 1024 / 1024`,
+# Memory usage per pod (Total & Per-Pod)
+# Total
+sum(otelcol_process_memory_rss{${allPodsSelector}} / 1024 / 1024)
+# Per-Pod
+otelcol_process_memory_rss{${labelSelector}} / 1024 / 1024`,
     inbound: `${prefix}
-# Items accepted into ${pipelineLabel}
-sum(rate(otelcol_processor_incoming_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`,
+# Incoming items per pod/processor (Total & Per-Pod)
+# Total
+sum(rate(otelcol_processor_incoming_items{${allPodsSelector}, pipeline="${pipelineLabel}"}[5m])) by (processor)
+# Per-Pod
+sum(rate(otelcol_processor_incoming_items{${labelSelector}, pipeline="${pipelineLabel}"}[5m])) by (pod, processor)`,
     outbound: `${prefix}
-# Items emitted from ${pipelineLabel}
-sum(rate(otelcol_processor_outgoing_items_total{service_instance_id="${safeUid}", pod=~"${safePod}", pipeline="${pipelineLabel}"}[5m]))`
+# Outgoing items per pod/processor (Total & Per-Pod)
+# Total
+sum(rate(otelcol_processor_outgoing_items{${allPodsSelector}, pipeline="${pipelineLabel}"}[5m])) by (processor)
+# Per-Pod
+sum(rate(otelcol_processor_outgoing_items{${labelSelector}, pipeline="${pipelineLabel}"}[5m])) by (pod, processor)`
   };
 };
 var extractPrometheusValue = (response) => {
@@ -326,6 +342,29 @@ var extractPrometheusValue = (response) => {
   }
   return null;
 };
+var extractPrometheusTimeSeries = (response) => {
+  if (!response || response.status !== "success") {
+    return [];
+  }
+  const data = response.data;
+  if (!data || data.resultType !== "matrix" || !Array.isArray(data.result)) {
+    return [];
+  }
+  const series = [];
+  for (const result of data.result) {
+    if (result.values && Array.isArray(result.values)) {
+      for (const [timestamp2, value] of result.values) {
+        const time = parseFloat(timestamp2);
+        const val = parseFloat(value);
+        if (Number.isFinite(time) && Number.isFinite(val)) {
+          series.push({ time, value: val });
+        }
+      }
+    }
+  }
+  series.sort((a, b) => a.time - b.time);
+  return series;
+};
 var formatValue = (key, value) => {
   if (value === null || Number.isNaN(value)) {
     return "\u2014";
@@ -341,6 +380,108 @@ var formatValue = (key, value) => {
     default:
       return value.toFixed(2);
   }
+};
+var TimeSeriesChart = ({ data, label, color = "#2563EB", height = 120 }) => {
+  if (!data || data.length === 0) {
+    return /* @__PURE__ */ React.createElement("div", { style: { height, display: "flex", alignItems: "center", justifyContent: "center", color: "#9CA3AF", fontSize: 12 } }, "No data available");
+  }
+  const padding = { top: 20, right: 20, bottom: 30, left: 50 };
+  const width = 400;
+  const chartHeight = height - padding.top - padding.bottom;
+  const chartWidth = width - padding.left - padding.right;
+  const minTime = Math.min(...data.map((d) => d.time));
+  const maxTime = Math.max(...data.map((d) => d.time));
+  const minValue = Math.min(...data.map((d) => d.value));
+  const maxValue = Math.max(...data.map((d) => d.value));
+  const valueRange = maxValue - minValue || 1;
+  const scaleX = (time) => (time - minTime) / (maxTime - minTime || 1) * chartWidth;
+  const scaleY = (value) => chartHeight - (value - minValue) / valueRange * chartHeight;
+  const points = data.map((d) => `${scaleX(d.time) + padding.left},${scaleY(d.value) + padding.top}`).join(" ");
+  const formatTime = (timestamp2) => {
+    const date = new Date(timestamp2 * 1e3);
+    return date.toLocaleTimeString();
+  };
+  const formatValue2 = (val) => {
+    if (val >= 1e6) return `${(val / 1e6).toFixed(1)}M`;
+    if (val >= 1e3) return `${(val / 1e3).toFixed(1)}K`;
+    return val.toFixed(1);
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { width: "100%", height, background: "#FFFFFF", borderRadius: 6, border: "1px solid #E2E8F0", padding: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#1F2937", marginBottom: 8 } }, label), /* @__PURE__ */ React.createElement("svg", { width, height, style: { display: "block" } }, [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = padding.top + ratio * chartHeight;
+    return /* @__PURE__ */ React.createElement(
+      "line",
+      {
+        key: `grid-${ratio}`,
+        x1: padding.left,
+        y1: y,
+        x2: width - padding.right,
+        y2: y,
+        stroke: "#E5E7EB",
+        strokeWidth: 1
+      }
+    );
+  }), [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const value = minValue + ratio * valueRange;
+    const y = padding.top + (1 - ratio) * chartHeight;
+    return /* @__PURE__ */ React.createElement(
+      "text",
+      {
+        key: `y-label-${ratio}`,
+        x: padding.left - 5,
+        y: y + 4,
+        textAnchor: "end",
+        fontSize: "10",
+        fill: "#6B7280"
+      },
+      formatValue2(value)
+    );
+  }), /* @__PURE__ */ React.createElement(
+    "polyline",
+    {
+      points,
+      fill: "none",
+      stroke: color,
+      strokeWidth: 2
+    }
+  ), data.map((d, idx) => /* @__PURE__ */ React.createElement(
+    "circle",
+    {
+      key: idx,
+      cx: scaleX(d.time) + padding.left,
+      cy: scaleY(d.value) + padding.top,
+      r: 2,
+      fill: color
+    }
+  )), /* @__PURE__ */ React.createElement(
+    "line",
+    {
+      x1: padding.left,
+      y1: height - padding.bottom,
+      x2: width - padding.right,
+      y2: height - padding.bottom,
+      stroke: "#9CA3AF",
+      strokeWidth: 1
+    }
+  ), data.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+    "text",
+    {
+      x: padding.left,
+      y: height - 5,
+      fontSize: "10",
+      fill: "#6B7280"
+    },
+    formatTime(data[0].time)
+  ), /* @__PURE__ */ React.createElement(
+    "text",
+    {
+      x: width - padding.right,
+      y: height - 5,
+      fontSize: "10",
+      fill: "#6B7280",
+      textAnchor: "end"
+    },
+    formatTime(data[data.length - 1].time)
+  ))));
 };
 var PipelineMetricsPanelView = ({
   pipelineType,
@@ -366,6 +507,8 @@ var PipelineMetricsPanelView = ({
   const [error, setError] = useState(null);
   const [lastRunAt, setLastRunAt] = useState(null);
   const [values, setValues] = useState({ cpu: "\u2014", memory: "\u2014", inbound: "\u2014", outbound: "\u2014" });
+  const [timeSeriesData, setTimeSeriesData] = useState({ cpu: [], memory: [], inbound: [], outbound: [] });
+  const [viewMode, setViewMode] = useState("charts");
   const autoRunRef = useRef(false);
   const orgHeaders = useMemo(
     () => datasourceOrgId ? { "X-Grafana-Org-Id": String(datasourceOrgId) } : void 0,
@@ -377,6 +520,11 @@ var PipelineMetricsPanelView = ({
     }
   }, [defaultQueries]);
   useEffect(() => {
+    if (datasourceOrgId !== null) {
+      setSelectedDatasource(null);
+    }
+  }, [datasourceOrgId]);
+  useEffect(() => {
     let mounted = true;
     const loadDatasources = async () => {
       try {
@@ -387,19 +535,17 @@ var PipelineMetricsPanelView = ({
         const available = Array.isArray(response) ? response.filter((item) => SUPPORTED_METRICS_DATASOURCES.has(item.type)).map((item) => ({ id: item.id, uid: item.uid, name: item.name, type: item.type })) : [];
         setDatasources(available);
         setDatasourceError(available.length === 0 ? "No Prometheus-compatible data sources were found." : null);
-        if (!selectedDatasource) {
-          if (defaultDatasourceUid) {
-            const match = available.find((ds) => ds.uid === defaultDatasourceUid);
-            if (match) {
-              setSelectedDatasource(match);
-              onDatasourceChange?.(match);
-              return;
-            }
+        if (defaultDatasourceUid) {
+          const match = available.find((ds) => ds.uid === defaultDatasourceUid);
+          if (match) {
+            setSelectedDatasource(match);
+            onDatasourceChange?.(match);
+            return;
           }
-          if (available.length > 0 && !readOnly) {
-            setSelectedDatasource(available[0]);
-            onDatasourceChange?.(available[0]);
-          }
+        }
+        if (!selectedDatasource && available.length > 0 && !readOnly) {
+          setSelectedDatasource(available[0]);
+          onDatasourceChange?.(available[0]);
         }
       } catch (err) {
         if (!mounted) {
@@ -413,7 +559,7 @@ var PipelineMetricsPanelView = ({
     return () => {
       mounted = false;
     };
-  }, [defaultDatasourceUid, onDatasourceChange, readOnly, selectedDatasource, orgHeaders]);
+  }, [defaultDatasourceUid, onDatasourceChange, readOnly, orgHeaders, datasourceOrgId]);
   useEffect(() => {
     if (!defaultDatasourceUid || !datasources || datasources.length === 0) {
       return;
@@ -427,14 +573,14 @@ var PipelineMetricsPanelView = ({
       onDatasourceChange?.(match);
     }
   }, [datasources, defaultDatasourceUid, onDatasourceChange, selectedDatasource]);
-  const updateQuery = useCallback2((key, value) => {
+  const updateQuery = useCallback((key, value) => {
     setQueries((prev) => {
       const next = { ...prev, [key]: value };
       onQueriesChange?.(next);
       return next;
     });
   }, [onQueriesChange]);
-  const runQueries = useCallback2(async () => {
+  const runQueries = useCallback(async () => {
     if (!selectedDatasource) {
       setError("Select a datasource before running queries.");
       return;
@@ -443,23 +589,47 @@ var PipelineMetricsPanelView = ({
     setError(null);
     try {
       const now = Math.floor(Date.now() / 1e3);
+      const start = now - 3600;
       const results = { cpu: "\u2014", memory: "\u2014", inbound: "\u2014", outbound: "\u2014" };
+      const timeSeries = { cpu: [], memory: [], inbound: [], outbound: [] };
       for (const { key } of METRIC_LABELS) {
         const query = queries[key];
         if (!query || query.trim() === "") {
           results[key] = "\u2014";
+          timeSeries[key] = [];
           continue;
         }
-        const response = await rawBackendSrv2.datasourceRequest({
-          method: "GET",
-          url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query`,
-          params: { query, time: now },
-          headers: orgHeaders
-        });
-        const value = extractPrometheusValue(response?.data);
-        results[key] = formatValue(key, value);
+        try {
+          if (orgHeaders) {
+            console.log(`DEBUG: Running query for ${key} with org ID ${orgHeaders["X-Grafana-Org-Id"]}`);
+          }
+          const instantResponse = await rawBackendSrv2.datasourceRequest({
+            method: "GET",
+            url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query`,
+            params: { query, time: now },
+            headers: orgHeaders
+          });
+          const value = extractPrometheusValue(instantResponse?.data);
+          results[key] = formatValue(key, value);
+        } catch (err) {
+          console.warn(`Instant query failed for ${key}:`, err);
+        }
+        try {
+          const rangeResponse = await rawBackendSrv2.datasourceRequest({
+            method: "GET",
+            url: `/api/datasources/proxy/${selectedDatasource.id}/api/v1/query_range`,
+            params: { query, start, end: now, step: "60" },
+            headers: orgHeaders
+          });
+          const seriesData = extractPrometheusTimeSeries(rangeResponse?.data);
+          timeSeries[key] = seriesData;
+        } catch (err) {
+          console.warn(`Range query failed for ${key}:`, err);
+          timeSeries[key] = [];
+        }
       }
       setValues(results);
+      setTimeSeriesData(timeSeries);
       setLastRunAt(Date.now());
     } catch (err) {
       console.error("Failed to execute Prometheus queries", err);
@@ -474,7 +644,17 @@ var PipelineMetricsPanelView = ({
       runQueries();
     }
   }, [readOnly, selectedDatasource, runQueries]);
-  const handleDatasourceChange = useCallback2((event) => {
+  useEffect(() => {
+    if (readOnly && selectedDatasource && autoRunRef.current && datasourceOrgId !== null && datasourceOrgId !== void 0) {
+      console.log(`DEBUG: Org ID changed to ${datasourceOrgId}, re-running queries with org headers:`, orgHeaders);
+      autoRunRef.current = false;
+      setTimeout(() => {
+        autoRunRef.current = true;
+        runQueries();
+      }, 100);
+    }
+  }, [datasourceOrgId, readOnly, selectedDatasource, runQueries, orgHeaders]);
+  const handleDatasourceChange = useCallback((event) => {
     const id = Number(event.target.value);
     const match = datasources.find((item) => item.id === id) || null;
     setSelectedDatasource(match);
@@ -551,7 +731,39 @@ var PipelineMetricsPanelView = ({
     ", org ",
     /* @__PURE__ */ React.createElement("code", null, orgName || "default"),
     "."
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 } }, METRIC_LABELS.map(({ key, label }) => /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#64748B" } }, "View:"), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      onClick: () => setViewMode("values"),
+      style: {
+        padding: "4px 12px",
+        borderRadius: 4,
+        border: "1px solid #CBD5F5",
+        background: viewMode === "values" ? "#2563EB" : "#FFFFFF",
+        color: viewMode === "values" ? "#FFFFFF" : "#1F2937",
+        fontSize: 12,
+        cursor: "pointer"
+      }
+    },
+    "Values"
+  ), /* @__PURE__ */ React.createElement(
+    "button",
+    {
+      type: "button",
+      onClick: () => setViewMode("charts"),
+      style: {
+        padding: "4px 12px",
+        borderRadius: 4,
+        border: "1px solid #CBD5F5",
+        background: viewMode === "charts" ? "#2563EB" : "#FFFFFF",
+        color: viewMode === "charts" ? "#FFFFFF" : "#1F2937",
+        fontSize: 12,
+        cursor: "pointer"
+      }
+    },
+    "Charts"
+  )), viewMode === "values" ? /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 } }, METRIC_LABELS.map(({ key, label }) => /* @__PURE__ */ React.createElement(
     "div",
     {
       key,
@@ -567,6 +779,14 @@ var PipelineMetricsPanelView = ({
     },
     /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#64748B" } }, label),
     /* @__PURE__ */ React.createElement("div", { style: { fontSize: 18, fontWeight: 600, color: "#0F172A" } }, values[key])
+  ))) : /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))", gap: 16 } }, METRIC_LABELS.map(({ key, label }) => /* @__PURE__ */ React.createElement(
+    TimeSeriesChart,
+    {
+      key,
+      data: timeSeriesData[key] || [],
+      label,
+      color: key === "cpu" ? "#EF4444" : key === "memory" ? "#3B82F6" : key === "inbound" ? "#10B981" : "#F59E0B"
+    }
   ))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#64748B", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 } }, /* @__PURE__ */ React.createElement("span", null, "Last updated: ", lastRunAt ? new Date(lastRunAt).toLocaleString() : "Not run yet"), /* @__PURE__ */ React.createElement("span", null, "Queries execute via Grafana datasource proxy.")), error && /* @__PURE__ */ React.createElement("div", { style: { padding: 10, borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", fontSize: 12, color: "#B91C1C" } }, error), datasourceError && !selectedDatasource && /* @__PURE__ */ React.createElement("div", { style: { padding: 10, borderRadius: 6, border: "1px solid #FBBF24", background: "#FFFBEB", fontSize: 12, color: "#92400E" } }, datasourceError)) : /* @__PURE__ */ React.createElement(
     "div",
     {
@@ -3916,8 +4136,10 @@ var PipelineFlowDiagram = React2.memo(function PipelineFlowDiagram2({
   agentUid,
   orgName,
   metricsSettings,
-  onConfigureMetrics
+  onConfigureMetrics,
+  agentLabels
 }) {
+  const podName = agentLabels ? agentLabels["pod"] || agentLabels["k8s.pod.name"] || agentLabels["k8s_pod_name"] || agentLabels["host.name"] || void 0 : void 0;
   const pipelineFlows = useMemo2(() => {
     const flows2 = [];
     if (!config) {
@@ -4052,14 +4274,14 @@ var PipelineFlowDiagram = React2.memo(function PipelineFlowDiagram2({
       /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 16 } }, metricsSettings?.enabled && metricsSettings.datasourceUid ? /* @__PURE__ */ React2.createElement(
         PipelineMetricsPanelView,
         {
-          key: `${flow.type}-${metricsSettings.datasourceUid}`,
+          key: `${flow.type}-${metricsSettings.datasourceUid}-${metricsSettings.datasourceOrgId || "default"}`,
           pipelineType: flow.type,
           agentUid,
           agentName,
           orgName,
           allowDisable: false,
           initialEnabled: true,
-          defaultQueries: metricsSettings.queries && Object.keys(metricsSettings.queries).length > 0 ? metricsSettings.queries : buildDefaultMetricQueries(flow.type, agentUid),
+          defaultQueries: metricsSettings.queries && Object.keys(metricsSettings.queries).length > 0 ? metricsSettings.queries : buildDefaultMetricQueries(flow.type, agentUid, podName),
           defaultDatasourceUid: metricsSettings.datasourceUid,
           datasourceOrgId: metricsSettings.datasourceOrgId,
           readOnly: true
@@ -4720,7 +4942,8 @@ function MonitoringSection({
       agentUid: monitoringData?.agent?.agentUid,
       orgName: monitoringData?.agent?.orgName,
       metricsSettings,
-      onConfigureMetrics: () => onConfigureTelemetry("metrics")
+      onConfigureMetrics: () => onConfigureTelemetry("metrics"),
+      agentLabels: monitoringData?.agent?.labels || monitoringData?.agent?.agent?.labels
     }
   ), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 16 } }, /* @__PURE__ */ React2.createElement(
     LogsPanelView,
@@ -4752,6 +4975,194 @@ function MonitoringSection({
 
 // pages/components/TelemetryConfigDrawer.tsx
 var React2 = __REACT__.default || __REACT__;
+
+// pages/components/PromQLQueryEditor.tsx
+
+var PromQLQueryEditor = ({
+  value,
+  onChange,
+  placeholder = "Enter PromQL query...",
+  height = "200px"
+}) => {
+  const [useGrafanaEditor, setUseGrafanaEditor] = useState2(false);
+  const grafanaEditorRef = useRef2(null);
+  useEffect2(() => {
+    try {
+      const grafanaUI = window.__GRAFANA_UI__ || window.require?.("@grafana/ui");
+      if (grafanaUI?.CodeEditor) {
+        setUseGrafanaEditor(true);
+        grafanaEditorRef.current = grafanaUI.CodeEditor;
+      }
+    } catch (err) {
+    }
+  }, []);
+  if (useGrafanaEditor && grafanaEditorRef.current) {
+    const CodeEditor = grafanaEditorRef.current;
+    return /* @__PURE__ */ React2.createElement(
+      CodeEditor,
+      {
+        value: value || "",
+        language: "promql",
+        height,
+        onBlur: (val) => onChange(val),
+        onSave: (val) => onChange(val),
+        showMiniMap: false,
+        showLineNumbers: true
+      }
+    );
+  }
+  return /* @__PURE__ */ React2.createElement(
+    "textarea",
+    {
+      value: value || "",
+      onChange: (e) => onChange(e.target.value),
+      placeholder,
+      rows: 8,
+      style: {
+        width: "100%",
+        padding: "8px 12px",
+        border: "none",
+        outline: "none",
+        fontFamily: '"Monaco", "Menlo", "Ubuntu Mono", "Consolas", "source-code-pro", monospace',
+        fontSize: "13px",
+        lineHeight: "1.6",
+        background: "#FFFFFF",
+        color: "#1F2937",
+        resize: "vertical",
+        minHeight: height,
+        boxSizing: "border-box"
+      },
+      spellCheck: false
+    }
+  );
+};
+
+// pages/utils/promql.ts
+var IDENT = "[A-Za-z_:][A-Za-z0-9_:]*";
+var METRIC_ID = new RegExp(`^${IDENT}$`);
+var LABEL_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function outsideStringPositions(query) {
+  const outside = new Array(query.length).fill(true);
+  let quote = "";
+  let escaped = false;
+  for (let i = 0; i < query.length; i++) {
+    const char = query[i];
+    if (quote) {
+      outside[i] = false;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") {
+      quote = char;
+      outside[i] = false;
+    }
+  }
+  return outside;
+}
+function metricTokens(query) {
+  const trimmedStart = query.search(/\S/);
+  const trimmed = query.trim();
+  if (trimmedStart >= 0 && METRIC_ID.test(trimmed)) {
+    return [{ start: trimmedStart, end: trimmedStart + trimmed.length, name: trimmed }];
+  }
+  const outside = outsideStringPositions(query);
+  const tokens = [];
+  const matcher = new RegExp(IDENT, "g");
+  let match;
+  while ((match = matcher.exec(query)) !== null) {
+    const start = match.index;
+    if (!outside[start]) continue;
+    let after = matcher.lastIndex;
+    while (/\s/.test(query[after] || "")) after++;
+    if (query[after] !== "{" && query[after] !== "[") continue;
+    const prefix = query.slice(0, start);
+    if (query[after] === "[" && !/(?:rate|sum)\s*\(\s*(?:(?:rate|sum)\s*\(\s*)?$/.test(prefix)) continue;
+    tokens.push({ start, end: matcher.lastIndex, name: match[0] });
+  }
+  if (tokens.length !== 1 || !isSupportedSingleSelector(query, tokens[0])) return [];
+  return tokens;
+}
+function isSupportedSingleSelector(query, token) {
+  const prefix = query.slice(0, token.start);
+  const wrappers = prefix.match(/^(\s*)(sum\s*\(\s*)?(rate\s*\(\s*)?$/);
+  if (!wrappers) return false;
+  const openCount = (wrappers[2] ? 1 : 0) + (wrappers[3] ? 1 : 0);
+  let cursor = token.end;
+  while (/\s/.test(query[cursor] || "")) cursor++;
+  if (query[cursor] === "{") {
+    cursor = matchingBrace(query, cursor) + 1;
+    if (cursor === 0) return false;
+  } else if (openCount === 0 && query[cursor] === "[") {
+    return false;
+  }
+  while (/\s/.test(query[cursor] || "")) cursor++;
+  if (query[cursor] === "[") {
+    const close = query.indexOf("]", cursor + 1);
+    if (close < 0) return false;
+    cursor = close + 1;
+  }
+  const suffix = query.slice(cursor).replace(/\s/g, "");
+  return suffix === ")".repeat(openCount);
+}
+function matchingBrace(query, open) {
+  const outside = outsideStringPositions(query);
+  let depth = 0;
+  for (let i = open; i < query.length; i++) {
+    if (!outside[i]) continue;
+    if (query[i] === "{") depth++;
+    else if (query[i] === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+function insertMetricSuggestion(query, metric) {
+  if (!METRIC_ID.test(metric)) return { query, changed: false, hint: "Metric name is not a valid Prometheus identifier." };
+  if (!query.trim()) return { query: metric, changed: true };
+  const tokens = metricTokens(query);
+  if (tokens.length !== 1) return { query, changed: false, hint: "Metric suggestion was not applied because the query is ambiguous." };
+  const token = tokens[0];
+  return { query: query.slice(0, token.start) + metric + query.slice(token.end), changed: true };
+}
+function insertLabelMatcher(query, label) {
+  if (!LABEL_ID.test(label)) return { query, changed: false, hint: "Label name is not a valid Prometheus identifier." };
+  const tokens = metricTokens(query);
+  if (tokens.length !== 1) return { query, changed: false, hint: "Label matcher was not added because the query is ambiguous." };
+  const token = tokens[0];
+  let open = token.end;
+  while (/\s/.test(query[open] || "")) open++;
+  if (query[open] === "{") {
+    const close = matchingBrace(query, open);
+    if (close < 0) return { query, changed: false, hint: "Label matcher was not added because the selector is incomplete." };
+    const body = query.slice(open + 1, close);
+    const exists = new RegExp(`(?:^|,)\\s*${label}\\s*(?:=|!=|=~|!~)`).test(body);
+    if (exists) return { query, changed: false, hint: `Selector already contains ${label}.` };
+    const separator = body.trim().endsWith(",") ? " " : body.trim() ? ", " : "";
+    return { query: query.slice(0, close) + separator + `${label}=""` + query.slice(close), changed: true };
+  }
+  return { query: query.slice(0, token.end) + `{${label}=""}` + query.slice(token.end), changed: true };
+}
+
+// pages/utils/telemetryOrg.ts
+function resolveDatasourceOrgId(savedOrgId, currentOrgId) {
+  return savedOrgId ?? currentOrgId ?? null;
+}
+function datasourceOrgSelectValue(savedOrgId, currentOrgId) {
+  return savedOrgId == null || savedOrgId === currentOrgId ? "" : String(savedOrgId);
+}
+function datasourceOrgHeaders(orgId) {
+  return orgId == null ? {} : { headers: { "X-Grafana-Org-Id": String(orgId) } };
+}
+function createRequestEpoch() {
+  let epoch = 0;
+  return {
+    begin: () => ++epoch,
+    isCurrent: (requestId) => epoch === requestId,
+    invalidate: (requestId) => {
+      if (requestId === void 0 || epoch === requestId) epoch++;
+    }
+  };
+}
+
+// pages/components/TelemetryConfigDrawer.tsx
 var PROM_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["prometheus", "mimir", "grafana-mimir-datasource", "thanos"]);
 var LOKI_DATASOURCE_TYPES = /* @__PURE__ */ new Set(["loki"]);
 var STAGE_SUMMARY2 = {
@@ -4768,7 +5179,7 @@ var runtimeMode4 = detectRuntimeMode();
 var isRunningInGrafana4 = runtimeMode4 === "grafana";
 var grafanaTransport4 = detectGrafanaTransport(isRunningInGrafana4);
 var backendSrv4 = createBackendSrv(isRunningInGrafana4, grafanaTransport4);
-var { useState: useState2, useEffect: useEffect2 } = React2;
+var { useState: useState2, useEffect: useEffect2, useRef: useRef2 } = React2;
 var TelemetryConfigDrawer = ({
   open,
   mode,
@@ -4786,10 +5197,15 @@ var TelemetryConfigDrawer = ({
   const [datasources, setDatasources] = useState2([]);
   const [loading, setLoading] = useState2(false);
   const [error, setError] = useState2(null);
-  const effectiveMetricsOrgId = metricsConfig.datasourceOrgId ?? currentOrgId ?? null;
-  const effectiveLogsOrgId = logsConfig.datasourceOrgId ?? currentOrgId ?? null;
+  const [metadataLoading, setMetadataLoading] = useState2(false);
+  const [metadataError, setMetadataError] = useState2(null);
+  const datasourceRequest = useRef2(createRequestEpoch());
+  const metadataRequest = useRef2(createRequestEpoch());
+  const effectiveMetricsOrgId = resolveDatasourceOrgId(metricsConfig.datasourceOrgId, currentOrgId);
+  const effectiveLogsOrgId = resolveDatasourceOrgId(logsConfig.datasourceOrgId, currentOrgId);
   const [metricNames, setMetricNames] = useState2([]);
   const [labelKeys, setLabelKeys] = useState2([]);
+  const [queryHint, setQueryHint] = useState2(null);
   const parseOrgId = (value) => {
     const trimmed = value.trim();
     if (trimmed === "") {
@@ -4822,81 +5238,85 @@ var TelemetryConfigDrawer = ({
       }
     });
   };
-  const loadDatasources = useCallback(async () => {
+  const applyMetricSuggestion = (key, metric) => {
+    const result = insertMetricSuggestion(metricsConfig.queries[key] || "", metric);
+    setQueryHint(result.hint || null);
+    if (result.changed) onMetricsChange({ ...metricsConfig, queries: { ...metricsConfig.queries, [key]: result.query } });
+  };
+  const applyLabelSuggestion = (key, label) => {
+    const result = insertLabelMatcher(metricsConfig.queries[key] || "", label);
+    setQueryHint(result.hint || null);
+    if (result.changed) onMetricsChange({ ...metricsConfig, queries: { ...metricsConfig.queries, [key]: result.query } });
+  };
+  useEffect2(() => {
+    const requestId = datasourceRequest.current.begin();
+    setDatasources([]);
+    setError(null);
     if (!open) {
-      setDatasources([]);
-      setError(null);
-      return;
+      setLoading(false);
+      return () => {
+        datasourceRequest.current.invalidate(requestId);
+      };
     }
     const orgId = mode === "metrics" ? effectiveMetricsOrgId : effectiveLogsOrgId;
-    const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
-    let cancelled = false;
-    const loadDatasources2 = async () => {
-      setLoading(true);
+    const requestOptions = datasourceOrgHeaders(orgId);
+    setLoading(true);
+    void (async () => {
       try {
-        const response = await backendSrv4.get("/api/datasources", { headers });
-        if (cancelled) {
-          return;
-        }
+        const response = await backendSrv4.get("/api/datasources", requestOptions);
+        if (!datasourceRequest.current.isCurrent(requestId)) return;
         const filtered = Array.isArray(response) ? response.filter((ds) => mode === "metrics" ? PROM_DATASOURCE_TYPES.has(ds.type) : LOKI_DATASOURCE_TYPES.has(ds.type)) : [];
         setDatasources(filtered);
         setError(filtered.length === 0 ? "No compatible data sources were found." : null);
       } catch (err) {
-        if (!cancelled) {
-          console.error("Failed to load data sources", err);
-          setError(err?.message || "Failed to load data sources.");
-        }
+        if (datasourceRequest.current.isCurrent(requestId)) setError(err?.message || "Failed to load data sources.");
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (datasourceRequest.current.isCurrent(requestId)) setLoading(false);
       }
-    };
-    loadDatasources2();
+    })();
     return () => {
-      cancelled = true;
+      datasourceRequest.current.invalidate(requestId);
     };
-  }, [open, mode, metricsConfig.datasourceOrgId, logsConfig.datasourceOrgId]);
+  }, [open, mode, effectiveMetricsOrgId, effectiveLogsOrgId]);
   useEffect2(() => {
-    loadDatasources();
-  }, [loadDatasources]);
-  const loadPromMetadata = useCallback(
-    async (dsUid, orgId) => {
-      if (!dsUid) {
-        setMetricNames([]);
-        setLabelKeys([]);
-        return;
-      }
+    const requestId = metadataRequest.current.begin();
+    setMetricNames([]);
+    setLabelKeys([]);
+    setMetadataError(null);
+    const dsUid = metricsConfig.datasourceUid;
+    const orgId = effectiveMetricsOrgId;
+    const ds = datasources.find((item) => item.uid === dsUid);
+    if (!open || mode !== "metrics" || !dsUid || !ds) {
+      setMetadataLoading(false);
+      return () => {
+        metadataRequest.current.invalidate(requestId);
+      };
+    }
+    const requestOptions = datasourceOrgHeaders(orgId);
+    setMetadataLoading(true);
+    void (async () => {
       try {
-        const ds = datasources.find((d) => d.uid === dsUid);
-        if (!ds) {
-          setMetricNames([]);
-          setLabelKeys([]);
-          return;
-        }
-        const headers = orgId ? { "X-Grafana-Org-Id": String(orgId) } : void 0;
         const metricResp = await backendSrv4.get(
           `/api/datasources/proxy/${ds.id}/api/v1/label/__name__/values`,
-          { headers }
+          requestOptions
         );
         const labelsResp = await backendSrv4.get(
           `/api/datasources/proxy/${ds.id}/api/v1/labels`,
-          { headers }
+          requestOptions
         );
+        if (!metadataRequest.current.isCurrent(requestId)) return;
         setMetricNames(Array.isArray(metricResp?.data) ? metricResp.data : []);
         setLabelKeys(Array.isArray(labelsResp?.data) ? labelsResp.data : []);
-      } catch {
-        setMetricNames([]);
-        setLabelKeys([]);
+      } catch (err) {
+        if (metadataRequest.current.isCurrent(requestId)) setMetadataError(err?.message || "Failed to load Prometheus metadata.");
+      } finally {
+        if (metadataRequest.current.isCurrent(requestId)) setMetadataLoading(false);
       }
-    },
-    [datasources]
-  );
-  useEffect2(() => {
-    if (mode === "metrics") {
-      loadPromMetadata(metricsConfig.datasourceUid, effectiveMetricsOrgId);
-    }
-  }, [mode, metricsConfig.datasourceUid, effectiveMetricsOrgId, loadPromMetadata]);
+    })();
+    return () => {
+      metadataRequest.current.invalidate(requestId);
+    };
+  }, [open, mode, metricsConfig.datasourceUid, effectiveMetricsOrgId, datasources]);
   if (!open) {
     return null;
   }
@@ -4943,50 +5363,54 @@ var TelemetryConfigDrawer = ({
       /* @__PURE__ */ React2.createElement("div", { style: { flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 16 } }, mode === "metrics" ? /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Select a Prometheus/Mimir datasource and adjust the default queries to match your labels. Placeholders like ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " are substituted at runtime."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Datasource org", /* @__PURE__ */ React2.createElement(
         "select",
         {
-          value: effectiveMetricsOrgId ?? "",
-          onChange: (event) => onMetricsChange({
-            ...metricsConfig,
-            datasourceOrgId: parseOrgId(event.target.value),
-            datasourceUid: null
-            // reset selection when org changes
-          }),
+          value: datasourceOrgSelectValue(metricsConfig.datasourceOrgId, currentOrgId),
+          onChange: (event) => {
+            const newOrgId = parseOrgId(event.target.value);
+            console.log(`DEBUG: Org ID changed to ${newOrgId}, resetting datasource`);
+            onMetricsChange({
+              ...metricsConfig,
+              datasourceOrgId: newOrgId,
+              datasourceUid: null
+              // reset selection when org changes
+            });
+          },
           style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
         },
         /* @__PURE__ */ React2.createElement("option", { value: "" }, "Current org", currentOrgId ? ` (#${currentOrgId})` : ""),
         orgOptions.filter((o) => o.id !== currentOrgId).map((org) => /* @__PURE__ */ React2.createElement("option", { key: org.id, value: org.id }, org.name || `Org ${org.id}`, " (#", org.id, ")"))
-      ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "Pick another Grafana org to discover datasources there (requires access).")), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Data source", /* @__PURE__ */ React2.createElement(
+      ), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "Pick another Grafana org to discover datasources there (requires access).")), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Data source", loading ? /* @__PURE__ */ React2.createElement("div", { style: { padding: "6px 10px", fontSize: 12, color: "#6B7280", background: "#F9FAFB", borderRadius: 6 } }, "Loading datasources...") : error ? /* @__PURE__ */ React2.createElement("div", { style: { padding: "6px 10px", fontSize: 12, color: "#DC2626", background: "#FEE2E2", borderRadius: 6 } }, error) : /* @__PURE__ */ React2.createElement(
         "select",
         {
           value: metricsConfig.datasourceUid ?? "",
-          onChange: (event) => onMetricsChange({
-            ...metricsConfig,
-            datasourceUid: event.target.value || null
-          }),
-          disabled: loading || datasources.length === 0,
+          onChange: (event) => {
+            console.log(`DEBUG: Datasource changed to ${event.target.value}`);
+            onMetricsChange({
+              ...metricsConfig,
+              datasourceUid: event.target.value || null
+            });
+          },
+          disabled: datasources.length === 0,
           style: { padding: "6px 10px", borderRadius: 6, border: "1px solid #CBD5F5", fontSize: 12 }
         },
-        /* @__PURE__ */ React2.createElement("option", { value: "" }, "Select datasource"),
+        /* @__PURE__ */ React2.createElement("option", { value: "" }, "Select datasource (", datasources.length, " available)"),
         datasources.map((ds) => /* @__PURE__ */ React2.createElement("option", { key: ds.uid, value: ds.uid }, ds.name, " (", ds.type, ")"))
-      )), Object.keys(metricsConfig.queries).map((key) => /* @__PURE__ */ React2.createElement("div", { key, style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("div", null, key.toUpperCase(), " query"), /* @__PURE__ */ React2.createElement(
-        "textarea",
+      ), effectiveMetricsOrgId && /* @__PURE__ */ React2.createElement("span", { style: { fontSize: 11, color: "#6B7280" } }, "Loading datasources from org ", effectiveMetricsOrgId)), Object.keys(metricsConfig.queries).map((key) => /* @__PURE__ */ React2.createElement("div", { key, style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600 } }, key.toUpperCase(), " query"), /* @__PURE__ */ React2.createElement("div", { style: { position: "relative", border: "1px solid #CBD5F5", borderRadius: 6, overflow: "hidden", background: "#FFFFFF" } }, /* @__PURE__ */ React2.createElement(
+        PromQLQueryEditor,
         {
-          value: metricsConfig.queries[key],
-          rows: 5,
-          onChange: (event) => onMetricsChange({
+          value: metricsConfig.queries[key] || "",
+          onChange: (newValue) => (setQueryHint(null), onMetricsChange({
             ...metricsConfig,
-            queries: { ...metricsConfig.queries, [key]: event.target.value }
-          }),
-          style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
+            queries: { ...metricsConfig.queries, [key]: newValue }
+          })),
+          placeholder: "Enter PromQL query...",
+          height: "200px"
         }
-      ), mode === "metrics" && metricNames.length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11, color: "#475569" } }, metricNames.slice(0, 12).map((name) => /* @__PURE__ */ React2.createElement(
+      )), mode === "metrics" && metricNames.length > 0 && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11, color: "#475569" } }, metricNames.slice(0, 12).map((name) => /* @__PURE__ */ React2.createElement(
         "button",
         {
           key: name,
           type: "button",
-          onClick: () => onMetricsChange({
-            ...metricsConfig,
-            queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${name}` }
-          }),
+          onClick: () => applyMetricSuggestion(key, name),
           style: {
             border: "1px solid #CBD5F5",
             borderRadius: 4,
@@ -5001,10 +5425,7 @@ var TelemetryConfigDrawer = ({
         {
           key: lbl,
           type: "button",
-          onClick: () => onMetricsChange({
-            ...metricsConfig,
-            queries: { ...metricsConfig.queries, [key]: metricsConfig.queries[key] + ` ${lbl}=\\"\\"` }
-          }),
+          onClick: () => applyLabelSuggestion(key, lbl),
           style: {
             border: "1px solid #E5E7EB",
             borderRadius: 4,
@@ -5014,7 +5435,7 @@ var TelemetryConfigDrawer = ({
           }
         },
         lbl
-      ))))), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827", marginTop: 4 } }, "Per-stage throughput templates"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569", lineHeight: 1.5 } }, "These queries power the inbound/outbound chips for each receiver, processor, and exporter. Use placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " to interpolate the active component names."), STAGE_KEYS.map((key) => /* @__PURE__ */ React2.createElement("div", { key: `stage-query-${key}`, style: { border: "1px solid #E5E7EB", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827" } }, STAGE_SUMMARY2[key].title), /* @__PURE__ */ React2.createElement(
+      ))), queryHint && /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#92400E" } }, queryHint))), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827", marginTop: 4 } }, "Per-stage throughput templates"), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569", lineHeight: 1.5 } }, "These queries power the inbound/outbound chips for each receiver, processor, and exporter. Use placeholders such as ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$pipeline"), ", and ", /* @__PURE__ */ React2.createElement("code", null, "$stage"), " to interpolate the active component names."), STAGE_KEYS.map((key) => /* @__PURE__ */ React2.createElement("div", { key: `stage-query-${key}`, style: { border: "1px solid #E5E7EB", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: "#111827" } }, STAGE_SUMMARY2[key].title), /* @__PURE__ */ React2.createElement(
         "button",
         {
           type: "button",
@@ -5041,7 +5462,7 @@ var TelemetryConfigDrawer = ({
       ))))) : /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "Provide a Loki query template and adjust its labels to your environment. Supported placeholders: ", /* @__PURE__ */ React2.createElement("code", null, "$collector_uid"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$collector_name"), ", ", /* @__PURE__ */ React2.createElement("code", null, "$org_name"), "."), /* @__PURE__ */ React2.createElement("label", { style: { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#1F2937" } }, "Datasource org", /* @__PURE__ */ React2.createElement(
         "select",
         {
-          value: effectiveLogsOrgId ?? "",
+          value: datasourceOrgSelectValue(logsConfig.datasourceOrgId, currentOrgId),
           onChange: (event) => onLogsChange({
             ...logsConfig,
             datasourceOrgId: parseOrgId(event.target.value),
@@ -5073,7 +5494,7 @@ var TelemetryConfigDrawer = ({
           onChange: (event) => onLogsChange({ ...logsConfig, query: event.target.value }),
           style: { borderRadius: 6, border: "1px solid #CBD5F5", fontFamily: "monospace", fontSize: 12, padding: 8 }
         }
-      ))), error && /* @__PURE__ */ React2.createElement("div", { style: { padding: 10, borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", fontSize: 12, color: "#B91C1C" } }, error)),
+      ))), error && /* @__PURE__ */ React2.createElement("div", { style: { padding: 10, borderRadius: 6, border: "1px solid #FECACA", background: "#FEF2F2", fontSize: 12, color: "#B91C1C" } }, error), metadataLoading && /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#6B7280" } }, "Loading Prometheus metrics and labels\u2026"), metadataError && /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#B91C1C" } }, metadataError)),
       /* @__PURE__ */ React2.createElement("div", { style: { padding: 16, borderTop: "1px solid #E5E7EB", display: "flex", justifyContent: "flex-end", gap: 8 } }, /* @__PURE__ */ React2.createElement(
         "button",
         {
@@ -8303,7 +8724,6 @@ var App = () => {
   const [telemetryDrawerMode, setTelemetryDrawerMode] = useState2("metrics");
   const [telemetryDatasourceHints, setTelemetryDatasourceHints] = useState2({});
   const [orgOptions, setOrgOptions] = useState2([]);
-  const [labelCache, setLabelCache] = useState2(/* @__PURE__ */ new Map());
   const selectedAgentTenantName = useMemo2(() => currentOrgName.trim(), [currentOrgName]);
   const displayUserName = useMemo2(() => {
     const raw = (userContext.name || "").trim();
@@ -8345,46 +8765,13 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       alert(`Failed to delete bridge: ${err.message || "Unknown error"}`);
     }
   };
-  const mergeAgentLabels = useCallback2((incomingAgents, baseCache) => {
-    const nextCache = new Map(baseCache);
-    const mergedAgents = incomingAgents.map((agent) => {
-      const mergedLabels = { ...nextCache.get(agent.agentUid) || {}, ...agent.labels || {} };
-      nextCache.set(agent.agentUid, mergedLabels);
-      return { ...agent, labels: mergedLabels };
-    });
-    return { mergedAgents, nextCache };
-  }, []);
-  const mergeBridgeLabels = useCallback2((incomingBridges, baseCache) => {
-    const nextCache = new Map(baseCache);
-    const mergedBridges = incomingBridges.map((bridge) => {
-      const mergedBridgeLabels = { ...nextCache.get(bridge.agentUid) || {}, ...bridge.labels || {} };
-      nextCache.set(bridge.agentUid, mergedBridgeLabels);
-      const collectors = (bridge.collectors || []).map((collector) => {
-        const mergedCollectorLabels = { ...nextCache.get(collector.agentUid) || {}, ...collector.labels || {} };
-        nextCache.set(collector.agentUid, mergedCollectorLabels);
-        return { ...collector, labels: mergedCollectorLabels };
-      });
-      return { ...bridge, labels: mergedBridgeLabels, collectors };
-    });
-    return { mergedBridges, nextCache };
-  }, []);
   const loadTelemetrySettings = useCallback2(async () => {
     setTelemetryLoading(true);
     try {
       const response = await backendSrv5.get("/telemetry-settings");
       const incoming = response?.settings ?? response;
       const normalized = normalizeTelemetrySettingsState(incoming);
-      setTelemetrySettings((prev) => ({
-        ...normalized,
-        metrics: {
-          ...normalized.metrics,
-          datasourceOrgId: normalized.metrics.datasourceOrgId ?? selectedOrgId ?? prev.metrics.datasourceOrgId ?? null
-        },
-        logs: {
-          ...normalized.logs,
-          datasourceOrgId: normalized.logs.datasourceOrgId ?? selectedOrgId ?? prev.logs.datasourceOrgId ?? null
-        }
-      }));
+      setTelemetrySettings(normalized);
       if (incoming?.hints && typeof incoming.hints === "object") {
         setTelemetryDatasourceHints(incoming.hints);
       }
@@ -8448,7 +8835,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     } catch (err) {
     }
   }, []);
-  const fetchBridges = async (baseCache) => {
+  const fetchBridges = async () => {
     try {
       const response = await backendSrv5.get("/api/plugins/otel-collector-agent-fleet-management/resources/bridges");
       console.log("DEBUG: Fetched bridges response:", { bridges: response.bridges, count: response.bridges?.length || 0 });
@@ -8462,10 +8849,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
           });
         });
       }
-      const startingCache = baseCache ?? labelCache;
-      const { mergedBridges, nextCache } = mergeBridgeLabels(response.bridges || [], startingCache);
-      setLabelCache(nextCache);
-      setBridges(mergedBridges);
+      setBridges(response.bridges || []);
     } catch (err) {
       console.error("Failed to fetch bridges:", err);
     }
@@ -8481,9 +8865,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
         status: a.status,
         labels: a.labels
       })));
-      const { mergedAgents, nextCache } = mergeAgentLabels(incomingAgents, labelCache);
-      setLabelCache(nextCache);
-      setAgents(mergedAgents);
+      setAgents(incomingAgents);
       const directOnline = incomingAgents.filter((a) => a.status === "online").length;
       const totals = response.totals || {};
       const backendDirectOnline = totals.directOnline ?? totals.directOnlline ?? directOnline;
@@ -8529,7 +8911,7 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       if (response.grafanaOrgName || response.orgName) {
         setCurrentOrgName(response.grafanaOrgName || response.orgName);
       }
-      await fetchBridges(nextCache);
+      await fetchBridges();
     } catch (err) {
       console.error("Failed to fetch agents:", err);
       setError(err.message || "Failed to fetch agents");
