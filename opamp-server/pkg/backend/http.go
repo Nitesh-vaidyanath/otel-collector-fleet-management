@@ -86,12 +86,43 @@ func newAPIMux() *http.ServeMux {
 		case http.MethodGet:
 			wrap(telemetrySettingsGetHandler)(w, r)
 		case http.MethodPost:
-			rbac(RoleEditor, telemetrySettingsPostHandler)(w, r)
+			rbac(RoleAdmin, telemetrySettingsPostHandler)(w, r)
 		default:
 			methodNotAllowed(w)
 		}
 	})
 	mux.HandleFunc("/user-role", wrap(userRoleHandler))
+	mux.HandleFunc("/agent-deployments", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			wrap(agentDeploymentsCollectionHandler)(w, r) // Viewer+, scoped to stable user login and organization
+		case http.MethodPost:
+			rbac(RoleAdmin, agentDeploymentsCollectionHandler)(w, r) // Admin only: creates a workload with a selected privilege profile.
+		default:
+			methodNotAllowed(w)
+		}
+	})
+	mux.HandleFunc("/agent-deployments/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/agent-deployments/"), "/")
+		parts := strings.Split(path, "/")
+		if len(parts) == 2 && (parts[1] == "start" || parts[1] == "stop" || parts[1] == "restart" || parts[1] == "security-profile") {
+			if r.Method != http.MethodPost {
+				methodNotAllowed(w)
+				return
+			}
+			rbac(RoleAdmin, agentDeploymentEntityHandler)(w, r)
+			return
+		}
+		if len(parts) == 1 {
+			if r.Method != http.MethodDelete {
+				methodNotAllowed(w)
+				return
+			}
+			rbac(RoleAdmin, agentDeploymentEntityHandler)(w, r)
+			return
+		}
+		notFound(w)
+	})
 	mux.HandleFunc("/organizations", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -113,7 +144,7 @@ func newAPIMux() *http.ServeMux {
 		path := strings.TrimPrefix(r.URL.Path, "/bridges/")
 		if strings.HasSuffix(path, "/delete") {
 			if r.Method == http.MethodDelete || r.Method == http.MethodPost {
-				wrap(bridgeDeleteHandler)(w, r) // Viewer+
+				rbac(RoleAdmin, bridgeDeleteHandler)(w, r)
 			} else {
 				methodNotAllowed(w)
 			}
@@ -126,7 +157,7 @@ func newAPIMux() *http.ServeMux {
 		case http.MethodGet:
 			wrap(agentsCollectionHandler)(w, r) // Viewer+
 		case http.MethodPost:
-			wrap(agentsCollectionHandler)(w, r) // Viewer+
+			rbac(RoleAdmin, agentsCollectionHandler)(w, r)
 		default:
 			methodNotAllowed(w)
 		}
@@ -135,7 +166,7 @@ func newAPIMux() *http.ServeMux {
 		path := strings.TrimPrefix(r.URL.Path, "/agents/")
 		if strings.HasSuffix(path, "/operations") {
 			if r.Method == http.MethodPost {
-				wrap(agentOperationsHandler)(w, r) // Viewer+
+				rbac(RoleEditor, agentOperationsHandler)(w, r) // Action also enforces editor/admin split.
 			} else {
 				methodNotAllowed(w)
 			}
@@ -210,9 +241,9 @@ func newAPIMux() *http.ServeMux {
 		case http.MethodGet:
 			wrap(agentEntityHandler)(w, r) // Viewer+
 		case http.MethodPatch:
-			wrap(agentEntityHandler)(w, r) // Viewer+
+			rbac(RoleAdmin, agentEntityHandler)(w, r)
 		case http.MethodDelete:
-			wrap(agentEntityHandler)(w, r) // Viewer+
+			rbac(RoleAdmin, agentEntityHandler)(w, r)
 		default:
 			methodNotAllowed(w)
 		}
@@ -222,7 +253,7 @@ func newAPIMux() *http.ServeMux {
 		case http.MethodGet:
 			wrap(configsCollectionHandler)(w, r) // Viewer+
 		case http.MethodPost:
-			wrap(configsCollectionHandler)(w, r) // Viewer+
+			rbac(RoleEditor, configsCollectionHandler)(w, r)
 		default:
 			methodNotAllowed(w)
 		}
@@ -231,7 +262,7 @@ func newAPIMux() *http.ServeMux {
 		path := strings.TrimPrefix(r.URL.Path, "/configs/")
 		if path == "revert" || strings.HasSuffix(path, "/revert") {
 			if r.Method == http.MethodPost {
-				wrap(configRevertHandler)(w, r) // Viewer+
+				rbac(RoleEditor, configRevertHandler)(w, r)
 			} else {
 				methodNotAllowed(w)
 			}
@@ -239,7 +270,7 @@ func newAPIMux() *http.ServeMux {
 		}
 		if strings.HasSuffix(path, "/approve") {
 			if r.Method == http.MethodPost {
-				wrap(configApprovalHandler)(w, r)
+				rbac(RoleAdmin, configApprovalHandler)(w, r)
 			} else {
 				methodNotAllowed(w)
 			}
@@ -261,7 +292,7 @@ func newAPIMux() *http.ServeMux {
 	})
 	mux.HandleFunc("/config-generator", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			wrap(configGeneratorHandler)(w, r) // Viewer+
+			rbac(RoleEditor, configGeneratorHandler)(w, r)
 			return
 		}
 		methodNotAllowed(w)
@@ -271,15 +302,24 @@ func newAPIMux() *http.ServeMux {
 		case http.MethodGet:
 			wrap(configTemplatesHandler)(w, r) // Viewer+
 		case http.MethodPost:
-			wrap(configTemplatesHandler)(w, r) // Viewer+
+			rbac(RoleEditor, configTemplatesHandler)(w, r)
 		case http.MethodDelete:
-			wrap(configTemplatesHandler)(w, r) // Viewer+
+			rbac(RoleEditor, configTemplatesHandler)(w, r)
 		default:
 			methodNotAllowed(w)
 		}
 	})
 	mux.HandleFunc("/stats", wrap(statsHandler))
-	mux.HandleFunc("/component-types", wrap(componentTypesHandler))
+	mux.HandleFunc("/component-types", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			wrap(componentTypesHandler)(w, r)
+		case http.MethodPost, http.MethodPatch, http.MethodDelete:
+			rbac(RoleEditor, componentTypesHandler)(w, r)
+		default:
+			methodNotAllowed(w)
+		}
+	})
 	mux.HandleFunc("/logging", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:

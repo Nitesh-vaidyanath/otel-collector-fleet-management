@@ -142,29 +142,7 @@ var detectRuntimeMode = () => {
   return "standalone";
 };
 var detectGrafanaTransport = (isRunningInGrafana6) => {
-  if (!isRunningInGrafana6) {
-    return "resources";
-  }
-  const coerce = (value) => {
-    if (!value) {
-      return null;
-    }
-    const lower = value.toLowerCase();
-    if (lower === "proxy" || lower === "resources") {
-      return lower;
-    }
-    if (lower === "callresource") {
-      return "resources";
-    }
-    return null;
-  };
-  let stored = null;
-  try {
-    stored = window.localStorage?.getItem("otelFleetTransport") ?? null;
-  } catch {
-    stored = null;
-  }
-  return coerce(window.__OTEL_FLEET_TRANSPORT__) || coerce(new URLSearchParams(window.location.search).get("transport")) || coerce(stored) || "proxy";
+  return "resources";
 };
 var normalizeUrl = (rawUrl, isRunningInGrafana6, grafanaTransport6) => {
   if (!rawUrl) {
@@ -5718,14 +5696,14 @@ var inferExporterTypeByStructure = (config) => {
     return null;
   }
   if (config.endpoint) {
-    const endpoint = String(config.endpoint);
-    if (/4317|4318/.test(endpoint) || endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+    const endpoint2 = String(config.endpoint);
+    if (/4317|4318/.test(endpoint2) || endpoint2.startsWith("http://") || endpoint2.startsWith("https://")) {
       return "otlp";
     }
-    if (endpoint.includes("9411")) {
+    if (endpoint2.includes("9411")) {
       return "zipkin";
     }
-    if (endpoint.includes("14250")) {
+    if (endpoint2.includes("14250")) {
       return "jaeger";
     }
   }
@@ -5762,13 +5740,19 @@ function ConfigGenerator({
   agents,
   bridges,
   onPushConfig,
-  backendSrv: backendSrv6
+  backendSrv: backendSrv6,
+  initialAgentUID
 }) {
   const [receivers, setReceivers] = useState2([]);
   const [processors, setProcessors] = useState2([]);
   const [exporters, setExporters] = useState2([]);
   const [generatedConfig, setGeneratedConfig] = useState2("");
-  const [selectedAgentUID, setSelectedAgentUID] = useState2("");
+  const [selectedAgentUID, setSelectedAgentUID] = useState2(initialAgentUID || "");
+  const selectionRef = React2.useRef(selectedAgentUID);
+  selectionRef.current = selectedAgentUID;
+  useEffect2(() => {
+    if (initialAgentUID) setSelectedAgentUID(initialAgentUID);
+  }, [initialAgentUID]);
   const [savedTemplates, setSavedTemplates] = useState2([]);
   const [showSaveDialog, setShowSaveDialog] = useState2(false);
   const [saveName, setSaveName] = useState2("");
@@ -5783,6 +5767,7 @@ function ConfigGenerator({
   const [diffData, setDiffData] = useState2(null);
   const [showFullDiff, setShowFullDiff] = useState2(false);
   const [isAdmin, setIsAdmin] = useState2(false);
+  const [canEditConfig, setCanEditConfig] = useState2(false);
   const [showApprovalDialog, setShowApprovalDialog] = useState2(false);
   const [approvalAction, setApprovalAction] = useState2(null);
   const [approvalConfigId, setApprovalConfigId] = useState2(null);
@@ -5864,34 +5849,25 @@ function ConfigGenerator({
   }, []);
   const fetchUserRole = async () => {
     try {
-      try {
-        const roleResponse = await backendSrv6.get("/api/plugins/otel-collector-agent-fleet-management/resources/user-role");
-        const isAdminValue = roleResponse.isAdmin === true || roleResponse.isAdmin === "true" || roleResponse.role === "RoleAdmin" || roleResponse.role === "Admin" || roleResponse.role === 2 || roleResponse.isAdmin === 1;
-        setIsAdmin(isAdminValue);
-        console.log("User role detected:", { isAdmin: isAdminValue, role: roleResponse.role, isAdminRaw: roleResponse.isAdmin });
-        if (!isAdminValue) {
-          console.warn("Admin role not detected, but allowing approvals for testing purposes");
-        }
-        return;
-      } catch (e) {
-        console.error("Failed to fetch user role from dedicated endpoint:", e);
-        const response = await backendSrv6.get("/api/plugins/otel-collector-agent-fleet-management/resources/agents");
-        if (response.userRole) {
-          const isAdminValue = response.userRole.isAdmin === true || response.userRole.isAdmin === "true" || response.userRole.role === "RoleAdmin" || response.userRole.role === "Admin" || response.userRole.role === 2 || response.userRole.isAdmin === 1;
-          setIsAdmin(isAdminValue);
-          console.log("User role from agents endpoint:", { isAdmin: isAdminValue, role: response.userRole.role });
-        } else {
-          console.warn("User role not found in response, defaulting to admin for testing purposes");
-          setIsAdmin(true);
-        }
-      }
+      const roleResponse = await backendSrv6.get("/user-role");
+      setIsAdmin(roleResponse?.isAdmin === true && roleResponse?.role === 2);
+      setCanEditConfig(roleResponse?.role === 1 || roleResponse?.role === 2);
     } catch (err) {
       console.error("Failed to fetch user role:", err);
-      console.warn("Defaulting to admin mode for testing purposes");
-      setIsAdmin(true);
+      setIsAdmin(false);
+      setCanEditConfig(false);
     }
   };
   useEffect2(() => {
+    setReceivers([]);
+    setProcessors([]);
+    setExporters([]);
+    setGeneratedConfig("");
+    setRawYAMLConfig("");
+    setConfigVersions([]);
+    setConfigSyncStatus({});
+    setSelectedConfigVersion(null);
+    setDiffData(null);
     if (selectedAgentUID) {
       loadConfigVersions(selectedAgentUID);
       loadCurrentConfig(selectedAgentUID);
@@ -5919,6 +5895,7 @@ function ConfigGenerator({
     }
     try {
       const response = await backendSrv6.get(`/api/plugins/otel-collector-agent-fleet-management/resources/configs?agent_uid=${encodeURIComponent(agentUID)}`);
+      if (selectionRef.current !== agentUID) return;
       const filteredConfigs = (response.items || []).filter((cfg) => cfg.agentUid === agentUID);
       console.log(`Loaded ${filteredConfigs.length} config versions for agent ${agentUID}`);
       setConfigVersions(filteredConfigs);
@@ -5927,6 +5904,7 @@ function ConfigGenerator({
       for (const cfg of pushedConfigs) {
         try {
           const syncResp = await backendSrv6.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/config-sync-status`);
+          if (selectionRef.current !== agentUID) return;
           syncStatusMap[cfg.id] = syncResp;
         } catch (err) {
           console.log("Could not load sync status for config", cfg.id, err);
@@ -5936,6 +5914,7 @@ function ConfigGenerator({
         setConfigSyncStatus(syncStatusMap);
       }
     } catch (err) {
+      if (selectionRef.current !== agentUID) return;
       console.error("Failed to load config versions for agent", agentUID, err);
       setConfigVersions([]);
       setConfigSyncStatus({});
@@ -5969,6 +5948,7 @@ function ConfigGenerator({
   const loadCurrentConfig = async (agentUID) => {
     try {
       const response = await backendSrv6.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/current-config`);
+      if (selectionRef.current !== agentUID) return;
       if (response.hasConfig && response.config) {
         parseConfigYAML(response.config);
         alert("\u2713 Successfully loaded and parsed current configuration from agent!");
@@ -5976,6 +5956,7 @@ function ConfigGenerator({
         alert("\u26A0 Agent does not have a current configuration yet.");
       }
     } catch (err) {
+      if (selectionRef.current !== agentUID) return;
       console.error("Failed to load current config:", err);
       alert("Failed to load current config: " + (err.message || "Unknown error"));
     }
@@ -6158,11 +6139,9 @@ function ConfigGenerator({
       const errMsg = err.data?.message || err.message || err.statusText || "Unknown error";
       console.error(`Failed to ${actionText} config:`, err);
       if (errMsg.includes("forbidden") || errMsg.includes("insufficient role")) {
-        alert(`\u274C Failed to ${actionText} config: Permission denied. The backend may require admin role.
+        alert(`\u274C Failed to ${actionText} config: Grafana Admin role required.
 
-Error: ${errMsg}
-
-Note: Check backend logs and ensure the approval handler allows testing mode.`);
+Error: ${errMsg}`);
       } else {
         alert(`\u274C Failed to ${actionText} config: ${errMsg}`);
       }
@@ -6460,11 +6439,11 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
         invalidComponents.push(`Exporter ${i + 1} (${e.name || "unnamed"}) is missing type`);
       }
       if (e.type === "otlp") {
-        const endpoint = e.endpoint?.trim();
-        if (!endpoint) {
+        const endpoint2 = e.endpoint?.trim();
+        if (!endpoint2) {
           invalidComponents.push(`Exporter ${i + 1} (${e.name || "otlp"}) requires an endpoint (http://host:port or host:port).`);
-        } else if (!isValidHttpUrl(endpoint) && !isValidHostPort(endpoint)) {
-          invalidComponents.push(`Exporter ${i + 1} (${e.name || "otlp"}) endpoint "${endpoint}" is invalid. Use http(s) URL or host:port for gRPC.`);
+        } else if (!isValidHttpUrl(endpoint2) && !isValidHostPort(endpoint2)) {
+          invalidComponents.push(`Exporter ${i + 1} (${e.name || "otlp"}) endpoint "${endpoint2}" is invalid. Use http(s) URL or host:port for gRPC.`);
         }
       }
     });
@@ -6497,7 +6476,7 @@ Note: Check backend logs and ensure the approval handler allows testing mode.`);
           // 1. NEW collectors (name + namespace provided)
           // 2. EXISTING Deployment/StatefulSet collectors (deployment settings can be modified)
           // Do NOT include for DaemonSet collectors (only spec.config is updated)
-          crdSettings: includeDeploymentSettings && (isNewCollector || canModifyDeploymentSettings) ? {
+          crdSettings: isAdmin && includeDeploymentSettings && (isNewCollector || canModifyDeploymentSettings) ? {
             name: crdSettings.name,
             namespace: crdSettings.namespace,
             mode: crdSettings.mode,
@@ -6870,7 +6849,7 @@ headers:
       ))
     )));
   };
-  return /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: {
+  return /* @__PURE__ */ React2.createElement("div", null, !canEditConfig && /* @__PURE__ */ React2.createElement("div", { role: "status", style: { marginBottom: 12, padding: 12, background: "#EFF6FF", color: "#1E40AF", border: "1px solid #BFDBFE", borderRadius: 6 } }, "Viewer access is read-only. Editors can save configuration drafts; a Grafana Admin must approve them before they can be pushed."), /* @__PURE__ */ React2.createElement("div", { style: {
     background: "white",
     borderRadius: 8,
     border: "1px solid #E5E7EB",
@@ -6879,6 +6858,7 @@ headers:
   } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" } }, "Configuration Builder"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
+      disabled: !canEditConfig,
       onClick: () => setShowComponentTypeManager(true),
       style: {
         padding: "8px 16px",
@@ -7273,6 +7253,7 @@ service:
   ), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 12, display: "flex", gap: 8, justifyContent: "flex-end" } }, /* @__PURE__ */ React2.createElement(
     "button",
     {
+      disabled: !canEditConfig,
       onClick: () => {
         if (!selectedAgentUID) {
           alert("Please select an agent first");
@@ -7413,7 +7394,7 @@ service:
     "button",
     {
       onClick: () => setShowSaveDialog(true),
-      disabled: !generatedConfig || generatedConfig.trim() === "",
+      disabled: !canEditConfig || !generatedConfig || generatedConfig.trim() === "",
       style: {
         padding: "8px 16px",
         background: !generatedConfig || generatedConfig.trim() === "" ? "#D1D5DB" : "#6B7280",
@@ -7469,7 +7450,7 @@ service:
           }
         }
       },
-      disabled: !generatedConfig || generatedConfig.trim() === "" || !selectedAgentUID,
+      disabled: !canEditConfig || !generatedConfig || generatedConfig.trim() === "" || !selectedAgentUID,
       style: {
         padding: "8px 16px",
         background: !generatedConfig || generatedConfig.trim() === "" || !selectedAgentUID ? "#D1D5DB" : "#10B981",
@@ -7511,7 +7492,7 @@ service:
     border: "1px solid #FCD34D",
     fontSize: 11,
     color: "#92400E"
-  } }, "\u26A0\uFE0F Admin role not detected. Check console for role details. For testing, approvals may still work.")), /* @__PURE__ */ React2.createElement("div", { style: { background: "white", border: "1px solid #E5E7EB", borderRadius: 6, overflow: "hidden" } }, configVersions.filter((v) => v.agentUid === selectedAgentUID).map((version, idx) => {
+  } }, "Admin approval is required for configuration changes to reach an agent.")), /* @__PURE__ */ React2.createElement("div", { style: { background: "white", border: "1px solid #E5E7EB", borderRadius: 6, overflow: "hidden" } }, configVersions.filter((v) => v.agentUid === selectedAgentUID).map((version, idx) => {
     const syncStatus = configSyncStatus[version.id];
     const hasFailed = syncStatus && version.pushedAt && ((syncStatus.remoteConfigStatus || "").includes("FAILED") || !!syncStatus.remoteConfigError);
     const statusColor = hasFailed ? "#EF4444" : version.approvalStatus === "approved" ? "#10B981" : version.approvalStatus === "rejected" ? "#EF4444" : "#F59E0B";
@@ -7588,7 +7569,7 @@ service:
       const isNotApproved = version.approvalStatus !== "approved";
       const agent = agents.find((a) => a.agentUid === selectedAgentUID);
       const agentNotOnline = !agent || agent.status !== "online";
-      const canRevert = !isLatestVersion && isApproved && !agentNotOnline;
+      const canRevert = canEditConfig && !isLatestVersion && isApproved && !agentNotOnline;
       const disabledReason = isLatestVersion ? "Cannot revert to the latest version" : isNotApproved ? "Only approved configurations can be reverted" : agentNotOnline ? "Agent must be online to revert" : "";
       return /* @__PURE__ */ React2.createElement(
         "button",
@@ -7625,6 +7606,7 @@ service:
     })(), isApproved && /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, !version.pushedAt ? /* @__PURE__ */ React2.createElement(
       "button",
       {
+        disabled: !canEditConfig,
         onClick: async () => {
           try {
             const resp = await backendSrv6.get(`/api/plugins/otel-collector-agent-fleet-management/resources/configs/${version.id}`);
@@ -7740,11 +7722,11 @@ service:
       borderRadius: 6,
       border: "2px solid #FCD34D",
       marginTop: 8
-    } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#92400E", marginBottom: 8 } }, "\u26A0\uFE0F AWAITING APPROVAL ", isAdmin ? "(You are admin)" : "(Admin role not detected - trying anyway for testing)"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
+    } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#92400E", marginBottom: 8 } }, "\u26A0\uFE0F AWAITING APPROVAL ", isAdmin ? "(You are admin)" : "(Admin required)"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: () => handleApprovalClick(String(version.id), "approve"),
-        disabled: version.approvalStatus === "approved" || version.approvalStatus === "rejected",
+        disabled: !isAdmin || version.approvalStatus === "approved" || version.approvalStatus === "rejected",
         style: {
           flex: 1,
           padding: "8px 16px",
@@ -7758,14 +7740,14 @@ service:
           boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
           opacity: version.approvalStatus === "approved" || version.approvalStatus === "rejected" ? 0.5 : 1
         },
-        title: version.approvalStatus === "approved" || version.approvalStatus === "rejected" ? `Configuration already ${version.approvalStatus}` : isAdmin ? "Approve this configuration as admin" : "Attempting to approve (testing mode)"
+        title: isAdmin ? "Approve this configuration as admin" : "Grafana Admin role required"
       },
       "\u2713 Approve Configuration"
     ), /* @__PURE__ */ React2.createElement(
       "button",
       {
         onClick: () => handleApprovalClick(String(version.id), "reject"),
-        disabled: version.approvalStatus === "approved" || version.approvalStatus === "rejected",
+        disabled: !isAdmin || version.approvalStatus === "approved" || version.approvalStatus === "rejected",
         style: {
           flex: 1,
           padding: "8px 16px",
@@ -7779,10 +7761,10 @@ service:
           boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
           opacity: version.approvalStatus === "approved" || version.approvalStatus === "rejected" ? 0.5 : 1
         },
-        title: version.approvalStatus === "approved" || version.approvalStatus === "rejected" ? `Configuration already ${version.approvalStatus}` : isAdmin ? "Reject this configuration as admin" : "Attempting to reject (testing mode)"
+        title: isAdmin ? "Reject this configuration as admin" : "Grafana Admin role required"
       },
       "\u2717 Reject Configuration"
-    )), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#78350F", marginTop: 8 } }, "\u{1F4A1} Review the configuration above, then approve or reject it. Approved configs can be pushed to agents.", !isAdmin && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 4, fontSize: 10 } }, "\u26A0\uFE0F Note: Admin role not detected, but approval will be attempted anyway for testing."))), version.approvalStatus === "rejected" && /* @__PURE__ */ React2.createElement("div", { style: {
+    )), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: 11, color: "#78350F", marginTop: 8 } }, "\u{1F4A1} Review the configuration above, then approve or reject it. Approved configs can be pushed to agents.", !isAdmin && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 4, fontSize: 10 } }, "Contact a Grafana Admin to approve or reject this configuration."))), version.approvalStatus === "rejected" && /* @__PURE__ */ React2.createElement("div", { style: {
       padding: 12,
       background: "#FEE2E2",
       borderRadius: 6,
@@ -8218,6 +8200,153 @@ service:
   }, style: { padding: "8px 16px", background: "#6B7280", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React2.createElement("button", { onClick: saveTemplate, style: { padding: "8px 16px", background: "#3B82F6", color: "white", border: "none", borderRadius: 6, cursor: "pointer" } }, "Save")))));
 }
 
+// pages/components/AgentDeploymentsSection.tsx
+
+// pages/utils/deploymentSecurity.ts
+function verifiedAgentTarget(opamp) {
+  if (opamp?.association !== "verified" || !opamp.agentUid?.trim()) return void 0;
+  return opamp.agentUid;
+}
+function deploymentConnectionSummary(opamp) {
+  if (opamp?.association === "revoked") return "Enrollment revoked";
+  if (!verifiedAgentTarget(opamp)) return "Not verified";
+  if (!opamp?.connected) return "Enrolled \xB7 offline";
+  if (opamp.profileMatches !== true) return "Connected \xB7 desired profile not verified";
+  return "Connected \xB7 profile verified";
+}
+function permittedSecurityProfiles(profile, choices) {
+  if (!profile) return [];
+  const permitted = profile.permittedSecurityProfiles ?? ["restricted"];
+  const os = profile.os || "linux";
+  return choices.filter((choice) => permitted.includes(choice.name) && (choice.os || choice.security?.os || "linux") === os);
+}
+function summarizeAgentSecurity(security) {
+  if (!security) return "Security settings unavailable";
+  const settings = [];
+  if (security.hostPID) settings.push("host PID");
+  if (security.hostNetwork) settings.push("host network");
+  if (security.hostIPC) settings.push("host IPC");
+  if (security.hostProcess) settings.push("Windows HostProcess");
+  if (security.privileged) settings.push("privileged");
+  if (security.capabilitiesAdd?.length) settings.push(`capabilities: ${security.capabilitiesAdd.join(", ")}`);
+  if (security.os === "windows") {
+    if (security.runAsUserName) settings.push(`user: ${security.runAsUserName}`);
+  } else {
+    if (security.runAsNonRoot === false) settings.push("root permitted");
+    if (security.allowPrivilegeEscalation) settings.push("privilege escalation permitted");
+    if (security.readOnlyRootFilesystem === false) settings.push("writable root filesystem");
+  }
+  return settings.length ? settings.join(" \xB7 ") : "Restricted: no host access or added capabilities";
+}
+function securityProfileChangeRequest(record, securityProfile, permitted) {
+  if (!record.uid || !record.resourceVersion) throw new Error("Refresh the deployment before changing its security profile.");
+  if (!permitted.some((choice) => choice.name === securityProfile)) throw new Error("Select an approved security profile.");
+  return { securityProfile, uid: record.uid, resourceVersion: record.resourceVersion };
+}
+
+// pages/components/AgentDeploymentsSection.tsx
+var endpoint = "/agent-deployments";
+var AgentDeploymentsSection = ({ api, isAdmin, onOpenConfiguration }) => {
+  const [state, setState] = useState2(null);
+  const [profile, setProfile] = useState2("");
+  const [node, setNode] = useState2("");
+  const [securityProfile, setSecurityProfile] = useState2("");
+  const [securitySelections, setSecuritySelections] = useState2({});
+  const [busy, setBusy] = useState2(null);
+  const [error, setError] = useState2("");
+  const load2 = useCallback2(async () => {
+    setError("");
+    try {
+      const response = await api.get(endpoint);
+      setState({
+        enabled: Boolean(response?.enabled),
+        disabledReason: response?.disabledReason,
+        profiles: Array.isArray(response?.profiles) ? response.profiles : [],
+        securityProfiles: Array.isArray(response?.securityProfiles) ? response.securityProfiles : [],
+        nodes: Array.isArray(response?.nodes) ? response.nodes : [],
+        deployments: Array.isArray(response?.deployments) ? response.deployments : []
+      });
+    } catch (cause) {
+      setError(cause?.data?.error || cause?.message || "Could not load node deployments.");
+    }
+  }, [api]);
+  useEffect2(() => {
+    void load2();
+  }, [load2]);
+  const profiles = state?.profiles ?? [];
+  const nodes = state?.nodes ?? [];
+  const canMutate = Boolean(isAdmin && state?.enabled && !busy);
+  const selectedProfile = useMemo2(() => profiles.find((candidate) => candidate.name === profile), [profiles, profile]);
+  const securityChoices = permittedSecurityProfiles(selectedProfile, state?.securityProfiles ?? []);
+  const selectedSecurity = securityChoices.find((choice) => choice.name === securityProfile);
+  useEffect2(() => {
+    if (!profiles.some((candidate) => candidate.name === profile)) setProfile(profiles[0]?.name ?? "");
+  }, [profiles, profile]);
+  useEffect2(() => {
+    if (!nodes.includes(node)) setNode(nodes[0] ?? "");
+  }, [nodes, node]);
+  useEffect2(() => {
+    if (!securityChoices.some((choice) => choice.name === securityProfile)) {
+      setSecurityProfile(securityChoices.find((choice) => choice.name === selectedProfile?.defaultSecurityProfile)?.name ?? securityChoices[0]?.name ?? "");
+    }
+  }, [securityChoices, securityProfile, selectedProfile]);
+  const runAction = async (key, request) => {
+    setBusy(key);
+    setError("");
+    try {
+      await request();
+      await load2();
+    } catch (cause) {
+      setError(cause?.data?.error || cause?.message || "The deployment action failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+  const create = () => runAction("create", () => api.post(endpoint, { profile, node, securityProfile }));
+  const changeSecurity = (deployment, choice, permitted) => {
+    return runAction(`${deployment.fleetId}:security`, async () => {
+      const request = securityProfileChangeRequest(deployment, choice, permitted);
+      await api.post(`${endpoint}/${encodeURIComponent(deployment.fleetId)}/security-profile`, request);
+      setSecuritySelections((previous) => {
+        const next = { ...previous };
+        delete next[deployment.fleetId];
+        return next;
+      });
+    });
+  };
+  const action = (deployment, operation) => {
+    if (operation === "delete" && !window.confirm(`Delete deployment "${deployment.name || deployment.fleetId}"?`)) return;
+    const url = `${endpoint}/${encodeURIComponent(deployment.fleetId)}`;
+    return runAction(
+      `${deployment.fleetId}:${operation}`,
+      () => operation === "delete" ? api.delete(url) : api.post(`${url}/${operation}`)
+    );
+  };
+  return /* @__PURE__ */ React2.createElement("section", { "aria-labelledby": "agent-deployments-title", style: { background: "white", border: "1px solid #E5E7EB", borderRadius: 8, padding: 20 } }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("h2", { id: "agent-deployments-title", style: { margin: 0, color: "#111827", fontSize: 20 } }, "Node deployments"), /* @__PURE__ */ React2.createElement("p", { style: { margin: "6px 0 0", color: "#6B7280", fontSize: 13 } }, "Manage agent placement and approved security profiles. Application configuration and status are managed through OpAMP.")), /* @__PURE__ */ React2.createElement("button", { type: "button", onClick: () => void load2(), disabled: busy !== null, style: buttonStyle(false, busy !== null) }, "Refresh")), !state && !error && /* @__PURE__ */ React2.createElement("p", { role: "status", style: mutedStyle }, "Loading deployment settings\u2026"), error && /* @__PURE__ */ React2.createElement("div", { role: "alert", style: { ...noticeStyle, background: "#FEF2F2", borderColor: "#FECACA", color: "#B91C1C" } }, error), state && !state.enabled && /* @__PURE__ */ React2.createElement("div", { role: "status", style: { ...noticeStyle, background: "#FFFBEB", borderColor: "#FDE68A", color: "#92400E" } }, "Node deployments are disabled", state.disabledReason ? `: ${state.disabledReason}` : " because no valid deployment configuration is available."), state?.enabled && !isAdmin && /* @__PURE__ */ React2.createElement("div", { role: "status", style: { ...noticeStyle, background: "#EFF6FF", borderColor: "#BFDBFE", color: "#1E40AF" } }, "Deployment controls require the Grafana Admin role. You can still view deployments."), state?.enabled && /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 18, padding: 16, background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 6 } }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: "0 0 12px", color: "#111827", fontSize: 15 } }, "Create agent deployment"), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", alignItems: "end", gap: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("label", { style: labelStyle }, "Profile", /* @__PURE__ */ React2.createElement("select", { "aria-label": "Deployment profile", value: profile, onChange: (event) => setProfile(event.target.value), disabled: !canMutate || profiles.length === 0, style: selectStyle }, profiles.length === 0 && /* @__PURE__ */ React2.createElement("option", { value: "" }, "No profiles available"), profiles.map((item) => /* @__PURE__ */ React2.createElement("option", { key: item.name, value: item.name }, item.name)))), /* @__PURE__ */ React2.createElement("label", { style: labelStyle }, "Allowed node", /* @__PURE__ */ React2.createElement("select", { "aria-label": "Allowed node", value: node, onChange: (event) => setNode(event.target.value), disabled: !canMutate || nodes.length === 0, style: selectStyle }, nodes.length === 0 && /* @__PURE__ */ React2.createElement("option", { value: "" }, "No nodes available"), nodes.map((item) => /* @__PURE__ */ React2.createElement("option", { key: item, value: item }, item)))), /* @__PURE__ */ React2.createElement("label", { style: labelStyle }, "Security profile", /* @__PURE__ */ React2.createElement("select", { "aria-label": "Deployment security profile", value: securityProfile, onChange: (event) => setSecurityProfile(event.target.value), disabled: !canMutate || !securityChoices.length, style: selectStyle }, !securityChoices.length && /* @__PURE__ */ React2.createElement("option", { value: "" }, "No approved security profiles"), securityChoices.map((choice) => /* @__PURE__ */ React2.createElement("option", { key: choice.name, value: choice.name }, choice.name)))), /* @__PURE__ */ React2.createElement("button", { type: "button", onClick: () => void create(), disabled: !canMutate || !selectedProfile || !node || !selectedSecurity, style: buttonStyle(true, !canMutate || !selectedProfile || !node || !selectedSecurity) }, busy === "create" ? "Creating\u2026" : "Create deployment")), selectedProfile?.image && /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 8 } }, "Image: ", selectedProfile.image), selectedSecurity && /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 8 } }, selectedSecurity.summary || summarizeAgentSecurity(selectedSecurity.security))), /* @__PURE__ */ React2.createElement("div", { style: { marginTop: 20 } }, /* @__PURE__ */ React2.createElement("h3", { style: { margin: "0 0 10px", color: "#111827", fontSize: 15 } }, "Deployments"), (state?.deployments ?? []).length === 0 ? /* @__PURE__ */ React2.createElement("p", { style: mutedStyle }, state ? "No node deployments yet." : "Deployment list unavailable.") : /* @__PURE__ */ React2.createElement("div", { style: { overflowX: "auto" } }, /* @__PURE__ */ React2.createElement("table", { style: { width: "100%", borderCollapse: "collapse", minWidth: 760, fontSize: 13 } }, /* @__PURE__ */ React2.createElement("thead", null, /* @__PURE__ */ React2.createElement("tr", null, ["Agent", "Profile", "Node", "Security", "Kubernetes", "OpAMP", "Actions"].map((heading) => /* @__PURE__ */ React2.createElement("th", { key: heading, style: thStyle }, heading)))), /* @__PURE__ */ React2.createElement("tbody", null, state.deployments.map((deployment) => {
+    const key = deployment.fleetId;
+    const agentUid = verifiedAgentTarget(deployment.opamp);
+    const connected = Boolean(agentUid && deployment.opamp?.connected);
+    const connectionState = deploymentConnectionSummary(deployment.opamp);
+    const working = busy?.startsWith(`${key}:`) ?? false;
+    const runtimeProfile = profiles.find((candidate) => candidate.name === deployment.profile);
+    const permitted = permittedSecurityProfiles(runtimeProfile, state?.securityProfiles ?? []);
+    const selected = securitySelections[key] ?? deployment.securityProfile ?? "";
+    const selectedChoice = permitted.find((choice) => choice.name === selected);
+    const canApply = canMutate && !working && Boolean(selectedChoice && deployment.uid && deployment.resourceVersion);
+    return /* @__PURE__ */ React2.createElement("tr", { key }, /* @__PURE__ */ React2.createElement("td", { style: tdStyle }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600, color: "#111827" } }, deployment.name || key), /* @__PURE__ */ React2.createElement("div", { style: mutedStyle }, deployment.namespace || "")), /* @__PURE__ */ React2.createElement("td", { style: tdStyle }, deployment.profile || "\u2014"), /* @__PURE__ */ React2.createElement("td", { style: tdStyle }, deployment.node || "\u2014"), /* @__PURE__ */ React2.createElement("td", { style: { ...tdStyle, minWidth: 245 } }, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600 } }, deployment.securityProfile || "Unknown profile"), /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 5 } }, summarizeAgentSecurity(deployment.security)), /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 4 } }, "Accepted pod template; running pods depend on rollout status."), /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 6, marginTop: 10 } }, /* @__PURE__ */ React2.createElement("select", { "aria-label": `Security profile for ${deployment.name || key}`, value: selected, onChange: (event) => setSecuritySelections((previous) => ({ ...previous, [key]: event.target.value })), disabled: !canMutate || working || !permitted.length, style: { ...selectStyle, minWidth: 130 } }, !selectedChoice && /* @__PURE__ */ React2.createElement("option", { value: selected }, selected || "Select profile"), permitted.map((choice) => /* @__PURE__ */ React2.createElement("option", { key: choice.name, value: choice.name }, choice.name))), /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: !canApply, onClick: () => void changeSecurity(deployment, selected, permitted), style: smallButtonStyle(!canApply) }, busy === `${key}:security` ? "Applying\u2026" : "Apply profile")), securitySelections[key] && selectedChoice && /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 5 } }, "Selected: ", selectedChoice.summary || summarizeAgentSecurity(selectedChoice.security)), /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 5 } }, "Active agents roll out after a change; stopped agents stay stopped.")), /* @__PURE__ */ React2.createElement("td", { style: tdStyle }, deployment.status || (deployment.readyReplicas ? "Ready" : "Pending"), " (", deployment.readyReplicas ?? 0, "/", deployment.desiredReplicas ?? 1, ")"), /* @__PURE__ */ React2.createElement("td", { style: { ...tdStyle, minWidth: 190 } }, /* @__PURE__ */ React2.createElement("span", { style: { color: connected && deployment.opamp?.profileMatches === true ? "#047857" : "#6B7280", fontWeight: 600 } }, connectionState), agentUid && /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 5 } }, "Agent: ", agentUid), deployment.opamp?.remoteConfigStatus && /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 5 } }, "Config acknowledgment: ", deployment.opamp.remoteConfigStatus), deployment.opamp?.effectiveConfigHash && /* @__PURE__ */ React2.createElement("div", { style: { ...mutedStyle, marginTop: 5, overflowWrap: "anywhere" } }, "Effective config hash: ", deployment.opamp.effectiveConfigHash), /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: !agentUid || !onOpenConfiguration, onClick: () => {
+      if (agentUid) onOpenConfiguration?.(agentUid);
+    }, style: { ...smallButtonStyle(!agentUid || !onOpenConfiguration), marginTop: 8 } }, "Open agent configuration")), /* @__PURE__ */ React2.createElement("td", { style: tdStyle }, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: !canMutate || working, onClick: () => void action(deployment, "start"), style: smallButtonStyle(!canMutate || working) }, "Start"), /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: !canMutate || working, onClick: () => void action(deployment, "stop"), style: smallButtonStyle(!canMutate || working) }, "Stop"), /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: !canMutate || working, onClick: () => void action(deployment, "restart"), style: smallButtonStyle(!canMutate || working) }, busy === `${key}:restart` ? "Restarting\u2026" : "Rollout restart"), /* @__PURE__ */ React2.createElement("button", { type: "button", disabled: !canMutate || working, onClick: () => void action(deployment, "delete"), style: smallButtonStyle(!canMutate || working) }, "Delete")), working && /* @__PURE__ */ React2.createElement("span", { role: "status", style: { ...mutedStyle, display: "block", marginTop: 5 } }, busy?.split(":")[1], " in progress\u2026"), agentUid && !connected && /* @__PURE__ */ React2.createElement("span", { style: { ...mutedStyle, display: "block", marginTop: 5 } }, "Waiting for the authenticated agent to reconnect.")));
+  }))))));
+};
+var mutedStyle = { color: "#6B7280", fontSize: 12 };
+var noticeStyle = { marginTop: 16, padding: 11, border: "1px solid", borderRadius: 6, fontSize: 13 };
+var labelStyle = { display: "flex", flexDirection: "column", gap: 5, color: "#374151", fontSize: 12, fontWeight: 600 };
+var selectStyle = { minWidth: 190, padding: "8px 10px", border: "1px solid #D1D5DB", borderRadius: 5, background: "white", color: "#111827" };
+var thStyle = { padding: "9px 10px", textAlign: "left", color: "#6B7280", borderBottom: "1px solid #E5E7EB", fontSize: 11, textTransform: "uppercase" };
+var tdStyle = { padding: "11px 10px", borderBottom: "1px solid #F3F4F6", verticalAlign: "top", color: "#374151" };
+var buttonStyle = (primary, disabled) => ({ padding: "8px 12px", background: primary ? disabled ? "#D1D5DB" : "#2563EB" : "white", color: primary ? "white" : "#374151", border: primary ? "none" : "1px solid #D1D5DB", borderRadius: 5, cursor: disabled ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600 });
+var smallButtonStyle = (disabled) => ({ padding: "5px 7px", background: "white", color: disabled ? "#9CA3AF" : "#374151", border: "1px solid #D1D5DB", borderRadius: 4, cursor: disabled ? "not-allowed" : "pointer", fontSize: 11 });
+
 // pages/App.tsx
 var PLUGIN_ID2 = "otel-collector-agent-fleet-management";
 var RESOURCE_ROOT2 = `/api/plugins/${PLUGIN_ID2}/resources`;
@@ -8288,8 +8417,8 @@ var coerceWebsocketUrlFromEndpoint = (value) => {
   }
   return null;
 };
-var buildOpampConnectionUrl = (serverUrl, endpoint) => {
-  return coerceWebsocketUrlFromServer(serverUrl) ?? coerceWebsocketUrlFromEndpoint(endpoint) ?? DEFAULT_OPAMP_WS2;
+var buildOpampConnectionUrl = (serverUrl, endpoint2) => {
+  return coerceWebsocketUrlFromServer(serverUrl) ?? coerceWebsocketUrlFromEndpoint(endpoint2) ?? DEFAULT_OPAMP_WS2;
 };
 var detectRuntimeMode2 = () => {
   if (typeof window === "undefined") {
@@ -8338,29 +8467,7 @@ var detectRuntimeMode2 = () => {
 var runtimeMode5 = detectRuntimeMode2();
 var isRunningInGrafana5 = runtimeMode5 === "grafana";
 var detectGrafanaTransport2 = () => {
-  if (!isRunningInGrafana5) {
-    return "resources";
-  }
-  const coerce = (value) => {
-    if (!value) {
-      return null;
-    }
-    const lower = value.toLowerCase();
-    if (lower === "proxy" || lower === "resources") {
-      return lower;
-    }
-    if (lower === "callresource") {
-      return "resources";
-    }
-    return null;
-  };
-  let stored = null;
-  try {
-    stored = window.localStorage?.getItem("otelFleetTransport") ?? null;
-  } catch {
-    stored = null;
-  }
-  return coerce(window.__OTEL_FLEET_TRANSPORT__) || coerce(new URLSearchParams(window.location.search).get("transport")) || coerce(stored) || "proxy";
+  return "resources";
 };
 var grafanaTransport5 = detectGrafanaTransport2();
 var normalizeUrl2 = (rawUrl) => {
@@ -8682,6 +8789,7 @@ var App = () => {
   const [agents, setAgents] = useState2([]);
   const [bridges, setBridges] = useState2([]);
   const [selectedAgent, setSelectedAgent] = useState2(null);
+  const [configurationAgentUID, setConfigurationAgentUID] = useState2();
   const [error, setError] = useState2("");
   const [loading, setLoading] = useState2(true);
   const [refreshing, setRefreshing] = useState2(false);
@@ -9004,6 +9112,10 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   };
   const [pushingConfig, setPushingConfig] = useState2(null);
   const handlePushConfig = async (agentUID, config, configId) => {
+    if (!userContext.isAdmin && userContext.role !== "Editor") {
+      setError("The Editor or Admin role is required to push application configuration.");
+      return;
+    }
     setPushingConfig(agentUID);
     try {
       setError("");
@@ -9042,27 +9154,31 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       setPushingConfig(null);
     }
   };
-  const [upgradingAgent, setUpgradingAgent] = useState2(null);
-  const handleUpgrade = async (agentUID) => {
-    const confirmUpgrade = window.confirm(
-      "\u26A0\uFE0F Upgrading will restart this collector and update only the collector binary/image. Please review the release notes and ensure your operator/CRDs support the new version.\n\nContinue with the upgrade?"
-    );
-    if (!confirmUpgrade) {
+  const [restartingAgent, setRestartingAgent] = useState2(null);
+  const handleRestart = async (agentUID) => {
+    if (!userContext.isAdmin) {
+      setError("The Admin role is required to restart an agent.");
       return;
     }
-    setUpgradingAgent(agentUID);
+    const confirmRestart = window.confirm(
+      "Restart this agent? This sends an OpAMP restart command; it does not change the agent binary, image, operator, or CRDs."
+    );
+    if (!confirmRestart) {
+      return;
+    }
+    setRestartingAgent(agentUID);
     try {
       setError("");
       await backendSrv5.post(
         `/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/operations`,
         { action: "upgrade" }
       );
-      alert("Upgrade command sent successfully! The agent will restart when ready.");
+      alert("Restart command sent successfully. The agent will restart if it supports the command.");
     } catch (err) {
-      setError(err.message || "Failed to upgrade agent");
-      alert("Failed to upgrade agent: " + (err.message || "Unknown error"));
+      setError(err.message || "Failed to restart agent");
+      alert("Failed to restart agent: " + (err.message || "Unknown error"));
     } finally {
-      setUpgradingAgent(null);
+      setRestartingAgent(null);
     }
   };
   useEffect2(() => {
@@ -9429,7 +9545,8 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
   } }, [
     { id: "collectors", label: "Collectors", icon: "\u{1F4E6}" },
     { id: "configurations", label: "Configurations", icon: "\u2699\uFE0F" },
-    { id: "monitoring", label: "Monitoring", icon: "\u{1F4CA}" }
+    { id: "monitoring", label: "Monitoring", icon: "\u{1F4CA}" },
+    { id: "deployments", label: "Node deployments", icon: "\u{1F5A5}\uFE0F" }
   ].map((tab) => /* @__PURE__ */ React2.createElement(
     "button",
     {
@@ -9862,7 +9979,8 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       agents,
       bridges,
       onPushConfig: handlePushConfig,
-      backendSrv: backendSrv5
+      backendSrv: backendSrv5,
+      initialAgentUID: configurationAgentUID
     }
   ), activeTab === "monitoring" && /* @__PURE__ */ React2.createElement(
     MonitoringSection,
@@ -9876,7 +9994,11 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
       telemetryDatasourceHints,
       onConfigureTelemetry: handleOpenTelemetryDrawer
     }
-  )), /* @__PURE__ */ React2.createElement(
+  ), activeTab === "deployments" && /* @__PURE__ */ React2.createElement(AgentDeploymentsSection, { api: backendSrv5, isAdmin: userContext.isAdmin, onOpenConfiguration: (agentUid) => {
+    setConfigurationAgentUID(agentUid);
+    void fetchAgents();
+    setActiveTab("configurations");
+  } })), /* @__PURE__ */ React2.createElement(
     TelemetryConfigDrawer,
     {
       open: telemetryDrawerOpen,
@@ -10187,29 +10309,29 @@ This will remove the bridge from the UI. Collectors managed by this bridge will 
     {
       onClick: () => {
         if (selectedAgent.status === "online") {
-          handleUpgrade(selectedAgent.agentUid);
+          handleRestart(selectedAgent.agentUid);
         } else {
-          alert("Agent must be online to upgrade");
+          alert("Agent must be online to restart");
         }
       },
-      disabled: selectedAgent.status !== "online" || upgradingAgent === selectedAgent.agentUid,
+      disabled: selectedAgent.status !== "online" || restartingAgent === selectedAgent.agentUid,
       style: {
         flex: 1,
         padding: "10px",
-        background: selectedAgent.status === "online" && upgradingAgent !== selectedAgent.agentUid ? "#F59E0B" : "#D1D5DB",
+        background: selectedAgent.status === "online" && restartingAgent !== selectedAgent.agentUid ? "#F59E0B" : "#D1D5DB",
         color: "white",
         border: "none",
         borderRadius: 6,
-        cursor: selectedAgent.status === "online" && upgradingAgent !== selectedAgent.agentUid ? "pointer" : "not-allowed",
+        cursor: selectedAgent.status === "online" && restartingAgent !== selectedAgent.agentUid ? "pointer" : "not-allowed",
         fontSize: 14,
         fontWeight: 500,
         minHeight: "40px",
         transition: "all 0.2s"
       },
-      title: "Upgrades restart the collector process and may require compatible CRDs/operators."
+      title: "Sends an OpAMP restart command without changing the agent binary or image."
     },
-    upgradingAgent === selectedAgent.agentUid ? "Upgrading..." : "Upgrade"
-  )), /* @__PURE__ */ React2.createElement("div", { style: { padding: "8px 20px 0", fontSize: 11, color: "#92400E", lineHeight: 1.4 } }, "\u26A0\uFE0F Upgrading only replaces the collector binary/image. It does not upgrade the OpenTelemetry Collector Operator or its CRDs. Review the", " ", /* @__PURE__ */ React2.createElement("a", { href: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases", target: "_blank", rel: "noopener noreferrer", style: { color: "#B45309", textDecoration: "underline" } }, "upstream release notes"), " ", "before proceeding.")), bridgeCapabilitySheet.open && bridgeCapabilitySheet.bridge && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(
+    restartingAgent === selectedAgent.agentUid ? "Restarting..." : "Restart"
+  )), /* @__PURE__ */ React2.createElement("div", { style: { padding: "8px 20px 0", fontSize: 11, color: "#92400E", lineHeight: 1.4 } }, "This only requests a restart from an online agent that supports OpAMP restart commands. Kubernetes or image upgrades must be managed separately.")), bridgeCapabilitySheet.open && bridgeCapabilitySheet.bridge && /* @__PURE__ */ React2.createElement(React2.Fragment, null, /* @__PURE__ */ React2.createElement(
     "div",
     {
       style: {

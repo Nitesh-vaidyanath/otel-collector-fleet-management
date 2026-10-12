@@ -18,7 +18,9 @@ export default defineConfig({
     ['junit', { outputFile: path.join(REPORT_DIR, 'junit.xml') }],
   ],
   use: {
-    baseURL: process.env.GRAFANA_URL || 'http://localhost:3000',
+    // The isolated manual-test stack is the only default E2E target. Never
+    // silently run these tests against the existing Grafana on port 3000.
+    baseURL: process.env.GRAFANA_URL || 'http://127.0.0.1:3001',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     // Store authentication state for all tests
@@ -50,10 +52,6 @@ export default defineConfig({
     // },
   ],
 
-  webServer: {
-    command: 'docker compose up -d grafana mysql',
-    url: 'http://localhost:3000/api/health',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-  },
+  // E2E tests must not start or mutate any Grafana/Compose deployment.
+  // Start the disposable manual stack separately and verify its URL first.
 });

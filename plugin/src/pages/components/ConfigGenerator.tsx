@@ -19,10 +19,12 @@ export function ConfigGenerator({
   bridges, 
   onPushConfig,
   backendSrv,
+  initialAgentUID,
 }: { 
   agents: Agent[]; 
   bridges: Bridge[]; 
   onPushConfig: (uid: string, config: string) => void;
+  initialAgentUID?: string;
   backendSrv: {
     get: <T = any>(url: string, options?: any) => Promise<T>;
     post: <T = any>(url: string, data?: any, options?: any) => Promise<T>;
@@ -35,7 +37,12 @@ export function ConfigGenerator({
   const [processors, setProcessors] = useState<any[]>([]);
   const [exporters, setExporters] = useState<any[]>([]);
   const [generatedConfig, setGeneratedConfig] = useState('');
-  const [selectedAgentUID, setSelectedAgentUID] = useState('');
+  const [selectedAgentUID, setSelectedAgentUID] = useState(initialAgentUID || '');
+  const selectionRef = React.useRef(selectedAgentUID);
+  selectionRef.current = selectedAgentUID;
+  useEffect(() => {
+    if (initialAgentUID) setSelectedAgentUID(initialAgentUID);
+  }, [initialAgentUID]);
   const [savedTemplates, setSavedTemplates] = useState<any[]>([]);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveName, setSaveName] = useState('');
@@ -50,6 +57,7 @@ export function ConfigGenerator({
   const [diffData, setDiffData] = useState<any>(null);
   const [showFullDiff, setShowFullDiff] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canEditConfig, setCanEditConfig] = useState(false);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   const [approvalAction, setApprovalAction] = useState<'approve' | 'reject' | null>(null);
   const [approvalConfigId, setApprovalConfigId] = useState<string | null>(null);
@@ -147,50 +155,27 @@ export function ConfigGenerator({
 
   const fetchUserRole = async () => {
     try {
-      // Try dedicated user-role endpoint first
-      try {
-        const roleResponse = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/user-role');
-        const isAdminValue = roleResponse.isAdmin === true || 
-                             roleResponse.isAdmin === 'true' ||
-                             roleResponse.role === 'RoleAdmin' || 
-                             roleResponse.role === 'Admin' ||
-                             roleResponse.role === 2 ||
-                             roleResponse.isAdmin === 1;
-        setIsAdmin(isAdminValue);
-        console.log('User role detected:', { isAdmin: isAdminValue, role: roleResponse.role, isAdminRaw: roleResponse.isAdmin });
-        if (!isAdminValue) {
-          // For testing: allow self-approval if no admin role detected
-          console.warn('Admin role not detected, but allowing approvals for testing purposes');
-        }
-        return;
-      } catch (e) {
-        console.error('Failed to fetch user role from dedicated endpoint:', e);
-        // Fallback to agents endpoint
-        const response = await backendSrv.get('/api/plugins/otel-collector-agent-fleet-management/resources/agents');
-        if (response.userRole) {
-          const isAdminValue = response.userRole.isAdmin === true || 
-                               response.userRole.isAdmin === 'true' ||
-                               response.userRole.role === 'RoleAdmin' || 
-                               response.userRole.role === 'Admin' ||
-                               response.userRole.role === 2 ||
-                               response.userRole.isAdmin === 1;
-          setIsAdmin(isAdminValue);
-          console.log('User role from agents endpoint:', { isAdmin: isAdminValue, role: response.userRole.role });
-        } else {
-          // For testing: default to admin if role not found
-          console.warn('User role not found in response, defaulting to admin for testing purposes');
-          setIsAdmin(true);
-        }
-      }
+      const roleResponse = await backendSrv.get('/user-role');
+      setIsAdmin(roleResponse?.isAdmin === true && roleResponse?.role === 2);
+      setCanEditConfig(roleResponse?.role === 1 || roleResponse?.role === 2);
     } catch (err) {
       console.error('Failed to fetch user role:', err);
-      // For testing: default to admin on error
-      console.warn('Defaulting to admin mode for testing purposes');
-      setIsAdmin(true);
+      setIsAdmin(false);
+      setCanEditConfig(false);
     }
   };
 
   useEffect(() => {
+    // Do not leave another agent's editable content visible during the handoff.
+    setReceivers([]);
+    setProcessors([]);
+    setExporters([]);
+    setGeneratedConfig('');
+    setRawYAMLConfig('');
+    setConfigVersions([]);
+    setConfigSyncStatus({});
+    setSelectedConfigVersion(null);
+    setDiffData(null);
     if (selectedAgentUID) {
       loadConfigVersions(selectedAgentUID);
       // Auto-load current config from agent when agent is selected
@@ -222,6 +207,7 @@ export function ConfigGenerator({
     }
     try {
       const response = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/configs?agent_uid=${encodeURIComponent(agentUID)}`);
+      if (selectionRef.current !== agentUID) return;
       // Ensure we only show configs for THIS specific agent
       const filteredConfigs = (response.items || []).filter((cfg: any) => cfg.agentUid === agentUID);
       console.log(`Loaded ${filteredConfigs.length} config versions for agent ${agentUID}`);
@@ -233,6 +219,7 @@ export function ConfigGenerator({
       for (const cfg of pushedConfigs) {
         try {
           const syncResp: any = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/config-sync-status`);
+          if (selectionRef.current !== agentUID) return;
           syncStatusMap[cfg.id] = syncResp;
         } catch (err) {
           console.log('Could not load sync status for config', cfg.id, err);
@@ -242,6 +229,7 @@ export function ConfigGenerator({
         setConfigSyncStatus(syncStatusMap);
       }
     } catch (err: any) {
+      if (selectionRef.current !== agentUID) return;
       console.error('Failed to load config versions for agent', agentUID, err);
       setConfigVersions([]);
       setConfigSyncStatus({});
@@ -283,6 +271,7 @@ export function ConfigGenerator({
   const loadCurrentConfig = async (agentUID: string) => {
     try {
       const response = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/current-config`);
+      if (selectionRef.current !== agentUID) return;
       if (response.hasConfig && response.config) {
         parseConfigYAML(response.config);
         alert('✓ Successfully loaded and parsed current configuration from agent!');
@@ -290,6 +279,7 @@ export function ConfigGenerator({
         alert('⚠ Agent does not have a current configuration yet.');
       }
     } catch (err: any) {
+      if (selectionRef.current !== agentUID) return;
       console.error('Failed to load current config:', err);
       alert('Failed to load current config: ' + (err.message || 'Unknown error'));
     }
@@ -506,7 +496,7 @@ export function ConfigGenerator({
       const errMsg = err.data?.message || err.message || err.statusText || 'Unknown error';
       console.error(`Failed to ${actionText} config:`, err);
       if (errMsg.includes('forbidden') || errMsg.includes('insufficient role')) {
-        alert(`❌ Failed to ${actionText} config: Permission denied. The backend may require admin role.\n\nError: ${errMsg}\n\nNote: Check backend logs and ensure the approval handler allows testing mode.`);
+        alert(`❌ Failed to ${actionText} config: Grafana Admin role required.\n\nError: ${errMsg}`);
       } else {
         alert(`❌ Failed to ${actionText} config: ${errMsg}`);
       }
@@ -900,7 +890,7 @@ export function ConfigGenerator({
           // 1. NEW collectors (name + namespace provided)
           // 2. EXISTING Deployment/StatefulSet collectors (deployment settings can be modified)
           // Do NOT include for DaemonSet collectors (only spec.config is updated)
-          crdSettings: (includeDeploymentSettings && (isNewCollector || canModifyDeploymentSettings)) ? {
+          crdSettings: (isAdmin && includeDeploymentSettings && (isNewCollector || canModifyDeploymentSettings)) ? {
             name: crdSettings.name,
             namespace: crdSettings.namespace,
             mode: crdSettings.mode,
@@ -1371,6 +1361,9 @@ export function ConfigGenerator({
   };
   return (
     <div>
+      {!canEditConfig && <div role="status" style={{ marginBottom: 12, padding: 12, background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE', borderRadius: 6 }}>
+        Viewer access is read-only. Editors can save configuration drafts; a Grafana Admin must approve them before they can be pushed.
+      </div>}
       <div style={{
         background: 'white',
         borderRadius: 8,
@@ -1382,6 +1375,7 @@ export function ConfigGenerator({
           <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#111827' }}>Configuration Builder</h3>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
+              disabled={!canEditConfig}
               onClick={() => setShowComponentTypeManager(true)}
               style={{
                 padding: '8px 16px',
@@ -2377,6 +2371,7 @@ service:
             />
             <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
+                disabled={!canEditConfig}
                 onClick={() => {
                   if (!selectedAgentUID) {
                     alert('Please select an agent first');
@@ -2547,7 +2542,7 @@ service:
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
                   <button
                     onClick={() => setShowSaveDialog(true)}
-                    disabled={!generatedConfig || generatedConfig.trim() === ''}
+                    disabled={!canEditConfig || !generatedConfig || generatedConfig.trim() === ''}
                     style={{
                       padding: '8px 16px',
                       background: (!generatedConfig || generatedConfig.trim() === '') ? '#D1D5DB' : '#6B7280',
@@ -2607,7 +2602,7 @@ service:
                         }
                       }
                     }}
-                    disabled={!generatedConfig || generatedConfig.trim() === '' || !selectedAgentUID}
+                    disabled={!canEditConfig || !generatedConfig || generatedConfig.trim() === '' || !selectedAgentUID}
                     style={{
                     padding: '8px 16px',
                     background: (!generatedConfig || generatedConfig.trim() === '' || !selectedAgentUID) ? '#D1D5DB' : '#10B981',
@@ -2712,7 +2707,7 @@ service:
                   fontSize: 11,
                   color: '#92400E'
                 }}>
-                  ⚠️ Admin role not detected. Check console for role details. For testing, approvals may still work.
+                  Admin approval is required for configuration changes to reach an agent.
                 </div>
               )}
             </div>
@@ -2859,7 +2854,7 @@ service:
                           const agent = agents.find((a: Agent) => a.agentUid === selectedAgentUID);
                           const agentNotOnline = !agent || agent.status !== 'online';
                           
-                          const canRevert = !isLatestVersion && isApproved && !agentNotOnline;
+                          const canRevert = canEditConfig && !isLatestVersion && isApproved && !agentNotOnline;
                           const disabledReason = isLatestVersion ? 'Cannot revert to the latest version' :
                                                 isNotApproved ? 'Only approved configurations can be reverted' :
                                                 agentNotOnline ? 'Agent must be online to revert' :
@@ -2902,6 +2897,7 @@ service:
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                             {!version.pushedAt ? (
                               <button
+                                disabled={!canEditConfig}
                                 onClick={async () => {
                                   try {
                                     const resp = await backendSrv.get(`/api/plugins/otel-collector-agent-fleet-management/resources/configs/${version.id}`);
@@ -3065,12 +3061,12 @@ service:
                             marginTop: 8
                           }}>
                             <div style={{ fontSize: 11, fontWeight: 600, color: '#92400E', marginBottom: 8 }}>
-                              ⚠️ AWAITING APPROVAL {isAdmin ? '(You are admin)' : '(Admin role not detected - trying anyway for testing)'}
+                              ⚠️ AWAITING APPROVAL {isAdmin ? '(You are admin)' : '(Admin required)'}
                             </div>
                             <div style={{ display: 'flex', gap: 8 }}>
                               <button
                                 onClick={() => handleApprovalClick(String(version.id), 'approve')}
-                                disabled={version.approvalStatus === 'approved' || version.approvalStatus === 'rejected'}
+                                disabled={!isAdmin || version.approvalStatus === 'approved' || version.approvalStatus === 'rejected'}
                                 style={{ 
                                   flex: 1,
                                   padding: '8px 16px', 
@@ -3084,13 +3080,13 @@ service:
                                   boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                                   opacity: (version.approvalStatus === 'approved' || version.approvalStatus === 'rejected') ? 0.5 : 1
                                 }}
-                                title={(version.approvalStatus === 'approved' || version.approvalStatus === 'rejected') ? `Configuration already ${version.approvalStatus}` : (isAdmin ? 'Approve this configuration as admin' : 'Attempting to approve (testing mode)')}
+                                title={isAdmin ? 'Approve this configuration as admin' : 'Grafana Admin role required'}
                               >
                                 ✓ Approve Configuration
                               </button>
                               <button
                                 onClick={() => handleApprovalClick(String(version.id), 'reject')}
-                                disabled={version.approvalStatus === 'approved' || version.approvalStatus === 'rejected'}
+                                disabled={!isAdmin || version.approvalStatus === 'approved' || version.approvalStatus === 'rejected'}
                                 style={{ 
                                   flex: 1,
                                   padding: '8px 16px', 
@@ -3104,14 +3100,14 @@ service:
                                   boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
                                   opacity: (version.approvalStatus === 'approved' || version.approvalStatus === 'rejected') ? 0.5 : 1
                                 }}
-                                title={(version.approvalStatus === 'approved' || version.approvalStatus === 'rejected') ? `Configuration already ${version.approvalStatus}` : (isAdmin ? 'Reject this configuration as admin' : 'Attempting to reject (testing mode)')}
+                                title={isAdmin ? 'Reject this configuration as admin' : 'Grafana Admin role required'}
                               >
                                 ✗ Reject Configuration
                               </button>
                             </div>
                             <div style={{ fontSize: 11, color: '#78350F', marginTop: 8 }}>
                               💡 Review the configuration above, then approve or reject it. Approved configs can be pushed to agents.
-                              {!isAdmin && <div style={{ marginTop: 4, fontSize: 10 }}>⚠️ Note: Admin role not detected, but approval will be attempted anyway for testing.</div>}
+                              {!isAdmin && <div style={{ marginTop: 4, fontSize: 10 }}>Contact a Grafana Admin to approve or reject this configuration.</div>}
                             </div>
                           </div>
                         )}

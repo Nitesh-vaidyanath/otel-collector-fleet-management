@@ -1,0 +1,15 @@
+apiVersion: 1
+
+apps:
+  - type: otel-collector-agent-fleet-management
+    org_id: 1
+    disabled: false
+    jsonData:
+      dbType: mysql
+      dbHost: mysql
+      dbPort: 3306
+      dbName: fleet_manual_test
+      dbUser: fleet_test_app
+      opampEndpoint: 0.0.0.0:4321
+    secureJsonData:
+      dbPassword: fleet-manual-test-db-password

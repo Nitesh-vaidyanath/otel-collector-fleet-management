@@ -180,46 +180,28 @@ plugins:
 
 **Setup Steps:**
 
-1. Create a Spanner instance and database:
-   ```bash
-   gcloud spanner instances create my-instance \
-     --config=regional-us-central1 \
-     --description="OTel Collector Fleet Management" \
-     --nodes=1
-   
-   gcloud spanner databases create grafana_agents \
-     --instance=my-instance
-   ```
-
-2. Set up authentication:
-   ```bash
-   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
-   ```
-
-3. Run migrations to create tables (see Database Migrations section)
+The current backend uses a single MySQL database/schema for all organizations.
+Organization isolation is enforced by `org_id` in application queries and the
+Grafana-org mapping; there is no per-organization database provisioning or
+Spanner driver in this repository.
 
 ---
 
 ## Database Migrations
 
-The plugin includes database migrations located in `pkg/migrations/`. Migrations are automatically applied when the plugin starts.
+The backend does not automatically apply migrations at startup. Apply the
+numbered MySQL migrations deliberately before upgrading the backend. For a new
+local manual-test database, `tests/manual/generate-init.cjs` creates one
+synthetic fixture init script from the migration history.
 
-### Manual Migration
+### Migration status
 
-To run migrations manually:
-
-```bash
-# Set environment variables
-export DB_TYPE=mysql
-export DB_HOST=localhost
-export DB_PORT=3306
-export DB_NAME=grafana_agents
-export DB_USER=grafana
-export DB_PASSWORD=your_password
-
-# Run migrations
-go run cmd/migrate/main.go
-```
+There is no checked-in migration runner or migration ledger. Do not run the
+numbered files repeatedly against a populated database: several are one-time
+DDL, and migration `0018` moves legacy bridge rows. For an existing database,
+take a backup and review/apply the required version steps once using the
+deployment's approved database process. The generated SQL is only for a new,
+disposable manual-test volume; it is not an upgrade bundle.
 
 ### Migration Files
 
@@ -235,10 +217,11 @@ go run cmd/migrate/main.go
 - `0010_approval_comments.sql`: Approval comments
 - `0011_pending_config_queue.sql`: Pending config queue
 - `0012_track_config_version.sql`: Config version tracking
-- `0013_org_databases.sql`: Organization-specific databases
+- `0013_org_databases.sql`: Indexes supporting organization scoping in the shared schema
 - `0014_pushed_at_tracking.sql`: Config push tracking
 - `0015_config_status_tracking.sql`: Remote config status tracking
-- `0016_cleanup_unused_tables.sql`: Cleanup unused tables
+- `0016_cleanup_unused_tables.sql`: Historical cleanup migration
+- `0017_add_k8s_columns.sql` through `0020_managed_agent_enrollments.sql`: Kubernetes identity, Grafana-org mapping, and managed-agent enrollment
 
 ---
 

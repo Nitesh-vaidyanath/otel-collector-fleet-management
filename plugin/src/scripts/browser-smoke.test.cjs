@@ -137,3 +137,70 @@ test('synthetic telemetry drawer fences stale org and metadata responses without
     await browser.close();
   }
 });
+
+test('synthetic node deployment controls use the explicit allowlist and authenticated API facade', async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: chromium.executablePath() });
+  try {
+    const page = await browser.newPage();
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.route('**/*', (route) => route.abort());
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: fs.readFileSync(path.join(__dirname, '../node_modules/react/umd/react.development.js'), 'utf8') });
+    await page.addScriptTag({ content: fs.readFileSync(path.join(__dirname, '../node_modules/react-dom/umd/react-dom.development.js'), 'utf8') });
+    const source = `
+      import React from 'react';
+      import * as ReactDOM from 'react-dom';
+      import { AgentDeploymentsSection } from './pages/components/AgentDeploymentsSection';
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      const data = { enabled: true, profiles: [{ name: 'generic-linux', image: 'example.invalid/agent:v1' }], nodes: ['node-a'], deployments: [] };
+      const calls = [];
+      const api = {
+        get: async (url) => { calls.push({ method: 'GET', url }); return JSON.parse(JSON.stringify(data)); },
+        post: async (url, body) => { calls.push({ method: 'POST', url, body }); if (url === '/agent-deployments') data.deployments.push({ fleetId: 'fleet-1', name: 'fleet-agent-fleet-1', profile: body.profile, node: body.node, status: 'Pending', desiredReplicas: 1, readyReplicas: 0 }); },
+        delete: async (url) => { calls.push({ method: 'DELETE', url }); },
+      };
+      function Harness() {
+        const [admin, setAdmin] = React.useState(false);
+        window.__deploymentHarness = { setAdmin, setEnabled: (enabled) => { data.enabled = enabled; data.disabledReason = enabled ? undefined : 'No valid node/profile allowlist configured.'; }, calls };
+        return React.createElement(AgentDeploymentsSection, { api, isAdmin: admin });
+      }
+      export const plugin = { mount: () => root.render(React.createElement(Harness)) };
+    `;
+    const bundle = await esbuild.build({
+      stdin: { contents: source, resolveDir: path.join(__dirname, '..'), sourcefile: 'deployment-harness.tsx', loader: 'tsx' },
+      bundle: true,
+      platform: 'browser',
+      format: 'esm',
+      write: false,
+      jsx: 'transform',
+      external: ['react', 'react-dom'],
+    });
+    const amdSource = transformToAmd(bundle.outputFiles[0].text);
+    await page.evaluate(() => { window.define = (_dependencies, factory) => { window.__amdFactory = factory; }; });
+    await page.addScriptTag({ content: amdSource });
+    await page.evaluate(() => {
+      window.__plugin = window.__amdFactory({}, {}, {}, window.React, window.ReactDOM).plugin;
+      window.__plugin.mount();
+    });
+    await page.getByRole('heading', { name: 'Node deployments' }).waitFor();
+    const createButton = page.getByRole('button', { name: 'Create deployment' });
+    assert.equal(await createButton.isDisabled(), true, 'non-admin controls must be disabled');
+    assert.equal(await page.getByText('Deployment controls require the Grafana Admin role.').count(), 1);
+    await page.evaluate(() => window.__deploymentHarness.setAdmin(true));
+    await page.getByRole('button', { name: 'Create deployment' }).click();
+    await page.getByText('fleet-agent-fleet-1').waitFor();
+    assert.equal(await page.getByText('Not verified', { exact: true }).count(), 1, 'OpAMP state is not inferred from Kubernetes readiness');
+    assert.equal(await page.getByText('Pending (0/1)', { exact: true }).count(), 1, 'Kubernetes rollout state remains visible');
+    const calls = await page.evaluate(() => window.__deploymentHarness.calls);
+    assert.ok(calls.some((call) => call.method === 'POST' && call.url === '/agent-deployments' && call.body.profile === 'generic-linux' && call.body.node === 'node-a'));
+    assert.ok(calls.some((call) => call.method === 'GET' && call.url === '/agent-deployments'));
+    await page.evaluate(() => window.__deploymentHarness.setEnabled(false));
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.getByText('Node deployments are disabled: No valid node/profile allowlist configured.').waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Create deployment' }).count(), 0, 'disabled configuration removes create controls');
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await browser.close();
+  }
+});

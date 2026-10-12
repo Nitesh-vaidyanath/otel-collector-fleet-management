@@ -6,12 +6,26 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 )
 
 type resourceAdapter struct {
-	handler http.Handler
+	handler  http.Handler
+	mapOrgID func(int64) (int64, bool)
+}
+
+type pluginPrincipalKey struct{}
+
+type pluginPrincipal struct {
+	orgID        int64
+	grafanaOrgID int64
+	orgMapped    bool
+	role         Role
+	user         string
+	userLogin    string
+	isAdmin      bool
 }
 
 type adapterResponseWriter struct {
@@ -21,7 +35,11 @@ type adapterResponseWriter struct {
 }
 
 func newResourceAdapter(handler http.Handler) backend.CallResourceHandler {
-	return &resourceAdapter{handler: handler}
+	return newResourceAdapterWithOrgLookup(handler, lookupInternalOrgIDByGrafanaID)
+}
+
+func newResourceAdapterWithOrgLookup(handler http.Handler, mapOrgID func(int64) (int64, bool)) backend.CallResourceHandler {
+	return &resourceAdapter{handler: handler, mapOrgID: mapOrgID}
 }
 
 func newAdapterResponseWriter() *adapterResponseWriter {
@@ -90,10 +108,37 @@ func (a *resourceAdapter) CallResource(ctx context.Context, req *backend.CallRes
 	}
 
 	for key, values := range req.Headers {
+		lowerKey := strings.ToLower(key)
+		if strings.HasPrefix(lowerKey, "x-grafana-") || strings.HasPrefix(lowerKey, "x-scoper-") ||
+			strings.EqualFold(key, "X-Role") || strings.EqualFold(key, "X-User") || strings.EqualFold(key, "X-User-Name") {
+			continue
+		}
 		for _, value := range values {
 			httpReq.Header.Add(key, value)
 		}
 	}
+	principal := pluginPrincipal{role: RoleViewer, user: "unknown", grafanaOrgID: req.PluginContext.OrgID}
+	if a.mapOrgID != nil && req.PluginContext.OrgID > 0 {
+		if internalOrgID, ok := a.mapOrgID(req.PluginContext.OrgID); ok && internalOrgID > 0 {
+			principal.orgID = internalOrgID
+			principal.orgMapped = true
+		}
+	}
+	if user := req.PluginContext.User; user != nil {
+		principal.userLogin = strings.TrimSpace(user.Login)
+		principal.user = user.Name
+		if principal.user == "" {
+			principal.user = user.Login
+		}
+		switch strings.ToLower(user.Role) {
+		case "editor":
+			principal.role = RoleEditor
+		case "admin":
+			principal.role = RoleAdmin
+			principal.isAdmin = true
+		}
+	}
+	httpReq = httpReq.WithContext(context.WithValue(httpReq.Context(), pluginPrincipalKey{}, principal))
 
 	httpReq.RemoteAddr = "plugin-backend"
 

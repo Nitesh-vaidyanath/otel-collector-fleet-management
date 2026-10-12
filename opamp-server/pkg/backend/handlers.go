@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -955,6 +956,21 @@ func agentEntityHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	}
 }
 
+var agentTargetInOrganization = lookupAgentTargetInOrganization
+
+func lookupAgentTargetInOrganization(orgID int64, agentUID string) (bool, error) {
+	if orgID <= 0 || strings.TrimSpace(agentUID) == "" {
+		return false, nil
+	}
+	db := mustDB()
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agents WHERE org_id=? AND agent_uid=?`, orgID, normalizeAgentUID(agentUID)).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 1, nil
+}
+
 func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	path := r.URL.Path
 	// Path is like /agents/{uid}/operations
@@ -977,6 +993,14 @@ func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 
 	switch req.Action {
 	case "push-config":
+		if !allow(c.Role, RoleEditor) {
+			http.Error(w, "forbidden: editor role required to push approved configuration", http.StatusForbidden)
+			return
+		}
+		if c.OrgID <= 0 || strings.TrimSpace(c.UserLogin) == "" {
+			http.Error(w, "forbidden: trusted user login and organization context required", http.StatusForbidden)
+			return
+		}
 		if req.Config == "" {
 			http.Error(w, "config required", 400)
 			return
@@ -1000,15 +1024,24 @@ func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		}
 
 		// Verify the config is approved
-		var approvalStatus, configName sql.NullString
+		var approvalStatus, configName, approvedAgentUID sql.NullString
+		var approvedYAML sql.NullString
 		var configVersion int64
-		row := db.QueryRow(`SELECT approval_status, name, version FROM agent_configs WHERE id=? AND org_id=?`, configID, c.OrgID)
-		if err := row.Scan(&approvalStatus, &configName, &configVersion); err != nil {
+		row := db.QueryRow(`SELECT approval_status, name, version, agent_uid, config_yaml FROM agent_configs WHERE id=? AND org_id=? AND agent_uid=?`, configID, c.OrgID, uid)
+		if err := row.Scan(&approvalStatus, &configName, &configVersion, &approvedAgentUID, &approvedYAML); err != nil {
 			http.Error(w, "config not found", 404)
 			return
 		}
 		if !approvalStatus.Valid || approvalStatus.String != "approved" {
 			http.Error(w, "config must be approved before pushing. Current status: "+approvalStatus.String, 403)
+			return
+		}
+		if !approvedAgentUID.Valid || approvedAgentUID.String != uid || !approvedYAML.Valid {
+			http.Error(w, "approved config does not match target agent", http.StatusConflict)
+			return
+		}
+		if req.Config != approvedYAML.String {
+			http.Error(w, "request config does not match the approved configuration", http.StatusConflict)
 			return
 		}
 
@@ -1024,16 +1057,16 @@ func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		}
 
 		log.Printf("Attempting to push config to agent %s (by: %s, config size: %d bytes, config_id: %s, version: %d)",
-			uid, c.UserName, len(req.Config), configID, configVersion)
+			uid, c.UserLogin, len(req.Config), configID, configVersion)
 
-		err := globalOpampManager.PushConfig(uid, req.Config, c.UserName)
+		err := globalOpampManager.PushConfig(c.OrgID, uid, approvedYAML.String, c.UserLogin)
 		if err != nil {
 			log.Printf("ERROR: Failed to push config to agent %s: %v", uid, err)
 			http.Error(w, fmt.Sprintf("failed to push config: %v", err), 500)
 			return
 		}
 
-		log.Printf("✓ Config push initiated successfully for agent %s (by: %s)", uid, c.UserName)
+		log.Printf("✓ Config push initiated successfully for agent %s (by: %s)", uid, c.UserLogin)
 
 		// Mark config as pushed
 		var configIDInt int64
@@ -1042,17 +1075,34 @@ func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			UPDATE agent_configs 
 			SET pushed_at=NOW(), pushed_by=?
 			WHERE id=? AND org_id=?
-		`, c.UserName, configIDInt, c.OrgID)
+		`, c.UserLogin, configIDInt, c.OrgID)
 
 		// Log activity
 		db.Exec(`
 			INSERT INTO agent_activity_log (org_id, agent_uid, activity_type, description, config_id, config_version, performed_by, metadata)
 			VALUES (?, ?, 'config_push', ?, ?, ?, ?, ?)
-		`, c.OrgID, uid, fmt.Sprintf("Pushed configuration: %s (v%d)", configName.String, configVersion), configID, configVersion, c.UserName,
+		`, c.OrgID, uid, fmt.Sprintf("Pushed configuration: %s (v%d)", configName.String, configVersion), configID, configVersion, c.UserLogin,
 			fmt.Sprintf(`{"config_id": %s, "config_version": %d}`, configID, configVersion))
 
 		jsonOK(w, map[string]any{"ok": true, "message": "Config pushed to agent", "configId": configIDInt})
-	case "upgrade":
+	case "restart", "upgrade": // "upgrade" remains a backwards-compatible alias; this sends restart only.
+		if !allow(c.Role, RoleAdmin) {
+			http.Error(w, "forbidden: admin role required to restart agent", http.StatusForbidden)
+			return
+		}
+		if c.OrgID <= 0 || strings.TrimSpace(c.UserLogin) == "" {
+			http.Error(w, "forbidden: trusted user login and organization context required", http.StatusForbidden)
+			return
+		}
+		owned, ownershipErr := agentTargetInOrganization(c.OrgID, uid)
+		if ownershipErr != nil {
+			http.Error(w, "failed to verify agent organization", http.StatusInternalServerError)
+			return
+		}
+		if !owned {
+			http.Error(w, "agent not found in organization", http.StatusNotFound)
+			return
+		}
 		if globalOpampManager == nil {
 			http.Error(w, "opamp manager not initialized", 500)
 			return
@@ -1065,7 +1115,7 @@ func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		bodyBytes, _ := json.Marshal(req)
 		json.Unmarshal(bodyBytes, &upgradeReq)
 
-		err := globalOpampManager.UpgradeAgent(uid, upgradeReq.Version)
+		err := globalOpampManager.UpgradeAgent(c.OrgID, uid, upgradeReq.Version)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				http.Error(w, "agent not connected", 404)
@@ -1074,7 +1124,7 @@ func agentOperationsHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		jsonOK(w, map[string]any{"ok": true, "message": "Upgrade command sent to agent"})
+		jsonOK(w, map[string]any{"ok": true, "message": "Restart command sent to agent"})
 	default:
 		http.Error(w, "unknown action", 400)
 	}
@@ -1187,6 +1237,10 @@ func configsCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 
 		if in.Config == "" {
 			http.Error(w, "config required", 400)
+			return
+		}
+		if !allow(c.Role, RoleAdmin) && isFullCollectorCRD(in.Config) {
+			http.Error(w, "admin role required to save a deployment CRD", http.StatusForbidden)
 			return
 		}
 
@@ -1348,6 +1402,10 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if req.CRDSettings != nil && !allow(c.Role, RoleAdmin) {
+		http.Error(w, "admin role required to generate a deployment CRD", http.StatusForbidden)
+		return
+	}
 
 	// Build OpenTelemetry Collector config (spec.config section)
 	// NOTE: All component types are allowed - no restrictions on receivers, processors, or exporters
@@ -1370,7 +1428,9 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 					if err := yaml.Unmarshal([]byte(customYaml), &customSection); err == nil {
 						// Merge into main config
 						for key, value := range customSection {
-							config[key] = value
+							if isAllowedCollectorConfigSection(key) {
+								config[key] = value
+							}
 						}
 					}
 				}
@@ -1460,6 +1520,26 @@ func configGeneratorHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		}
 		jsonOK(w, map[string]any{"config": string(yamlBytes), "format": "yaml", "isCRD": false})
 	}
+}
+
+func isAllowedCollectorConfigSection(section string) bool {
+	switch section {
+	case "receivers", "processors", "exporters", "connectors", "extensions", "service":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFullCollectorCRD(config string) bool {
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(config), &parsed); err != nil || parsed == nil {
+		return false
+	}
+	_, hasAPIVersion := parsed["apiVersion"]
+	_, hasKind := parsed["kind"]
+	_, hasSpec := parsed["spec"]
+	return hasAPIVersion || hasKind || hasSpec
 }
 
 func buildComponentMap(components []map[string]any) map[string]any {
@@ -1712,6 +1792,10 @@ func configApprovalHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !allow(c.Role, RoleAdmin) {
+		http.Error(w, "forbidden: admin role required to approve configuration", http.StatusForbidden)
+		return
+	}
 
 	db := mustDB()
 	defer db.Close()
@@ -1742,15 +1826,6 @@ func configApprovalHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	if req.Action == "reject" && strings.TrimSpace(req.Comment) == "" {
 		http.Error(w, "comment is required when rejecting a configuration", 400)
 		return
-	}
-
-	// For testing: Allow approvals even if admin role isn't detected
-	// In production, you should enforce admin-only: if !c.IsAdmin { http.Error(...); return }
-	if !c.IsAdmin {
-		log.Printf("Warning: Approval attempted by non-admin user (testing mode enabled). UserID: %d, UserName: %s, Role: %d, IsAdmin: %v", c.UserID, c.UserName, c.Role, c.IsAdmin)
-		// Uncomment the next 2 lines to enforce admin-only approvals in production:
-		// http.Error(w, "admin role required", http.StatusForbidden)
-		// return
 	}
 
 	status := "approved"
@@ -2122,6 +2197,10 @@ func configRevertHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 			"validationErrors": validationErrors,
 			"message":          "Configuration validation failed",
 		})
+		return
+	}
+	if !allow(c.Role, RoleAdmin) && isFullCollectorCRD(configYAML.String) {
+		http.Error(w, "admin role required to revert a deployment CRD", http.StatusForbidden)
 		return
 	}
 
@@ -2996,18 +3075,15 @@ func agentTelemetryHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	defer db.Close()
 
 	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[1] == "" {
+	if len(pathParts) != 3 || pathParts[0] != "agents" || pathParts[1] == "" || pathParts[2] != "telemetry" {
 		http.Error(w, "agent UID required", 400)
 		return
 	}
-	agentUID := pathParts[2]
+	agentUID := pathParts[1]
 
 	telemetryType := r.URL.Query().Get("type") // metrics, logs, traces, health, pipeline_status
 	limitStr := r.URL.Query().Get("limit")
-	limit := 100
-	if limitStr != "" {
-		fmt.Sscanf(limitStr, "%d", &limit)
-	}
+	limit := boundedQueryLimit(limitStr, 100, 500)
 
 	query := `SELECT id, telemetry_type, telemetry_data, reported_at 
 	          FROM agent_telemetry 
@@ -3060,17 +3136,14 @@ func agentHealthHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	defer db.Close()
 
 	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[2] == "" {
+	if len(pathParts) != 3 || pathParts[0] != "agents" || pathParts[1] == "" || pathParts[2] != "health" {
 		http.Error(w, "agent UID required", 400)
 		return
 	}
-	agentUID := pathParts[2]
+	agentUID := pathParts[1]
 
 	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if limitStr != "" {
-		fmt.Sscanf(limitStr, "%d", &limit)
-	}
+	limit := boundedQueryLimit(limitStr, 50, 500)
 
 	rows, err := db.Query(`
 		SELECT healthy, last_error, status_message, recorded_at
@@ -3143,18 +3216,20 @@ func agentPipelinesHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	defer db.Close()
 
 	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[2] == "" {
+	if len(pathParts) != 3 || pathParts[0] != "agents" || pathParts[1] == "" || pathParts[2] != "pipelines" {
 		http.Error(w, "agent UID required", 400)
 		return
 	}
-	agentUID := pathParts[2]
+	agentUID := pathParts[1]
+	limit := boundedQueryLimit(r.URL.Query().Get("limit"), 100, 500)
 
 	rows, err := db.Query(`
 		SELECT pipeline_name, pipeline_type, status, error_message, last_updated
 		FROM agent_pipeline_status
 		WHERE org_id=? AND agent_uid=?
 		ORDER BY pipeline_name
-	`, c.OrgID, agentUID)
+		LIMIT ?
+	`, c.OrgID, agentUID, limit)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -3180,6 +3255,20 @@ func agentPipelinesHandler(w http.ResponseWriter, r *http.Request, c reqCtx) {
 	}
 
 	jsonOK(w, map[string]any{"items": items})
+}
+
+func boundedQueryLimit(value string, defaultValue, maximum int) int {
+	if value == "" {
+		return defaultValue
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit <= 0 {
+		return defaultValue
+	}
+	if limit > maximum {
+		return maximum
+	}
+	return limit
 }
 
 // validateOTelConfig validates OpenTelemetry Collector configuration

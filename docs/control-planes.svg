@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Fleet control planes and permission boundaries</title>
+  <desc id="desc">Three architecture choices: centralized backend with namespace-scoped Kubernetes privileges, a dedicated operator, and platform-managed agent-only control. Kubernetes admission remains the final Pod security gate. Optional Drift Watch deep eBPF inspection is separate.</desc>
+  <defs>
+    <style>
+      text{font-family:Inter,Arial,sans-serif;fill:#17233b}.title{font-size:26px;font-weight:700}.head{font-size:18px;font-weight:700}.body{font-size:14px}.small{font-size:12px}.box{rx:14;stroke-width:2}.line{stroke:#66758f;stroke-width:2;fill:none;marker-end:url(#arrow)}
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#66758f"/></marker>
+  </defs>
+  <rect width="1200" height="760" fill="#f5f7fb"/>
+  <text x="40" y="48" class="title">Drift Watch + Fleet Management: separate control planes</text>
+  <text x="40" y="77" class="body">OpAMP manages supported application config; Kubernetes RBAC + admission own Pod privileges.</text>
+  <rect x="40" y="110" width="1120" height="100" class="box" fill="#fff" stroke="#8794aa"/>
+  <text x="65" y="144" class="head">Grafana UI + RBAC</text><text x="65" y="174" class="body">Viewer: read · Editor: config draft · Org Admin: owned deployment/profile requests</text>
+  <path d="M600 210 V245" class="line"/>
+  <rect x="350" y="250" width="500" height="110" class="box" fill="#eaf2ff" stroke="#4382d8"/>
+  <text x="375" y="285" class="head">Fleet API / OpAMP server</text><text x="375" y="312" class="body">Org + owner checks · token/UID enrollment · config offer and ack</text><text x="375" y="337" class="small">Single MySQL schema shared by organizations; org_id is the data boundary</text>
+  <path d="M350 305 H190 V400" class="line"/><path d="M850 305 H1015 V400" class="line"/>
+  <rect x="40" y="405" width="300" height="180" class="box" fill="#e8f7f1" stroke="#33a47a"/>
+  <text x="62" y="440" class="head">A · Central backend</text><text x="62" y="470" class="body">Backend SA patches allow-listed</text><text x="62" y="493" class="body">Deployment profile (namespace scope).</text><text x="62" y="526" class="small">Simple UX; sensitive backend RBAC.</text><text x="62" y="550" class="small">Admission still decides.</text>
+  <rect x="450" y="405" width="300" height="180" class="box" fill="#fff4df" stroke="#d99b27"/>
+  <text x="472" y="440" class="head">B · Dedicated operator</text><text x="472" y="470" class="body">OpAMP controls app config;</text><text x="472" y="493" class="body">operator reconciles security profiles.</text><text x="472" y="526" class="small">Clearer separation; adds CRD</text><text x="472" y="550" class="small">and operator lifecycle.</text>
+  <rect x="860" y="405" width="300" height="180" class="box" fill="#f0eaff" stroke="#9066c8"/>
+  <text x="882" y="440" class="head">C · Platform-managed</text><text x="882" y="470" class="body">OpAMP config only; platform team</text><text x="882" y="493" class="body">provisions Pod security separately.</text><text x="882" y="526" class="small">Least backend privilege; no</text><text x="882" y="550" class="small">self-service privilege changes.</text>
+  <path d="M190 585 V625 H600" class="line"/><path d="M600 585 V625" class="line"/><path d="M1010 585 V625 H600" class="line"/>
+  <rect x="270" y="635" width="660" height="66" class="box" fill="#ffe9e9" stroke="#cf5353"/>
+  <text x="295" y="663" class="head">Kubernetes RBAC + admission = final Pod security gate</text><text x="295" y="686" class="small">Separately opt-in Drift Watch discovery/eBPF; CAP_SYS_ADMIN / CAP_SYS_PTRACE carry host-level risk.</text>
+  <text x="40" y="735" class="small">Recommended direction: A for MVP with narrow backend RBAC and admission policy; evolve to B if privilege-control separation is required.</text>
+</svg>

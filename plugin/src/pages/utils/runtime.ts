@@ -60,37 +60,7 @@ export const detectRuntimeMode = (): RuntimeMode => {
 };
 
 export const detectGrafanaTransport = (isRunningInGrafana: boolean): GrafanaTransport => {
-  if (!isRunningInGrafana) {
-    return 'resources';
-  }
-
-  const coerce = (value: string | null | undefined): GrafanaTransport | null => {
-    if (!value) {
-      return null;
-    }
-    const lower = value.toLowerCase();
-    if (lower === 'proxy' || lower === 'resources') {
-      return lower as GrafanaTransport;
-    }
-    if (lower === 'callresource') {
-      return 'resources';
-    }
-    return null;
-  };
-
-  let stored: string | null = null;
-  try {
-    stored = window.localStorage?.getItem('otelFleetTransport') ?? null;
-  } catch {
-    stored = null;
-  }
-
-  return (
-    coerce((window as any).__OTEL_FLEET_TRANSPORT__) ||
-    coerce(new URLSearchParams(window.location.search).get('transport')) ||
-    coerce(stored) ||
-    'proxy'
-  );
+  return 'resources';
 };
 
 export const normalizeUrl = (rawUrl: string, isRunningInGrafana: boolean, grafanaTransport: GrafanaTransport): string => {

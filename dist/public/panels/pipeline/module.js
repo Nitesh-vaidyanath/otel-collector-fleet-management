@@ -124,29 +124,7 @@ var detectRuntimeMode = () => {
   return "standalone";
 };
 var detectGrafanaTransport = (isRunningInGrafana2) => {
-  if (!isRunningInGrafana2) {
-    return "resources";
-  }
-  const coerce = (value) => {
-    if (!value) {
-      return null;
-    }
-    const lower = value.toLowerCase();
-    if (lower === "proxy" || lower === "resources") {
-      return lower;
-    }
-    if (lower === "callresource") {
-      return "resources";
-    }
-    return null;
-  };
-  let stored = null;
-  try {
-    stored = window.localStorage?.getItem("otelFleetTransport") ?? null;
-  } catch {
-    stored = null;
-  }
-  return coerce(window.__OTEL_FLEET_TRANSPORT__) || coerce(new URLSearchParams(window.location.search).get("transport")) || coerce(stored) || "proxy";
+  return "resources";
 };
 var normalizeUrl = (rawUrl, isRunningInGrafana2, grafanaTransport2) => {
   if (!rawUrl) {

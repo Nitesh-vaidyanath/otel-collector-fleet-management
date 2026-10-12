@@ -1,0 +1,63 @@
+name: fleet-manual-test
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: fleet-manual-test-root
+      MYSQL_DATABASE: fleet_manual_test
+      MYSQL_USER: fleet_test_app
+      MYSQL_PASSWORD: fleet-manual-test-db-password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./generated/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pfleet-manual-test-root"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - manual_test
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION: "false"
+      GF_SECURITY_ADMIN_PASSWORD_CHANGE: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: otel-collector-agent-fleet-management
+      GF_SERVER_DOMAIN: 127.0.0.1
+      GF_SERVER_ROOT_URL: http://127.0.0.1:3001
+      AGENTS_MYSQL_DSN: fleet_test_app:fleet-manual-test-db-password@tcp(mysql:3306)/fleet_manual_test?parseTime=true&loc=Local&charset=utf8mb4,utf8
+      OPAMP_ENDPOINT: 0.0.0.0:4321
+      # This isolated fixture preserves legacy anonymous protocol tests only.
+      # Never copy this opt-in to production; it does not verify deployments.
+      OPAMP_ALLOW_UNAUTHENTICATED_LEGACY: "true"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ../../dist:/var/lib/grafana/plugins/otel-collector-agent-fleet-management:ro
+      - ./provisioning:/etc/grafana/provisioning/plugins:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - manual_test
+      - browser_access
+
+volumes:
+  mysql_data:
+    name: fleet_manual_test_mysql_data
+  grafana_data:
+    name: fleet_manual_test_grafana_data
+
+networks:
+  manual_test:
+    name: fleet_manual_test_network
+    internal: true
+  browser_access:
+    name: fleet_manual_test_browser_access

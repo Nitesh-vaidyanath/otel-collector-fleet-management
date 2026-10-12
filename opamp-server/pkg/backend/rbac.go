@@ -25,6 +25,7 @@ type reqCtx struct {
 	Role            Role
 	UserID          int64
 	UserName        string
+	UserLogin       string
 	UserDisplayName string
 	IsAdmin         bool
 }
@@ -92,6 +93,58 @@ func roleFromHeader(r *http.Request) Role {
 			return RoleViewer
 		}
 	}
+}
+
+func trustedPluginPrincipal(r *http.Request) (pluginPrincipal, bool) {
+	principal, ok := r.Context().Value(pluginPrincipalKey{}).(pluginPrincipal)
+	return principal, ok
+}
+
+func rejectUnmappedPluginOrganization(w http.ResponseWriter, r *http.Request) bool {
+	principal, ok := trustedPluginPrincipal(r)
+	if !ok {
+		if !allowHeaderIdentityFallback() && r.URL.Path != "/health" {
+			writeJSONError(w, http.StatusForbidden, "trusted Grafana resource context required")
+			return true
+		}
+		return false
+	}
+	if principal.orgMapped || r.URL.Path == "/health" {
+		return false
+	}
+	writeJSONError(w, http.StatusForbidden, "Grafana organization is not mapped to a fleet organization")
+	return true
+}
+
+func getRequestContext(r *http.Request) reqCtx {
+	if principal, ok := trustedPluginPrincipal(r); ok {
+		name := principal.user
+		if name == "" {
+			name = "unknown"
+		}
+		orgName := fmt.Sprintf("Organization %d", principal.orgID)
+		return reqCtx{OrgID: principal.orgID, GrafanaOrgID: principal.grafanaOrgID, OrgName: orgName,
+			GrafanaOrgName: fmt.Sprintf("Grafana organization %d", principal.grafanaOrgID), Role: principal.role, UserName: name,
+			UserLogin: principal.userLogin, UserDisplayName: name, IsAdmin: principal.isAdmin}
+	}
+	ctx := parseGrafanaContext(r)
+	role := roleFromHeader(r)
+	orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
+	userID, rawUserName := getUserFromRequest(r, ctx)
+	name := sanitizeDisplayName(rawUserName, grafanaOrgID)
+	isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
+	if ctx != nil && ctx.IsGrafanaAdmin {
+		isAdmin = true
+	}
+	userLogin := ""
+	if allowHeaderIdentityFallback() {
+		userLogin = strings.TrimSpace(r.Header.Get("X-Grafana-User-Login"))
+		if userLogin == "" && ctx != nil {
+			userLogin = strings.TrimSpace(ctx.Login)
+		}
+	}
+	return reqCtx{OrgID: orgID, OrgName: orgName, GrafanaOrgID: grafanaOrgID,
+		GrafanaOrgName: grafanaOrgName, Role: role, UserID: userID, UserName: name, UserLogin: userLogin, UserDisplayName: name, IsAdmin: isAdmin}
 }
 
 func getUserFromRequest(r *http.Request, ctx *grafanaContext) (int64, string) {
@@ -260,6 +313,9 @@ func allow(have Role, need Role) bool { return int(have) >= int(need) }
 // wrap converts handler with reqCtx to standard http.HandlerFunc
 func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectUnmappedPluginOrganization(w, r) {
+			return
+		}
 		defer func() {
 			if rec := recover(); rec != nil {
 				if appLogger != nil {
@@ -273,32 +329,16 @@ func wrap(next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFun
 			}
 		}()
 
-		ctx := parseGrafanaContext(r)
-		role := roleFromHeader(r)
-		orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
-		userID, rawUserName := getUserFromRequest(r, ctx)
-		displayName := sanitizeDisplayName(rawUserName, grafanaOrgID)
-		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
-		if ctx != nil && ctx.IsGrafanaAdmin {
-			isAdmin = true
-		}
-		next(w, r, reqCtx{
-			OrgID:           orgID,
-			OrgName:         orgName,
-			GrafanaOrgID:    grafanaOrgID,
-			GrafanaOrgName:  grafanaOrgName,
-			Role:            role,
-			UserID:          userID,
-			UserName:        displayName,
-			UserDisplayName: displayName,
-			IsAdmin:         isAdmin,
-		})
+		next(w, r, getRequestContext(r))
 	}
 }
 
 // rbac wraps a handler and enforces minimum role
 func rbac(min Role, next func(http.ResponseWriter, *http.Request, reqCtx)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectUnmappedPluginOrganization(w, r) {
+			return
+		}
 		defer func() {
 			if rec := recover(); rec != nil {
 				if appLogger != nil {
@@ -312,30 +352,13 @@ func rbac(min Role, next func(http.ResponseWriter, *http.Request, reqCtx)) http.
 			}
 		}()
 
-		ctx := parseGrafanaContext(r)
-		role := roleFromHeader(r)
+		ctx := getRequestContext(r)
+		role := ctx.Role
 		if !allow(role, min) {
 			writeJSONError(w, http.StatusForbidden, "forbidden: insufficient role")
 			return
 		}
-		orgID, orgName, grafanaOrgID, grafanaOrgName := resolveOrgContext(r, ctx)
-		userID, rawUserName := getUserFromRequest(r, ctx)
-		displayName := sanitizeDisplayName(rawUserName, grafanaOrgID)
-		isAdmin := role == RoleAdmin || r.Header.Get("X-Grafana-User-IsGrafanaAdmin") == "true"
-		if ctx != nil && ctx.IsGrafanaAdmin {
-			isAdmin = true
-		}
-		next(w, r, reqCtx{
-			OrgID:           orgID,
-			OrgName:         orgName,
-			GrafanaOrgID:    grafanaOrgID,
-			GrafanaOrgName:  grafanaOrgName,
-			Role:            role,
-			UserID:          userID,
-			UserName:        displayName,
-			UserDisplayName: displayName,
-			IsAdmin:         isAdmin,
-		})
+		next(w, r, ctx)
 	}
 }
 

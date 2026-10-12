@@ -1,0 +1,14 @@
+services:
+  agent:
+    build:
+      context: ../../..
+      dockerfile: tests/manual/opamp-e2e/Dockerfile
+    image: fleet-manual-opamp-e2e:local
+    command: ["--type=${AGENT_TYPE:-agent}", "--duration=${DURATION:-20s}"]
+    networks:
+      - manual_test
+
+networks:
+  manual_test:
+    external: true
+    name: fleet_manual_test_network

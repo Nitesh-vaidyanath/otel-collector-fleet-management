@@ -328,7 +328,7 @@ Agent Heartbeat
 ### Scalability
 
 1. **Horizontal Scaling**: Backend can scale horizontally
-2. **Database Sharding**: Support for organization-specific databases
+2. **Shared schema**: All organizations share one database; `org_id` scopes tenant data
 3. **Connection Management**: Efficient connection reuse
 4. **Caching**: Consider caching for frequently accessed data
 

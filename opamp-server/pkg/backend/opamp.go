@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-telemetry/opamp-go/protobufs"
@@ -28,31 +30,297 @@ type agentConnection struct {
 	orgID       int64
 	orgName     string
 	agentType   string // Explicit agent type from HTTP header: "bridge", "agent", "supervisor", or "" (auto-detect)
+	bridgeUID   string // Exact normalized bridge route for bridge-owned collector aliases.
 }
 
 type OpampManager struct {
-	server               server.OpAMPServer
-	conns                map[string]*agentConnection // agent_uid -> connection
-	connAgentTypes       map[types.Connection]string // connection -> agent_type from HTTP header (temporary until we get instanceUID)
-	connAgentTypesByAddr map[string]string           // remote_addr -> agent_type (fallback if connection object comparison fails)
+	server             server.OpAMPServer
+	connections        *connectionRegistry
+	managedAuth        *managedOpAMPAuthenticator
+	allowUnsafeLegacy  bool
+	allowTrustedTLS    bool
+	managedMu          sync.RWMutex
+	managedConnections map[string]managedLiveConnection
+}
+
+type managedLiveConnection struct {
+	conn                types.Connection
+	fleetID             string
+	deploymentUID       string
+	podUID              string
+	securityProfileHash string
+	lastSeen            time.Time
+}
+
+type managedOpAMPAuthenticator struct {
+	reviewer  managedTokenReviewer
+	inspector managedResourceInspector
+	store     ManagedEnrollmentStore
+	audience  string
+}
+
+type managedConnectionPrincipal struct {
+	token      string
+	identity   managedKubernetesIdentity
+	enrollment ManagedEnrollment
 }
 
 const agentTelemetryRetention = 10 * time.Minute
 
+// We accept status and effective-config reports and offer remote config.
+const opampServerCapabilities uint64 = uint64(
+	protobufs.ServerCapabilities_ServerCapabilities_AcceptsStatus |
+		protobufs.ServerCapabilities_ServerCapabilities_OffersRemoteConfig |
+		protobufs.ServerCapabilities_ServerCapabilities_AcceptsEffectiveConfig,
+)
+
 func NewOpampManager() (*OpampManager, error) {
 	s := server.New(nil)
-	return &OpampManager{
-		server:               s,
-		conns:                make(map[string]*agentConnection),
-		connAgentTypes:       make(map[types.Connection]string),
-		connAgentTypesByAddr: make(map[string]string),
-	}, nil
+	manager := &OpampManager{
+		server:             s,
+		connections:        newConnectionRegistry(),
+		allowUnsafeLegacy:  strings.EqualFold(strings.TrimSpace(os.Getenv("OPAMP_ALLOW_UNAUTHENTICATED_LEGACY")), "true"),
+		allowTrustedTLS:    strings.EqualFold(strings.TrimSpace(os.Getenv("OPAMP_TRUSTED_TLS_TERMINATION")), "true"),
+		managedConnections: make(map[string]managedLiveConnection),
+	}
+	if deployments, err := configuredAgentDeploymentService(); err == nil && deployments != nil && deployments.enabled() {
+		if adapter, ok := deployments.adapter.(interface {
+			managedTokenReviewer
+			managedResourceInspector
+		}); ok {
+			manager.managedAuth = &managedOpAMPAuthenticator{reviewer: adapter, inspector: adapter, store: deployments.store, audience: deployments.config.OpAMPTokenAudience}
+		}
+	}
+	return manager, nil
 }
 
 // normalizeAgentUID normalizes agent UID to a consistent format (removes hyphens for UUIDs)
 func normalizeAgentUID(uid string) string {
 	// Remove hyphens from UUID format (e.g., "550e8400-e29b-41d4-a716-446655440001" -> "550e8400e29b41d4a716446655440001")
 	return strings.ReplaceAll(uid, "-", "")
+}
+
+func (m *OpampManager) trackManagedConnection(conn types.Connection, principal *managedConnectionPrincipal) bool {
+	if m == nil || conn == nil || principal == nil || principal.enrollment.AgentUID == "" {
+		return false
+	}
+	uid := normalizeAgentUID(principal.enrollment.AgentUID)
+	m.managedMu.Lock()
+	// A new pod may replace the previous pod during a rollout. Its old
+	// connection becomes stale immediately, even if it closes later.
+	m.managedConnections[uid] = managedLiveConnection{conn: conn, fleetID: principal.enrollment.FleetID,
+		deploymentUID: principal.enrollment.DeploymentUID, podUID: principal.identity.PodUID,
+		securityProfileHash: principal.identity.SecurityProfileHash, lastSeen: time.Now().UTC()}
+	m.managedMu.Unlock()
+	return true
+}
+
+func (m *OpampManager) isCurrentManagedConnection(conn types.Connection, uid string) bool {
+	if m == nil || conn == nil {
+		return false
+	}
+	m.managedMu.RLock()
+	live, ok := m.managedConnections[normalizeAgentUID(uid)]
+	m.managedMu.RUnlock()
+	return ok && live.conn == conn
+}
+
+func (m *OpampManager) clearManagedConnection(conn types.Connection) []string {
+	if m == nil || conn == nil {
+		return nil
+	}
+	m.managedMu.Lock()
+	defer m.managedMu.Unlock()
+	var removed []string
+	for uid, live := range m.managedConnections {
+		if live.conn == conn {
+			delete(m.managedConnections, uid)
+			removed = append(removed, uid)
+		}
+	}
+	return removed
+}
+
+func (m *OpampManager) managedView(agentUID, fleetID, desiredHash string) *ManagedOpAMPView {
+	view := &ManagedOpAMPView{AgentUID: agentUID, Association: "unverified", Connected: false}
+	if m == nil {
+		return view
+	}
+	m.managedMu.RLock()
+	live, ok := m.managedConnections[normalizeAgentUID(agentUID)]
+	m.managedMu.RUnlock()
+	if ok && live.fleetID == fleetID && live.conn != nil {
+		view.Association, view.Connected = "verified", true
+		view.PodUID = live.podUID
+		view.ProfileMatches = live.securityProfileHash != "" && live.securityProfileHash == desiredHash
+		seen := live.lastSeen.UTC()
+		view.LastSeen = &seen
+	}
+	return view
+}
+
+// Managed messages are deliberately separate from legacy bridge discovery.
+// Every authoritative field comes from the reviewed pod and enrollment.
+func (m *OpampManager) handleManagedMessage(ctx context.Context, conn types.Connection, message *protobufs.AgentToServer, principal *managedConnectionPrincipal) *protobufs.ServerToAgent {
+	e := principal.enrollment
+	id := principal.identity
+	uid := e.AgentUID
+	if !m.isCurrentManagedConnection(conn, uid) {
+		_ = conn.Disconnect()
+		return nil
+	}
+	if existing, ok := m.connections.get(uid); ok && existing.conn == conn && !bytes.Equal(existing.originalUID, message.InstanceUid) {
+		_ = conn.Disconnect()
+		return nil
+	}
+	labels := map[string]string{
+		"agent.type": "agent", "classification.role": "agent",
+		"fleet.grafana.com/id": e.FleetID, "fleet.grafana.com/owner": id.OwnerLabel,
+		"fleet.grafana.com/deployment-uid":        e.DeploymentUID,
+		"fleet.grafana.com/namespace":             e.Namespace,
+		"fleet.grafana.com/security-profile-hash": id.SecurityProfileHash,
+	}
+	capabilities := map[string]interface{}{"reports_status": true,
+		"accepts_remote_config":    message.Capabilities&0x2 != 0,
+		"reports_effective_config": message.Capabilities&0x4 != 0}
+	var currentConfig, currentHash string
+	if message.EffectiveConfig != nil && message.EffectiveConfig.ConfigMap != nil {
+		files := message.EffectiveConfig.ConfigMap.ConfigMap
+		file := files["collector.yaml"]
+		if file == nil {
+			file = files[""]
+		}
+		if file != nil && len(file.Body) > 0 {
+			currentConfig = string(file.Body)
+			hash := sha256.Sum256(file.Body)
+			currentHash = hex.EncodeToString(hash[:])
+		}
+	}
+	if err := m.registerAgent(uid, e.Name, "unknown", labels, capabilities, currentConfig, currentHash, e.OrgID, true); err != nil {
+		_ = conn.Disconnect()
+		return nil
+	}
+	m.connections.put(uid, &agentConnection{conn: conn, instanceUID: uid, originalUID: message.InstanceUid,
+		orgID: e.OrgID, orgName: fmt.Sprintf("Organization %d", e.OrgID), agentType: "agent"})
+	if route, ok := m.connections.get(uid); !ok || route.conn != conn {
+		_ = conn.Disconnect()
+		return nil
+	}
+	m.updateAgentStatus(uid, "online")
+	status := e.RemoteConfigStatus
+	if message.RemoteConfigStatus != nil {
+		status = canonicalRemoteConfigStatus(message.RemoteConfigStatus.Status)
+		acknowledged := false
+		ackHash := hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash)
+		if message.RemoteConfigStatus.Status == protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLIED && message.RemoteConfigStatus.ErrorMessage == "" {
+			if m.connections.consumePendingOffer(conn, uid, ackHash) {
+				acknowledged = markPendingConfigAcknowledged(e.OrgID, uid, ackHash)
+			}
+		}
+		if message.RemoteConfigStatus.Status == protobufs.RemoteConfigStatuses_RemoteConfigStatuses_APPLIED && !acknowledged {
+			status = e.RemoteConfigStatus
+		} else {
+			db := mustDB()
+			_, err := db.ExecContext(ctx, `UPDATE agents SET effective_config_hash=CASE WHEN ? THEN ? ELSE effective_config_hash END, remote_config_status=?, remote_config_error=?, remote_config_status_at=NOW() WHERE org_id=? AND agent_uid=?`, acknowledged, ackHash, status, message.RemoteConfigStatus.ErrorMessage, e.OrgID, uid)
+			db.Close()
+			if err != nil {
+				_ = conn.Disconnect()
+				return nil
+			}
+		}
+	}
+	if message.Health != nil {
+		db := mustDB()
+		body, _ := json.Marshal(map[string]any{"healthy": message.Health.Healthy, "last_error": message.Health.LastError})
+		_, err := db.ExecContext(ctx, `INSERT INTO agent_telemetry (org_id, agent_uid, telemetry_type, telemetry_data, reported_at) VALUES (?, ?, 'health', ?, NOW())`, e.OrgID, uid, string(body))
+		db.Close()
+		if err != nil {
+			_ = conn.Disconnect()
+			return nil
+		}
+	}
+	if currentHash == "" {
+		currentHash = e.EffectiveConfigHash
+	}
+	now := time.Now().UTC()
+	if err := m.managedAuth.store.UpdateStatus(ctx, e.FleetID, id.PodUID, currentHash, status, now); err != nil {
+		_ = conn.Disconnect()
+		return nil
+	}
+	m.managedMu.Lock()
+	if live, ok := m.managedConnections[normalizeAgentUID(uid)]; ok && live.conn == conn {
+		live.lastSeen = now
+		live.securityProfileHash = id.SecurityProfileHash
+		m.managedConnections[normalizeAgentUID(uid)] = live
+	}
+	m.managedMu.Unlock()
+	response := &protobufs.ServerToAgent{InstanceUid: append([]byte(nil), message.InstanceUid...), Capabilities: opampServerCapabilities}
+	db := mustDB()
+	defer db.Close()
+	var configYAML string
+	err := db.QueryRowContext(ctx, `SELECT config_yaml FROM pending_config_queue WHERE org_id=? AND agent_uid=? AND sent_at IS NULL ORDER BY queued_at ASC,id ASC LIMIT 1`, e.OrgID, uid).Scan(&configYAML)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			_ = conn.Disconnect()
+			return nil
+		}
+		return response
+	}
+	if configYAML == "" {
+		return response
+	}
+	hash := sha256.Sum256([]byte(configYAML))
+	hashHex := hex.EncodeToString(hash[:])
+	if !m.connections.claimPendingOffer(conn, uid, hashHex, now, 30*time.Second) {
+		return response
+	}
+	response.RemoteConfig = &protobufs.AgentRemoteConfig{Config: &protobufs.AgentConfigMap{ConfigMap: map[string]*protobufs.AgentConfigFile{
+		"collector.yaml": {Body: []byte(configYAML), ContentType: "text/yaml"},
+	}}, ConfigHash: bytes.Clone(hash[:])}
+	return response
+}
+
+func (m *OpampManager) pushManagedConfig(ctx context.Context, enrollment ManagedEnrollment, configYAML, performedBy string) error {
+	uid := enrollment.AgentUID
+	hash := sha256.Sum256([]byte(configYAML))
+	hashHex := hex.EncodeToString(hash[:])
+	db := mustDB()
+	defer db.Close()
+	var configID sql.NullInt64
+	err := db.QueryRowContext(ctx, `SELECT id FROM agent_configs WHERE org_id=? AND agent_uid=? AND approval_status='approved' AND checksum=? ORDER BY version DESC LIMIT 1`, enrollment.OrgID, uid, hashHex).Scan(&configID)
+	if err != nil {
+		return fmt.Errorf("managed configuration must be approved: %w", err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO pending_config_queue (org_id, agent_uid, config_id, config_yaml, config_hash, created_by, attempts) VALUES (?, ?, ?, ?, ?, ?, 0) ON DUPLICATE KEY UPDATE config_id=VALUES(config_id), config_yaml=VALUES(config_yaml), config_hash=VALUES(config_hash), queued_at=NOW(), sent_at=NULL, attempts=0, last_error=NULL, created_by=VALUES(created_by)`, enrollment.OrgID, uid, configID.Int64, configYAML, hashHex, performedBy)
+	if err != nil {
+		return err
+	}
+	if !m.isCurrentManagedConnectionForFleet(uid, enrollment.FleetID) {
+		return nil
+	}
+	route, ok := m.connections.get(uid)
+	if !ok || route.orgID != enrollment.OrgID || len(route.originalUID) == 0 || !m.isCurrentManagedConnection(route.conn, uid) {
+		return nil
+	}
+	if !m.connections.claimPendingOffer(route.conn, uid, hashHex, time.Now(), 30*time.Second) {
+		return nil
+	}
+	response := &protobufs.ServerToAgent{InstanceUid: route.originalUID, Capabilities: opampServerCapabilities,
+		RemoteConfig: &protobufs.AgentRemoteConfig{Config: &protobufs.AgentConfigMap{ConfigMap: map[string]*protobufs.AgentConfigFile{
+			"collector.yaml": {Body: []byte(configYAML), ContentType: "text/yaml"},
+		}}, ConfigHash: hash[:]}}
+	if err := m.connections.send(ctx, route.conn, response); err != nil {
+		m.connections.clearPendingOffer(route.conn, uid, hashHex)
+		return fmt.Errorf("send managed configuration: %w", err)
+	}
+	return nil
+}
+
+func (m *OpampManager) isCurrentManagedConnectionForFleet(uid, fleetID string) bool {
+	m.managedMu.RLock()
+	defer m.managedMu.RUnlock()
+	live, ok := m.managedConnections[normalizeAgentUID(uid)]
+	return ok && live.conn != nil && live.fleetID == fleetID
 }
 
 func pruneAgentTelemetry(db *sql.DB) {
@@ -67,6 +335,34 @@ func pruneAgentTelemetry(db *sql.DB) {
 			log.Printf("WARN: failed to prune agent telemetry older than %v: %v", agentTelemetryRetention, err)
 		}
 	}
+}
+
+func markPendingConfigAcknowledged(orgID int64, agentUID, configHash string) bool {
+	if orgID <= 0 || agentUID == "" || configHash == "" {
+		return false
+	}
+	db := mustDB()
+	defer db.Close()
+	result, err := db.Exec(`UPDATE pending_config_queue SET sent_at=COALESCE(sent_at,NOW()) WHERE org_id=? AND agent_uid=? AND sent_at IS NULL AND config_hash=?`, orgID, agentUID, configHash)
+	if err != nil {
+		log.Printf("WARN: failed to mark pending config acknowledgement for %s: %v", agentUID, err)
+		return false
+	}
+	rows, err := result.RowsAffected()
+	return err == nil && rows == 1
+}
+
+func ensureUniqueAgentUID(agentUID string) error {
+	db := mustDB()
+	defer db.Close()
+	var matches int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agents WHERE agent_uid=?`, agentUID).Scan(&matches); err != nil {
+		return fmt.Errorf("failed to check agent UID uniqueness: %w", err)
+	}
+	if matches != 1 {
+		return fmt.Errorf("agent UID is missing or ambiguous across organizations")
+	}
+	return nil
 }
 
 func logAgentToServerDebug(instanceUID string, message *protobufs.AgentToServer) {
@@ -801,13 +1097,14 @@ func (m *OpampManager) updateDiscoveredCollectorsHealth(bridgeInstanceUID string
 		if bridgeConn != nil {
 			bridgeConnection = bridgeConn.conn
 		}
-		m.conns[stableUID] = &agentConnection{
+		m.connections.put(stableUID, &agentConnection{
 			conn:        bridgeConnection,  // Bridge's WebSocket connection
 			instanceUID: stableUID,         // Stable UID for this collector
 			originalUID: bridgeOriginalUID, // Bridge's original InstanceUID bytes (per OpAMP spec)
 			orgID:       bridgeOrgID,
 			orgName:     bridgeOrgName,
-		}
+			bridgeUID:   bridgeNormalizedUID,
+		})
 
 		log.Printf("DEBUG: UPSERTed collector %s/%s (uid: %s, version: %s) from bridge EffectiveConfig", ns, name, stableUID[:8], collectorVersion)
 	}
@@ -1458,93 +1755,99 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 		Settings: server.Settings{
 			Callbacks: types.Callbacks{
 				OnConnecting: func(request *http.Request) types.ConnectionResponse {
+					authToken := bearerToken(request)
+					var managedPrincipal *managedConnectionPrincipal
+					if authToken != "" {
+						if request.TLS == nil && !m.allowTrustedTLS {
+							return types.ConnectionResponse{Accept: false, HTTPStatusCode: http.StatusUnauthorized}
+						}
+						if m.managedAuth == nil {
+							return types.ConnectionResponse{Accept: false, HTTPStatusCode: http.StatusServiceUnavailable}
+						}
+						identity, enrollment, authErr := validateManagedToken(request.Context(), m.managedAuth.reviewer, m.managedAuth.inspector, m.managedAuth.store, authToken, m.managedAuth.audience)
+						if authErr != nil {
+							log.Printf("OPAMP managed authentication rejected")
+							return types.ConnectionResponse{Accept: false, HTTPStatusCode: http.StatusUnauthorized}
+						}
+						managedPrincipal = &managedConnectionPrincipal{token: authToken, identity: identity, enrollment: enrollment}
+					} else if !m.allowUnsafeLegacy {
+						return types.ConnectionResponse{Accept: false, HTTPStatusCode: http.StatusUnauthorized}
+					}
 					rawScopeName := strings.TrimSpace(request.Header.Get("X-Scope-OrgName"))
 					rawScoperTenant := strings.TrimSpace(request.Header.Get("X-Scoper-Tenant"))
 					tenantOverride := rawScopeName
 					if tenantOverride == "" {
 						tenantOverride = rawScoperTenant
 					}
-					orgOverrideID, orgOverrideName := resolveOrgFromBridgeHeaders(request, tenantOverride)
+					var orgOverrideID int64
+					var orgOverrideName string
+					if managedPrincipal != nil {
+						orgOverrideID = managedPrincipal.enrollment.OrgID
+						orgOverrideName = fmt.Sprintf("Organization %d", orgOverrideID)
+						tenantOverride = ""
+					} else {
+						orgOverrideID, orgOverrideName = resolveOrgFromBridgeHeaders(request, tenantOverride)
+					}
 
 					// Extract explicit agent type from HTTP header (most reliable method)
 					// Supported values: "bridge", "agent", "supervisor", or empty (auto-detect)
 					agentTypeHeader := strings.TrimSpace(strings.ToLower(request.Header.Get("X-OpAMP-Agent-Type")))
+					if managedPrincipal != nil {
+						// Managed identity is sourced exclusively from TokenReview + the
+						// owning Deployment + durable enrollment, never client headers.
+						tenantOverride = ""
+						orgOverrideID = managedPrincipal.enrollment.OrgID
+						orgOverrideName = fmt.Sprintf("Organization %d", orgOverrideID)
+						agentTypeHeader = "agent"
+					}
 					if agentTypeHeader != "" && agentTypeHeader != "bridge" && agentTypeHeader != "agent" && agentTypeHeader != "supervisor" {
 						log.Printf("WARNING: Invalid X-OpAMP-Agent-Type header value: %q (expected: bridge, agent, or supervisor), ignoring", agentTypeHeader)
 						agentTypeHeader = ""
 					}
 
-					// DEBUG: Log all HTTP headers
-					log.Printf("===== OPAMP CONNECTION REQUEST =====")
-					log.Printf("RemoteAddr: %s", request.RemoteAddr)
-					log.Printf("Method: %s", request.Method)
-					log.Printf("URL: %s", request.URL.String())
-					log.Printf("Headers:")
-					for name, values := range request.Header {
-						for _, value := range values {
-							log.Printf("  %s: %s", name, value)
-						}
-					}
-					log.Printf("X-Scope-OrgName: %q", rawScopeName)
-					log.Printf("X-Scoper-Tenant: %q", rawScoperTenant)
-					log.Printf("X-OpAMP-Agent-Type: %q", agentTypeHeader)
-					log.Printf("Resolved OrgID: %d, OrgName: %q", orgOverrideID, orgOverrideName)
-					log.Printf("=====================================")
+					// Header values can contain tenant-specific or credential material;
+					// never dump the request headers (or raw tenant labels) to logs.
+					log.Printf("OPAMP connection request from %s (managed: %t)", request.RemoteAddr, managedPrincipal != nil)
 
-					// Store remote address for lookup (use as primary key since connection object comparison is unreliable)
+					// Keep the address only for connection lifecycle logging; routing is
+					// bound to the connection object and exact OpAMP InstanceUid.
 					remoteAddr := request.RemoteAddr
-					// Also extract IP:port for more reliable matching (in case RemoteAddr format varies)
-					remoteAddrParts := strings.Split(remoteAddr, ":")
-					remoteIP := remoteAddr
-					if len(remoteAddrParts) > 0 {
-						remoteIP = remoteAddrParts[0]
-					}
 
 					return types.ConnectionResponse{
 						Accept: true,
 						ConnectionCallbacks: types.ConnectionCallbacks{
 							OnConnected: func(ctx context.Context, conn types.Connection) {
 								log.Printf("OPAMP agent connected from %s", remoteAddr)
-								// Store agent type from header using remote address as key (more reliable than connection object)
+								if managedPrincipal != nil {
+									if !m.trackManagedConnection(conn, managedPrincipal) {
+										_ = conn.Disconnect()
+										return
+									}
+								}
+								// Bind classification to this exact connection; network addresses are not identities.
 								if agentTypeHeader != "" {
-									// Store in both maps for redundancy
-									m.connAgentTypes[conn] = agentTypeHeader
-									m.connAgentTypesByAddr[remoteAddr] = agentTypeHeader
-									m.connAgentTypesByAddr[remoteIP] = agentTypeHeader // Also store by IP for fallback
-									log.Printf("DEBUG: Stored agent type '%s' from HTTP header for connection from %s (map size: %d, addr map size: %d)", agentTypeHeader, remoteAddr, len(m.connAgentTypes), len(m.connAgentTypesByAddr))
+									m.connections.setAgentType(conn, agentTypeHeader)
+									log.Printf("DEBUG: Stored agent type '%s' for connection from %s", agentTypeHeader, remoteAddr)
 								} else {
-									log.Printf("DEBUG: No agent type header provided in OnConnected (map size: %d)", len(m.connAgentTypes))
+									log.Printf("DEBUG: No agent type header provided in OnConnected")
 								}
 							},
 							OnMessage: func(ctx context.Context, conn types.Connection, message *protobufs.AgentToServer) *protobufs.ServerToAgent {
+								if message == nil || len(message.InstanceUid) == 0 {
+									_ = conn.Disconnect()
+									return nil
+								}
+								if managedPrincipal != nil {
+									identity, enrollment, authErr := validateManagedToken(ctx, m.managedAuth.reviewer, m.managedAuth.inspector, m.managedAuth.store, managedPrincipal.token, m.managedAuth.audience)
+									if authErr != nil || identity.PodUID != managedPrincipal.identity.PodUID || identity.DeploymentUID != managedPrincipal.identity.DeploymentUID || enrollment.AgentUID != managedPrincipal.enrollment.AgentUID || enrollment.Revoked || !m.isCurrentManagedConnection(conn, enrollment.AgentUID) {
+										_ = conn.Disconnect()
+										return nil
+									}
+									managedPrincipal.identity, managedPrincipal.enrollment = identity, enrollment
+									return m.handleManagedMessage(ctx, conn, message, managedPrincipal)
+								}
 								instanceUIDHex := hex.EncodeToString(message.InstanceUid)
 								logAgentToServerDebug(instanceUIDHex, message)
-
-								// Get instanceUID early for potential lookup
-								instanceUIDNormalized := normalizeAgentUID(instanceUIDHex)
-
-								// Try to get remote address from connection or context for lookup
-								// Note: Connection object comparison may fail, so we use remote address as primary lookup key
-								var remoteAddr string
-								var remoteIP string
-								// Try to get from context first
-								if req := ctx.Value("http_request"); req != nil {
-									if httpReq, ok := req.(*http.Request); ok {
-										remoteAddr = httpReq.RemoteAddr
-										remoteAddrParts := strings.Split(remoteAddr, ":")
-										if len(remoteAddrParts) > 0 {
-											remoteIP = remoteAddrParts[0]
-										}
-										log.Printf("DEBUG: Got remote address '%s' from context", remoteAddr)
-									}
-								}
-								// If not in context, check if we already have this instanceUID stored (from previous message)
-								if remoteAddr == "" {
-									// Check if we have a connection for this instanceUID that might have the agent type
-									if existingConn, exists := m.conns[instanceUIDNormalized]; exists && existingConn.agentType != "" {
-										log.Printf("DEBUG: Found existing connection for instanceUID %s with agent type '%s'", instanceUIDNormalized[:8], existingConn.agentType)
-									}
-								}
 
 								// Convert instance UID bytes to string for reliable MySQL storage
 								// This ensures we can store it even if it contains binary data
@@ -1565,6 +1868,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								updateBridgeHeartbeat(bridgeInstanceUID)
 								// Start with bridge UID - will be replaced with stable UID if bridge pattern detected
 								instanceUID := bridgeNormalizedUID
+								if managedPrincipal != nil {
+									instanceUID = managedPrincipal.enrollment.AgentUID
+									bridgeNormalizedUID = ""
+								}
 
 								// Extract labels from NonIdentifyingAttributes FIRST
 								// This is where agents typically send service.name, service.version, etc.
@@ -1624,56 +1931,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 								}
 
-								// Get agent type from HTTP header (ONLY supported method currently)
-								// Strategy: Try multiple lookup methods in order of reliability
-								var agentTypeFromHeader string
-								var foundInMap bool
+								// Classification is bound to the exact active connection, never its IP address.
+								agentTypeFromHeader := m.connections.agentType(conn)
 
-								// METHOD 1: Check if we already have agent type stored for this instanceUID (from previous message)
-								if existingConn, exists := m.conns[instanceUIDNormalized]; exists && existingConn.agentType != "" {
-									agentTypeFromHeader = existingConn.agentType
-									foundInMap = true
-									log.Printf("DEBUG: Found agent type '%s' from existing connection for instanceUID %s", agentTypeFromHeader, instanceUIDNormalized[:8])
-								}
-
-								// METHOD 2: Try remote address lookup (if available)
-								if !foundInMap && remoteAddr != "" {
-									// Try full remote address first
-									if addrType, ok := m.connAgentTypesByAddr[remoteAddr]; ok {
-										agentTypeFromHeader = addrType
-										foundInMap = true
-										log.Printf("DEBUG: Found agent type '%s' by remote address '%s'", agentTypeFromHeader, remoteAddr)
-									} else if remoteIP != "" {
-										// Fallback: Try IP only (in case port changed)
-										if addrType, ok := m.connAgentTypesByAddr[remoteIP]; ok {
-											agentTypeFromHeader = addrType
-											foundInMap = true
-											log.Printf("DEBUG: Found agent type '%s' by remote IP '%s'", agentTypeFromHeader, remoteIP)
-										}
-									}
-								}
-
-								// METHOD 3: Try connection object map (may fail if connection objects differ)
-								if !foundInMap {
-									if connType, ok := m.connAgentTypes[conn]; ok && connType != "" {
-										agentTypeFromHeader = connType
-										foundInMap = true
-										log.Printf("DEBUG: Found agent type '%s' from connection object map", agentTypeFromHeader)
-									} else {
-										log.Printf("DEBUG: Connection not found in maps (conn map size: %d, addr map size: %d, remoteAddr: %q, instanceUID: %s)", len(m.connAgentTypes), len(m.connAgentTypesByAddr), remoteAddr, instanceUIDNormalized[:8])
-										// Last resort: Try to find it by iterating all connections
-										for storedConn, storedType := range m.connAgentTypes {
-											if storedConn == conn {
-												agentTypeFromHeader = storedType
-												foundInMap = true
-												log.Printf("DEBUG: Found agent type '%s' by connection comparison (iterated)", agentTypeFromHeader)
-												break
-											}
-										}
-									}
-								}
-
-								if foundInMap && agentTypeFromHeader != "" {
+								if agentTypeFromHeader != "" {
 									// Validate header value (already lowercased in OnConnecting)
 									if agentTypeFromHeader == "bridge" || agentTypeFromHeader == "agent" || agentTypeFromHeader == "supervisor" {
 										explicitAgentType = agentTypeFromHeader
@@ -1682,14 +1943,6 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 										// Invalid header value - mark as unclassified
 										explicitAgentType = "unclassified"
 										log.Printf("WARNING: Invalid X-OpAMP-Agent-Type header value '%s' (expected: bridge, agent, or supervisor). Agent will be classified as 'unclassified'.", agentTypeFromHeader)
-									}
-									// Clean up temporary map entries
-									delete(m.connAgentTypes, conn)
-									if remoteAddr != "" {
-										delete(m.connAgentTypesByAddr, remoteAddr)
-									}
-									if remoteIP != "" {
-										delete(m.connAgentTypesByAddr, remoteIP)
 									}
 								} else {
 									// No header provided - mark as unclassified
@@ -1771,21 +2024,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									// Map stable UID to bridge connection for config pushes
 									// When pushing config to a collector CRD (stable UID), we find the bridge connection
 									// and use the bridge's original InstanceUID bytes for the OpAMP response
-									if existingConn, exists := m.conns[instanceUID]; exists {
-										// Update existing connection mapping
-										existingConn.conn = conn
-										existingConn.originalUID = message.InstanceUid // Update with latest bridge InstanceUID
-										log.Printf("BRIDGE PATTERN: Updated connection mapping - stable_uid=%s -> bridge_uid=%s", instanceUID, bridgeNormalizedUID)
-									} else {
-										// Create new connection entry for this collector CRD
-										// This allows us to push configs to specific collectors
-										m.conns[instanceUID] = &agentConnection{
-											conn:        conn,                // Same WebSocket connection as bridge
-											instanceUID: instanceUID,         // Stable UID for this collector
-											originalUID: message.InstanceUid, // Bridge's InstanceUID for OpAMP protocol
-										}
-										log.Printf("BRIDGE PATTERN: Created connection mapping - stable_uid=%s -> bridge_uid=%s", instanceUID, bridgeNormalizedUID)
-									}
+									m.connections.put(instanceUID, &agentConnection{conn: conn, instanceUID: instanceUID,
+										originalUID: message.InstanceUid, orgID: orgOverrideID, orgName: orgOverrideName,
+										agentType: explicitAgentType, bridgeUID: bridgeNormalizedUID})
+									log.Printf("BRIDGE PATTERN: Bound stable UID %s to bridge UID %s", instanceUID, bridgeNormalizedUID)
 
 									// Set collector name from CRD name
 									if name == "" || name == bridgeNormalizedUID {
@@ -2142,6 +2384,11 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								// Extract and store agent telemetry according to OpAMP spec
 								// Reference: https://opentelemetry.io/docs/specs/opamp/
 								m.storeAgentTelemetry(instanceUID, message)
+								if message.RemoteConfigStatus != nil && len(message.RemoteConfigStatus.LastRemoteConfigHash) > 0 {
+									acknowledgedHash := hex.EncodeToString(message.RemoteConfigStatus.LastRemoteConfigHash)
+									markPendingConfigAcknowledged(orgOverrideID, instanceUID, acknowledgedHash)
+									m.connections.clearPendingOffer(conn, instanceUID, acknowledgedHash)
+								}
 
 								// Agent classification based on HTTP header X-OpAMP-Agent-Type
 								// Currently ONLY HTTP header-based classification is supported
@@ -2198,26 +2445,13 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								}
 
 								// Store/update connection with agentType
-								if existingConn, exists := m.conns[instanceUID]; exists {
-									existingConn.conn = conn
-									existingConn.originalUID = message.InstanceUid
-									existingConn.agentType = explicitAgentType
-									if existingConn.orgID == 0 && orgOverrideID > 0 {
-										existingConn.orgID = orgOverrideID
-									}
-									if strings.TrimSpace(existingConn.orgName) == "" && strings.TrimSpace(orgOverrideName) != "" {
-										existingConn.orgName = orgOverrideName
-									}
-								} else {
-									m.conns[instanceUID] = &agentConnection{
-										conn:        conn,
-										instanceUID: instanceUID,
-										originalUID: message.InstanceUid,
-										orgID:       orgOverrideID,
-										orgName:     orgOverrideName,
-										agentType:   explicitAgentType,
-									}
+								bridgeUID := ""
+								if explicitAgentType == "bridge" && k8sNamespace != "" && k8sCRDName != "" {
+									bridgeUID = bridgeNormalizedUID
 								}
+								m.connections.put(instanceUID, &agentConnection{conn: conn, instanceUID: instanceUID,
+									originalUID: message.InstanceUid, orgID: orgOverrideID, orgName: orgOverrideName,
+									agentType: explicitAgentType, bridgeUID: bridgeUID})
 
 								descriptionProvided := message.AgentDescription != nil
 								if isOpAMPBridge {
@@ -2229,7 +2463,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 
 									// Get bridge connection for mapping discovered collectors
-									bridgeConn := m.conns[instanceUID]
+									bridgeConn, _ := m.connections.get(instanceUID)
 									// Update discovered collectors health (this will UPSERT collectors from EffectiveConfig)
 									m.updateDiscoveredCollectorsHealth(instanceUID, message, bridgeConn)
 								} else {
@@ -2262,7 +2496,7 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									// This also updates last_seen_at, ensuring agent stays online
 									// Get orgID from connection if available, otherwise use orgOverrideID from headers
 									agentOrgID := orgOverrideID
-									if conn, exists := m.conns[instanceUID]; exists && conn.orgID > 0 {
+									if conn, exists := m.connections.get(instanceUID); exists && conn.orgID > 0 {
 										agentOrgID = conn.orgID
 										log.Printf("DEBUG: Using orgID=%d from connection for agent %s", agentOrgID, instanceUID[:8])
 									} else if orgOverrideID > 0 {
@@ -2285,9 +2519,6 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 									}
 								}
 
-								// Check for pending configs and send them automatically when agent connects/reconnects
-								m.sendPendingConfigs(instanceUID, conn)
-
 								log.Printf("Received OPAMP message from agent: %s (name: %s, version: %s)", instanceUID, name, version)
 								if len(capabilities) > 0 {
 									capJSON, _ := json.Marshal(capabilities)
@@ -2298,42 +2529,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								log.Printf("DEBUG: Agent %s message fields - Health: %v, RemoteConfigStatus: %v, EffectiveConfig: %v",
 									instanceUID, message.Health != nil, message.RemoteConfigStatus != nil, message.EffectiveConfig != nil)
 
-								// Return ServerToAgent with server capabilities enabled
-								// According to OpAMP spec (https://opentelemetry.io/docs/specs/opamp/):
-								// Server must advertise its capabilities in the ServerToAgent message
-								// Capabilities bits (from spec Section 5.3):
-								// Bit 0 (0x1): AcceptsRemoteConfig
-								// Bit 1 (0x2): OffersRemoteConfig
-								// Bit 2 (0x4): AcceptsRestartCommand
-								// Bit 3 (0x8): OffersRestartCommand
-								// Bit 4 (0x10): AcceptsOpampConnectionSettings
-								// Bit 5 (0x20): OffersOpampConnectionSettings
-								// Bit 6 (0x40): AcceptsOtherConnectionSettings
-								// Bit 7 (0x80): OffersOtherConnectionSettings
-								// Bit 8 (0x100): AcceptsPackages
-								// Bit 9 (0x200): OffersPackages
-								// Bit 10 (0x400): AcceptsOwnMetrics
-								// Bit 11 (0x800): OffersOwnMetrics
-								// Bit 12 (0x1000): AcceptsOwnTraces
-								// Bit 13 (0x2000): OffersOwnTraces
-								// Bit 14 (0x4000): AcceptsOwnLogs
-								// Bit 15 (0x8000): OffersOwnLogs
-								//
-								// We support: Remote config (offer & accept), Restart (offer & accept),
-								// OpAMP connection settings (offer & accept), and OwnMetrics/OwnTraces/OwnLogs
-								serverCapabilities := uint64(0x0)
-								serverCapabilities |= 0x1    // AcceptsRemoteConfig
-								serverCapabilities |= 0x2    // OffersRemoteConfig
-								serverCapabilities |= 0x4    // AcceptsRestartCommand
-								serverCapabilities |= 0x8    // OffersRestartCommand
-								serverCapabilities |= 0x10   // AcceptsOpampConnectionSettings
-								serverCapabilities |= 0x20   // OffersOpampConnectionSettings
-								serverCapabilities |= 0x400  // AcceptsOwnMetrics (tell agent we want to receive its metrics)
-								serverCapabilities |= 0x800  // OffersOwnMetrics (we can send metrics to agent)
-								serverCapabilities |= 0x1000 // AcceptsOwnTraces
-								serverCapabilities |= 0x2000 // OffersOwnTraces
-								serverCapabilities |= 0x4000 // AcceptsOwnLogs
-								serverCapabilities |= 0x8000 // OffersOwnLogs
+								// Advertise only server capabilities represented by the protocol
+								// enum and implemented here. Restart is a command, not a server
+								// capability bit in the current OpAMP protobuf schema.
+								serverCapabilities := opampServerCapabilities
 
 								// Check for pending config to send immediately (like Python server does)
 								// This ensures configs are delivered as soon as agent connects
@@ -2345,10 +2544,16 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								err := db.QueryRow(`
 									SELECT config_yaml, config_hash 
 									FROM pending_config_queue 
-									WHERE agent_uid=? AND sent_at IS NULL
-									LIMIT 1
-								`, instanceUID).Scan(&pendingConfig, &pendingHash)
+										WHERE org_id=? AND agent_uid=? AND sent_at IS NULL
+										ORDER BY queued_at ASC, id ASC LIMIT 1
+									`, orgOverrideID, instanceUID).Scan(&pendingConfig, &pendingHash)
 								db.Close()
+								if err == nil && pendingConfig.Valid && pendingConfig.String != "" {
+									offerHash := sha256.Sum256([]byte(pendingConfig.String))
+									if !m.connections.claimPendingOffer(conn, instanceUID, hex.EncodeToString(offerHash[:]), time.Now(), 30*time.Second) {
+										err = sql.ErrNoRows
+									}
+								}
 
 								if err == nil && pendingConfig.Valid && pendingConfig.String != "" {
 									configYAML := pendingConfig.String
@@ -2442,14 +2647,11 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 								return response
 							},
 							OnConnectionClose: func(conn types.Connection) {
-								// Find connection by iterating
-								for uid, ac := range m.conns {
-									if ac.conn == conn {
-										log.Printf("OPAMP agent disconnected: %s", uid)
-										delete(m.conns, uid)
-										m.updateAgentStatus(uid, "offline")
-										break
-									}
+								m.clearManagedConnection(conn)
+								// A bridge owns multiple collector aliases; remove every alias atomically.
+								for _, uid := range m.connections.deleteConnection(conn) {
+									log.Printf("OPAMP agent disconnected: %s", uid)
+									m.updateAgentStatus(uid, "offline")
 								}
 							},
 						},
@@ -2476,7 +2678,10 @@ func (m *OpampManager) Start(endpoint string, certFile, keyFile string) error {
 	return nil
 }
 
-func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedBy string) error {
+func (m *OpampManager) PushConfig(orgID int64, agentUID string, configYAML string, performedBy string) error {
+	if orgID <= 0 {
+		return fmt.Errorf("target organization is required")
+	}
 	// Validate config
 	if configYAML == "" || strings.TrimSpace(configYAML) == "" {
 		return fmt.Errorf("config YAML cannot be empty")
@@ -2490,8 +2695,37 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	var currentCRDYAML sql.NullString
 	db := mustDB()
 	var labelsJSON sql.NullString
-	db.QueryRow(`SELECT labels_json, current_config_yaml FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelsJSON, &currentCRDYAML)
+	var matchingAgents int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agents WHERE agent_uid=?`, agentUID).Scan(&matchingAgents); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to resolve target agent: %w", err)
+	}
+	if matchingAgents != 1 {
+		db.Close()
+		return fmt.Errorf("target agent UID is missing or ambiguous across organizations")
+	}
+	var agentOrgID int64
+	if err := db.QueryRow(`SELECT org_id FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&agentOrgID); err != nil || agentOrgID != orgID {
+		db.Close()
+		return fmt.Errorf("target agent does not belong to organization")
+	}
+	if err := db.QueryRow(`SELECT labels_json, current_config_yaml FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelsJSON, &currentCRDYAML); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to load target agent: %w", err)
+	}
 	db.Close()
+	if m.managedAuth != nil {
+		enrollment, err := m.managedAuth.store.GetByAgentUID(context.Background(), agentUID)
+		if err == nil {
+			if enrollment.Revoked || enrollment.OrgID != orgID {
+				return fmt.Errorf("managed agent enrollment is invalid")
+			}
+			return m.pushManagedConfig(context.Background(), enrollment, configYAML, performedBy)
+		}
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("managed enrollment lookup failed: %w", err)
+		}
+	}
 
 	if labelsJSON.Valid && labelsJSON.String != "" {
 		var labels map[string]string
@@ -2697,108 +2931,15 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	// Check if agent is connected (use normalized UID)
 	log.Printf("DEBUG: ===== CONNECTION LOOKUP =====")
 	log.Printf("DEBUG: Looking up connection for agent UID: %s", agentUID)
-	log.Printf("DEBUG: Total active connections: %d", len(m.conns))
-	ac, exists := m.conns[agentUID]
-	if exists {
-		log.Printf("DEBUG: ✓ Direct connection found for agent %s", agentUID)
-	} else {
-		log.Printf("DEBUG: ✗ Direct connection NOT found for agent %s - trying bridge lookup", agentUID)
-		// Try to find the connection by looking up agent labels (for discovered collectors)
-		// Discovered collectors have bridge.instance_uid label pointing to the bridge connection
-		db := mustDB()
-		var labelsJSON sql.NullString
-		var agentName sql.NullString
-		err := db.QueryRow(`SELECT labels_json, name FROM agents WHERE agent_uid = ? LIMIT 1`, agentUID).Scan(&labelsJSON, &agentName)
-		db.Close()
-
-		if err != nil {
-			log.Printf("DEBUG: ERROR: Failed to query agent %s from database: %v", agentUID, err)
-		} else if !labelsJSON.Valid {
-			log.Printf("DEBUG: WARNING: Agent %s found in database but labels_json is NULL", agentUID)
-		} else {
-			log.Printf("DEBUG: Agent %s labels_json length: %d bytes", agentUID, len(labelsJSON.String))
-			var labels map[string]string
-			if err := json.Unmarshal([]byte(labelsJSON.String), &labels); err != nil {
-				log.Printf("DEBUG: ERROR: Failed to parse labels_json for agent %s: %v", agentUID, err)
-			} else {
-				log.Printf("DEBUG: Parsed labels: %d entries", len(labels))
-				// Check if this is a discovered collector (has bridge.instance_uid)
-				if bridgeUID, ok := labels["bridge.instance_uid"]; ok && bridgeUID != "" {
-					log.Printf("DEBUG: Found bridge.instance_uid=%s for collector %s", bridgeUID, agentUID)
-					// Try to find the bridge connection
-					bridgeConnUID := normalizeAgentUID(bridgeUID)
-					log.Printf("DEBUG: Normalized bridge UID: %s", bridgeConnUID)
-					if bridgeConn, bridgeExists := m.conns[bridgeConnUID]; bridgeExists {
-						ac = bridgeConn
-						// Don't update agentUID - we want to keep using the collector's stable UID
-						exists = true
-						log.Printf("DEBUG: ✓ Found bridge connection for discovered collector %s via bridge.instance_uid=%s (bridge UID: %s)", agentUID, bridgeUID, bridgeConnUID)
-					} else {
-						log.Printf("DEBUG: ✗ Bridge UID %s NOT found in active connections - trying name pattern search", bridgeConnUID)
-						// List all active connection UIDs for debugging
-						log.Printf("DEBUG: Active connection UIDs:")
-						for connUID := range m.conns {
-							log.Printf("DEBUG:   - %s", connUID)
-						}
-						// Bridge UID not found - try to find bridge by name pattern
-						for connUID, conn := range m.conns {
-							var connName sql.NullString
-							dbCheck := mustDB()
-							err := dbCheck.QueryRow(`SELECT name FROM agents WHERE agent_uid = ? LIMIT 1`, connUID).Scan(&connName)
-							dbCheck.Close()
-							if err == nil && connName.Valid {
-								nameLower := strings.ToLower(connName.String)
-								log.Printf("DEBUG: Checking connection %s with name: %s", connUID, connName.String)
-								if strings.Contains(nameLower, "opamp-bridge") || strings.Contains(nameLower, "operator-opamp-bridge") {
-									ac = conn
-									exists = true
-									log.Printf("DEBUG: ✓ Found bridge connection for discovered collector %s by bridge name pattern (bridge UID: %s, name: %s)", agentUID, connUID, connName.String)
-									break
-								}
-							}
-						}
-						if !exists {
-							log.Printf("DEBUG: ✗ No bridge connection found by name pattern either")
-						}
-					}
-				} else {
-					log.Printf("DEBUG: Agent %s does not have bridge.instance_uid label", agentUID)
-					if strings.Contains(strings.ToLower(agentName.String), "opamp-bridge") || strings.Contains(strings.ToLower(agentName.String), "operator-opamp-bridge") {
-						// For OpAMP Bridge itself, try to find by name if UID changed (bridge reconnected)
-						for uid, conn := range m.conns {
-							var connName sql.NullString
-							dbCheck := mustDB()
-							err := dbCheck.QueryRow(`SELECT name FROM agents WHERE agent_uid = ? LIMIT 1`, uid).Scan(&connName)
-							dbCheck.Close()
-							if err == nil && connName.Valid && connName.String == agentName.String {
-								ac = conn
-								exists = true
-								log.Printf("OpAMP Bridge reconnected: Found bridge by name %s, using new UID %s (old UID was %s)", agentName.String, uid, agentUID)
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if !exists {
-			// Log all available connections for debugging
-			availableUIDs := make([]string, 0, len(m.conns))
-			for uid := range m.conns {
-				availableUIDs = append(availableUIDs, uid)
-			}
-			log.Printf("Agent %s not found in connection map. Available connections: %v", agentUID, availableUIDs)
-			if agentName.Valid {
-				log.Printf("  Agent name: %s", agentName.String)
-			}
-			if labelsJSON.Valid {
-				log.Printf("  Agent label snapshot bytes: %d", len(labelsJSON.String))
-			}
-			return fmt.Errorf("agent %s is not connected. Available connections: %v", agentUID, availableUIDs)
-		}
+	log.Printf("DEBUG: Total active connections: %d", m.connections.count())
+	ac, exists := m.connections.get(agentUID)
+	if !exists {
+		return fmt.Errorf("agent %s has no active connection route", agentUID)
 	}
-
+	if ac.orgID != orgID {
+		return fmt.Errorf("active connection route does not belong to target organization")
+	}
+	log.Printf("DEBUG: Active connection route found for agent %s", agentUID)
 	// CRITICAL: Verify connection is valid
 	if ac == nil || ac.conn == nil {
 		log.Printf("ERROR: Agent %s has invalid connection (nil conn)", agentUID)
@@ -3121,57 +3262,19 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	// For direct agents: Use agent's own InstanceUID
 	agentInstanceUID := ac.originalUID
 	if len(agentInstanceUID) == 0 {
-		// Fallback to normalized UID if original not available (should not happen)
-		agentInstanceUID = []byte(agentUID)
-		log.Printf("WARNING: Using normalized UID for agent %s - original InstanceUid not stored", agentUID)
+		return fmt.Errorf("agent %s has no exact OpAMP wire InstanceUid", agentUID)
 	}
 
 	// CRITICAL: For Kubernetes collectors managed via OpAMP Bridge:
 	// The bridge is the OpAMP client, so ServerToAgent.InstanceUid MUST be the bridge's InstanceUID
 	// The ConfigMap key tells the bridge which CRD to update
 	// Get labels from database if not already set
-	if isKubernetes && collectorNamespace != "" && collectorName != "" {
-		// Get labels from database to check for bridge.instance_uid
-		labelCheckDB := mustDB()
-		var labelCheckJSON sql.NullString
-		labelCheckDB.QueryRow(`SELECT labels_json FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelCheckJSON)
-		labelCheckDB.Close()
-
-		var bridgeLabels map[string]string
-		if labelCheckJSON.Valid && labelCheckJSON.String != "" {
-			json.Unmarshal([]byte(labelCheckJSON.String), &bridgeLabels)
+	if ac.bridgeUID != "" {
+		bridgeConn, ok := m.connections.get(ac.bridgeUID)
+		if !ok || bridgeConn.conn == nil || bridgeConn.conn != ac.conn || len(bridgeConn.originalUID) == 0 {
+			return fmt.Errorf("bridge route %s for agent %s is stale or invalid", ac.bridgeUID, agentUID)
 		}
-
-		// Check if this is a discovered collector (has bridge.instance_uid label)
-		if bridgeUID, ok := bridgeLabels["bridge.instance_uid"]; ok && bridgeUID != "" {
-			log.Printf("DEBUG: Found bridge.instance_uid=%s for collector %s/%s", bridgeUID, collectorNamespace, collectorName)
-			// Find the bridge connection to get its InstanceUID
-			bridgeConnUID := normalizeAgentUID(bridgeUID)
-			log.Printf("DEBUG: Looking up bridge connection with normalized UID: %s", bridgeConnUID)
-			if bridgeConn, bridgeExists := m.conns[bridgeConnUID]; bridgeExists {
-				if bridgeConn != nil && bridgeConn.conn != nil && len(bridgeConn.originalUID) > 0 {
-					// CRITICAL: Use bridge's InstanceUID, not collector's
-					agentInstanceUID = bridgeConn.originalUID
-					// Also update ac to use bridge connection (we want to send to bridge, not collector)
-					ac = bridgeConn
-					log.Printf("DEBUG: Switched to bridge connection for discovered collector %s/%s (bridge UID: %s, InstanceUID hex: %s)",
-						collectorNamespace, collectorName, bridgeUID, hex.EncodeToString(agentInstanceUID))
-					log.Printf("DEBUG: CRITICAL: Using bridge's InstanceUID=%s and bridge connection for ServerToAgent message", hex.EncodeToString(agentInstanceUID))
-				} else {
-					log.Printf("WARNING: Bridge connection found but invalid (conn=%v, originalUID length=%d)",
-						bridgeConn != nil && bridgeConn.conn != nil, len(bridgeConn.originalUID))
-				}
-			} else {
-				log.Printf("WARNING: Bridge UID %s (normalized: %s) not found in active connections. Available connections: %d",
-					bridgeUID, bridgeConnUID, len(m.conns))
-				// List available connections for debugging
-				for uid := range m.conns {
-					log.Printf("DEBUG:   Available connection UID: %s", uid)
-				}
-			}
-		} else {
-			log.Printf("DEBUG: Collector %s/%s does not have bridge.instance_uid label - using collector's own connection", collectorNamespace, collectorName)
-		}
+		agentInstanceUID = bridgeConn.originalUID
 	}
 
 	// Debug: Log InstanceUid matching for troubleshooting
@@ -3183,7 +3286,7 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 	msg := &protobufs.ServerToAgent{
 		InstanceUid:  agentInstanceUID, // MUST match agent's InstanceUid from AgentToServer message EXACTLY (per OpAMP spec Section 6.2)
 		RemoteConfig: configMsg,
-		Capabilities: 0x3F, // Re-send server capabilities to ensure agent knows we support remote config
+		Capabilities: opampServerCapabilities,
 	}
 
 	// DEBUG: Log full OpAMP ServerToAgent message structure
@@ -3192,7 +3295,7 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 
 	// Send config to agent via OpAMP connection
 	ctx := context.Background()
-	err := ac.conn.Send(ctx, msg)
+	err := m.connections.send(ctx, ac.conn, msg)
 	if err != nil {
 		log.Printf("ERROR: Failed to send config to agent %s via OpAMP: %v", agentUID, err)
 		return fmt.Errorf("failed to send config via OpAMP connection: %v", err)
@@ -3357,26 +3460,41 @@ func (m *OpampManager) PushConfig(agentUID string, configYAML string, performedB
 
 func (m *OpampManager) GetConnection(agentUID string) (types.Connection, bool) {
 	agentUID = normalizeAgentUID(agentUID)
-	ac, exists := m.conns[agentUID]
+	ac, exists := m.connections.get(agentUID)
 	if !exists {
 		return nil, false
 	}
 	return ac.conn, true
 }
 
-func (m *OpampManager) UpgradeAgent(agentUID, newVersion string) error {
+func (m *OpampManager) UpgradeAgent(orgID int64, agentUID, newVersion string) error {
+	if orgID <= 0 {
+		return fmt.Errorf("target organization is required")
+	}
 	agentUID = normalizeAgentUID(agentUID)
-	ac, exists := m.conns[agentUID]
+	owned, err := lookupAgentTargetInOrganization(orgID, agentUID)
+	if err != nil {
+		return fmt.Errorf("failed to verify target agent organization: %w", err)
+	}
+	if !owned {
+		return fmt.Errorf("target agent does not belong to organization")
+	}
+	if err := ensureUniqueAgentUID(agentUID); err != nil {
+		return err
+	}
+	ac, exists := m.connections.get(agentUID)
 	if !exists {
 		return sql.ErrNoRows // agent not connected
+	}
+	if ac.orgID != orgID {
+		return fmt.Errorf("active connection route does not belong to target organization")
 	}
 
 	// Create upgrade/restart command message according to OpAMP spec
 	// Per spec Section 8.1: InstanceUid must match the agent's InstanceUid
 	agentInstanceUID := ac.originalUID
 	if len(agentInstanceUID) == 0 {
-		agentInstanceUID = []byte(agentUID)
-		log.Printf("WARNING: Using normalized UID for restart command - original InstanceUid not stored")
+		return fmt.Errorf("agent %s has no exact OpAMP wire InstanceUid", agentUID)
 	}
 
 	upgradeMsg := &protobufs.ServerToAgent{
@@ -3387,7 +3505,7 @@ func (m *OpampManager) UpgradeAgent(agentUID, newVersion string) error {
 	}
 
 	// Send restart command (this triggers agent restart/upgrade)
-	err := ac.conn.Send(context.Background(), upgradeMsg)
+	err = m.connections.send(context.Background(), ac.conn, upgradeMsg)
 	if err != nil {
 		log.Printf("Failed to send upgrade command to agent %s: %v", agentUID, err)
 		return err
@@ -3407,6 +3525,11 @@ func (m *OpampManager) Stop() {
 // sendPendingConfigs checks for pending configs in queue and sends them to the agent
 func (m *OpampManager) sendPendingConfigs(agentUID string, conn types.Connection) {
 	agentUID = normalizeAgentUID(agentUID)
+	route, ok := m.connections.get(agentUID)
+	if !ok || route.conn != conn || route.orgID <= 0 || len(route.originalUID) == 0 {
+		log.Printf("ERROR: refusing pending config send without exact org, connection, and wire UID for %s", agentUID)
+		return
+	}
 	db := mustDB()
 	defer db.Close()
 
@@ -3417,9 +3540,9 @@ func (m *OpampManager) sendPendingConfigs(agentUID string, conn types.Connection
 	row := db.QueryRow(`
 		SELECT id, config_yaml, config_hash, attempts 
 		FROM pending_config_queue 
-		WHERE agent_uid=? AND sent_at IS NULL 
-		ORDER BY queued_at DESC LIMIT 1
-	`, agentUID)
+		WHERE org_id=? AND agent_uid=? AND sent_at IS NULL
+		ORDER BY queued_at ASC, id ASC LIMIT 1
+	`, route.orgID, agentUID)
 
 	err := row.Scan(&queueID, &configYAML, &configHash, &attempts)
 	if err != nil {
@@ -3449,7 +3572,7 @@ func (m *OpampManager) sendPendingConfigs(agentUID string, conn types.Connection
 	dbCheck := mustDB()
 	var labelsJSON sql.NullString
 	var agentName sql.NullString
-	err2 := dbCheck.QueryRow(`SELECT labels_json, name FROM agents WHERE agent_uid=? LIMIT 1`, agentUID).Scan(&labelsJSON, &agentName)
+	err2 := dbCheck.QueryRow(`SELECT labels_json, name FROM agents WHERE org_id=? AND agent_uid=? LIMIT 1`, route.orgID, agentUID).Scan(&labelsJSON, &agentName)
 
 	// Check agent name - OpAMP Bridge typically has "io.opentelemetry.operator-opamp-bridge" or "opamp-bridge" in name
 	if err2 == nil && agentName.Valid && agentName.String != "" {
@@ -3521,20 +3644,7 @@ func (m *OpampManager) sendPendingConfigs(agentUID string, conn types.Connection
 
 	// Per OpAMP spec: InstanceUid must match the agent's InstanceUid from AgentToServer message
 	// Find the connection to get the original InstanceUid bytes
-	var agentInstanceUID []byte
-	for uid, storedAC := range m.conns {
-		if storedAC.conn == conn && uid == agentUID {
-			if len(storedAC.originalUID) > 0 {
-				agentInstanceUID = storedAC.originalUID
-				break
-			}
-		}
-	}
-	// Fallback if not found
-	if len(agentInstanceUID) == 0 {
-		agentInstanceUID = []byte(agentUID)
-		log.Printf("WARNING: Using normalized UID for pending config - original InstanceUid not found")
-	}
+	agentInstanceUID := route.originalUID
 
 	msg := &protobufs.ServerToAgent{
 		InstanceUid:  agentInstanceUID, // Must match agent's InstanceUid per OpAMP spec
@@ -3542,15 +3652,15 @@ func (m *OpampManager) sendPendingConfigs(agentUID string, conn types.Connection
 	}
 
 	ctx := context.Background()
-	err = conn.Send(ctx, msg)
+	err = m.connections.send(ctx, conn, msg)
 	if err != nil {
 		// Update attempt count and error
 		attempts++
 		db.Exec(`
 			UPDATE pending_config_queue 
 			SET attempts=?, last_attempt_at=NOW(), last_error=?
-			WHERE id=?
-		`, attempts, err.Error(), queueID)
+			WHERE id=? AND org_id=? AND agent_uid=?
+		`, attempts, err.Error(), queueID, route.orgID, agentUID)
 		log.Printf("ERROR: Failed to send pending config to agent %s: %v (attempt %d)", agentUID, err, attempts)
 		return
 	}
@@ -3559,8 +3669,8 @@ func (m *OpampManager) sendPendingConfigs(agentUID string, conn types.Connection
 	_, err = db.Exec(`
 		UPDATE pending_config_queue 
 		SET sent_at=NOW(), attempts=?, last_attempt_at=NOW()
-		WHERE id=?
-	`, attempts+1, queueID)
+		WHERE id=? AND org_id=? AND agent_uid=?
+	`, attempts+1, queueID, route.orgID, agentUID)
 	if err != nil {
 		log.Printf("ERROR: Failed to mark config as sent: %v", err)
 	} else {

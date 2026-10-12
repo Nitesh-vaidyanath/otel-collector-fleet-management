@@ -96,11 +96,13 @@ cd opamp-server
 
 ## Database Migrations
 
-Migrations are automatically applied when the plugin starts. To run migrations manually:
+Migrations are not automatically applied when the backend starts. Apply the numbered
+MySQL migrations as an explicit deployment step. For an isolated fresh manual-test
+database, use the generated fixture init SQL described in `tests/manual/README.md`.
 
-```bash
-go run cmd/migrate/main.go
-```
+For populated databases, back up and review the required one-time migrations
+with the database operator. There is no migration ledger/runner in this repo;
+the manual-test init script is for a fresh disposable test volume only.
 
 ## API Endpoints
 

@@ -5,6 +5,29 @@ import (
 	"strings"
 )
 
+// lookupInternalOrgIDByGrafanaOrgID resolves only an explicit operator-managed
+// mapping. It deliberately does not assume that Grafana's ID equals the local
+// organizations primary key or fall back to a caller-provided organization name.
+func lookupInternalOrgIDByGrafanaID(grafanaOrgID int64) (int64, bool) {
+	if grafanaOrgID <= 0 {
+		return 0, false
+	}
+	db, err := sql.Open("mysql", getDBDSN())
+	if err != nil {
+		return 0, false
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return 0, false
+	}
+	var internalOrgID int64
+	err = db.QueryRow(`SELECT id FROM organizations WHERE grafana_org_id=?`, grafanaOrgID).Scan(&internalOrgID)
+	if err != nil || internalOrgID <= 0 {
+		return 0, false
+	}
+	return internalOrgID, true
+}
+
 // lookupOrgIDByName resolves an organization name to its ID.
 // Returns (id, true) when found, otherwise (0, false).
 func lookupOrgIDByName(name string) (int64, bool) {

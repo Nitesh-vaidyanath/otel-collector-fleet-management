@@ -5,6 +5,7 @@ import * as yaml from 'js-yaml';
 import { MonitoringSection } from './components/MonitoringSection';
 import { TelemetryConfigDrawer } from './components/TelemetryConfigDrawer';
 import { ConfigGenerator } from './components/ConfigGenerator';
+import { AgentDeploymentsSection } from './components/AgentDeploymentsSection';
 import { getDefaultTelemetrySettingsState, normalizeTelemetrySettingsState } from './utils/telemetry';
 import type { FleetTelemetrySettings } from './types';
 
@@ -156,37 +157,7 @@ const runtimeMode = detectRuntimeMode();
 const isRunningInGrafana = runtimeMode === 'grafana';
 
 const detectGrafanaTransport = (): GrafanaTransport => {
-  if (!isRunningInGrafana) {
-    return 'resources';
-  }
-
-  const coerce = (value: string | null | undefined): GrafanaTransport | null => {
-    if (!value) {
-      return null;
-    }
-    const lower = value.toLowerCase();
-    if (lower === 'proxy' || lower === 'resources') {
-      return lower as GrafanaTransport;
-    }
-    if (lower === 'callresource') {
-      return 'resources';
-    }
-    return null;
-  };
-
-  let stored: string | null = null;
-  try {
-    stored = window.localStorage?.getItem('otelFleetTransport') ?? null;
-  } catch {
-    stored = null;
-  }
-
-  return (
-    coerce((window as any).__OTEL_FLEET_TRANSPORT__) ||
-    coerce(new URLSearchParams(window.location.search).get('transport')) ||
-    coerce(stored) ||
-    'proxy'
-  );
+  return 'resources';
 };
 
 const grafanaTransport = detectGrafanaTransport();
@@ -311,7 +282,7 @@ const getAgentClassification = (agent: Agent): AgentClassification => {
   return 'direct';
 };
 
-type Tab = 'collectors' | 'configurations' | 'monitoring';
+type Tab = 'collectors' | 'configurations' | 'monitoring' | 'deployments';
 
 const rawBackendSrv = getBackendSrv();
 
@@ -607,6 +578,7 @@ export const App = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [bridges, setBridges] = useState<Bridge[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+  const [configurationAgentUID, setConfigurationAgentUID] = useState<string | undefined>();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -956,6 +928,10 @@ export const App = () => {
   const [pushingConfig, setPushingConfig] = useState<string | null>(null);
 
   const handlePushConfig = async (agentUID: string, config?: string, configId?: string) => {
+    if (!userContext.isAdmin && userContext.role !== 'Editor') {
+      setError('The Editor or Admin role is required to push application configuration.');
+      return;
+    }
     setPushingConfig(agentUID);
     try {
       setError('');
@@ -1000,28 +976,32 @@ export const App = () => {
     }
   };
 
-  const [upgradingAgent, setUpgradingAgent] = useState<string | null>(null);
+  const [restartingAgent, setRestartingAgent] = useState<string | null>(null);
 
-  const handleUpgrade = async (agentUID: string) => {
-    const confirmUpgrade = window.confirm(
-      '⚠️ Upgrading will restart this collector and update only the collector binary/image. Please review the release notes and ensure your operator/CRDs support the new version.\n\nContinue with the upgrade?'
-    );
-    if (!confirmUpgrade) {
+  const handleRestart = async (agentUID: string) => {
+    if (!userContext.isAdmin) {
+      setError('The Admin role is required to restart an agent.');
       return;
     }
-    setUpgradingAgent(agentUID);
+    const confirmRestart = window.confirm(
+      'Restart this agent? This sends an OpAMP restart command; it does not change the agent binary, image, operator, or CRDs.'
+    );
+    if (!confirmRestart) {
+      return;
+    }
+    setRestartingAgent(agentUID);
     try {
       setError('');
       await backendSrv.post(
         `/api/plugins/otel-collector-agent-fleet-management/resources/agents/${agentUID}/operations`,
         { action: 'upgrade' }
       );
-      alert('Upgrade command sent successfully! The agent will restart when ready.');
+      alert('Restart command sent successfully. The agent will restart if it supports the command.');
     } catch (err: any) {
-      setError(err.message || 'Failed to upgrade agent');
-      alert('Failed to upgrade agent: ' + (err.message || 'Unknown error'));
+      setError(err.message || 'Failed to restart agent');
+      alert('Failed to restart agent: ' + (err.message || 'Unknown error'));
     } finally {
-      setUpgradingAgent(null);
+      setRestartingAgent(null);
     }
   };
 
@@ -1478,6 +1458,7 @@ export const App = () => {
               { id: 'collectors' as Tab, label: 'Collectors', icon: '📦' },
               { id: 'configurations' as Tab, label: 'Configurations', icon: '⚙️' },
               { id: 'monitoring' as Tab, label: 'Monitoring', icon: '📊' },
+              { id: 'deployments' as Tab, label: 'Node deployments', icon: '🖥️' },
             ]).map(tab => (
           <button
             key={tab.id}
@@ -2174,6 +2155,7 @@ export const App = () => {
             bridges={bridges}
             onPushConfig={handlePushConfig}
             backendSrv={backendSrv}
+            initialAgentUID={configurationAgentUID}
           />
         )}
 
@@ -2188,6 +2170,14 @@ export const App = () => {
             telemetryDatasourceHints={telemetryDatasourceHints}
             onConfigureTelemetry={handleOpenTelemetryDrawer}
           />
+        )}
+
+        {activeTab === 'deployments' && (
+          <AgentDeploymentsSection api={backendSrv} isAdmin={userContext.isAdmin} onOpenConfiguration={(agentUid) => {
+            setConfigurationAgentUID(agentUid);
+            void fetchAgents();
+            setActiveTab('configurations');
+          }} />
         )}
 
       </div>
@@ -2817,37 +2807,32 @@ export const App = () => {
             <button
               onClick={() => {
                 if (selectedAgent.status === 'online') {
-                  handleUpgrade(selectedAgent.agentUid);
+                  handleRestart(selectedAgent.agentUid);
                 } else {
-                  alert('Agent must be online to upgrade');
+                  alert('Agent must be online to restart');
                 }
               }}
-              disabled={selectedAgent.status !== 'online' || upgradingAgent === selectedAgent.agentUid}
+              disabled={selectedAgent.status !== 'online' || restartingAgent === selectedAgent.agentUid}
               style={{
                 flex: 1,
                 padding: '10px',
-                background: (selectedAgent.status === 'online' && upgradingAgent !== selectedAgent.agentUid) ? '#F59E0B' : '#D1D5DB',
+                background: (selectedAgent.status === 'online' && restartingAgent !== selectedAgent.agentUid) ? '#F59E0B' : '#D1D5DB',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                cursor: (selectedAgent.status === 'online' && upgradingAgent !== selectedAgent.agentUid) ? 'pointer' : 'not-allowed',
+                cursor: (selectedAgent.status === 'online' && restartingAgent !== selectedAgent.agentUid) ? 'pointer' : 'not-allowed',
                 fontSize: 14,
                 fontWeight: 500,
                 minHeight: '40px',
                 transition: 'all 0.2s'
               }}
-              title="Upgrades restart the collector process and may require compatible CRDs/operators."
+              title="Sends an OpAMP restart command without changing the agent binary or image."
             >
-              {upgradingAgent === selectedAgent.agentUid ? 'Upgrading...' : 'Upgrade'}
+              {restartingAgent === selectedAgent.agentUid ? 'Restarting...' : 'Restart'}
             </button>
           </div>
           <div style={{ padding: '8px 20px 0', fontSize: 11, color: '#92400E', lineHeight: 1.4 }}>
-            ⚠️ Upgrading only replaces the collector binary/image. It does not upgrade the OpenTelemetry Collector Operator or its CRDs.
-            Review the{' '}
-            <a href="https://github.com/open-telemetry/opentelemetry-collector-releases/releases" target="_blank" rel="noopener noreferrer" style={{ color: '#B45309', textDecoration: 'underline' }}>
-              upstream release notes
-            </a>{' '}
-            before proceeding.
+            This only requests a restart from an online agent that supports OpAMP restart commands. Kubernetes or image upgrades must be managed separately.
           </div>
         </div>
       )}

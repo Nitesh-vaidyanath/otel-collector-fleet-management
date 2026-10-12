@@ -38,9 +38,6 @@ services:
       - ./provisioning:/etc/grafana/provisioning/plugins:ro
       # RECOMMENDED: Persist Grafana data (dashboards, users, settings) between restarts
       - grafana_data:/var/lib/grafana
-      # OPTIONAL: Mount kubectl and kubeconfig for pod health checks (if kubectl is available on host)
-      - /usr/local/bin/kubectl:/usr/local/bin/kubectl:ro
-      - ~/.kube/config:/root/.kube/config:ro
     depends_on:
       - mysql
       - fleet-backend
@@ -67,6 +64,7 @@ services:
       - "4321:4321"
 
   collector_tenant_alpha:
+    profiles: ["demo"]
     image: otel/opentelemetry-collector-contrib:latest
     container_name: collector_tenant_alpha
     restart: unless-stopped
@@ -77,6 +75,7 @@ services:
       - ./docker/demo/collectors/collector-tenant-alpha.yaml:/etc/otelcol/config.yaml:ro
 
   collector_org_bravo:
+    profiles: ["demo"]
     image: otel/opentelemetry-collector-contrib:latest
     container_name: collector_org_bravo
     restart: unless-stopped
@@ -87,6 +86,7 @@ services:
       - ./docker/demo/collectors/collector-org-bravo.yaml:/etc/otelcol/config.yaml:ro
 
   collector_tenant_delta:
+    profiles: ["demo"]
     image: otel/opentelemetry-collector-contrib:latest
     container_name: collector_tenant_delta
     restart: unless-stopped

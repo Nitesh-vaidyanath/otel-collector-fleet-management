@@ -14,6 +14,56 @@ function loadTypeScript(entry) {
 
 const promql = loadTypeScript(path.join(__dirname, '..', 'pages/utils/promql.ts'));
 const org = loadTypeScript(path.join(__dirname, '..', 'pages/utils/telemetryOrg.ts'));
+const runtime = loadTypeScript(path.join(__dirname, '..', 'pages/utils/runtime.ts'));
+const deploymentSecurity = loadTypeScript(path.join(__dirname, '..', 'pages/utils/deploymentSecurity.ts'));
+
+test('combined management selects only a backend-verified agent identity', () => {
+  assert.equal(deploymentSecurity.verifiedAgentTarget(undefined), undefined);
+  assert.equal(deploymentSecurity.verifiedAgentTarget({ agentUid: 'forged' }), undefined);
+  assert.equal(deploymentSecurity.verifiedAgentTarget({ agentUid: 'revoked', association: 'revoked' }), undefined);
+  assert.equal(deploymentSecurity.verifiedAgentTarget({ agentUid: '   ', association: 'verified' }), undefined);
+  assert.equal(deploymentSecurity.verifiedAgentTarget({ agentUid: 'stable-agent', association: 'verified', connected: false }), 'stable-agent');
+});
+
+test('combined status distinguishes enrollment, reconnect and observed profile freshness', () => {
+  assert.equal(deploymentSecurity.deploymentConnectionSummary(), 'Not verified');
+  assert.equal(deploymentSecurity.deploymentConnectionSummary({ association: 'revoked' }), 'Enrollment revoked');
+  const enrolled = { agentUid: 'stable-agent', association: 'verified' };
+  assert.equal(deploymentSecurity.deploymentConnectionSummary(enrolled), 'Enrolled · offline');
+  assert.equal(deploymentSecurity.deploymentConnectionSummary({ ...enrolled, connected: true }), 'Connected · desired profile not verified');
+  assert.equal(deploymentSecurity.deploymentConnectionSummary({ ...enrolled, connected: true, profileMatches: true }), 'Connected · profile verified');
+});
+
+test('security profile choices are constrained by runtime profile and operating system', () => {
+  const choices = [{ name: 'restricted', os: 'linux' }, { name: 'inspect', os: 'linux' }, { name: 'hostprocess', os: 'windows' }];
+  assert.deepEqual(deploymentSecurity.permittedSecurityProfiles({ name: 'agent' }, choices).map(x => x.name), ['restricted']);
+  assert.deepEqual(deploymentSecurity.permittedSecurityProfiles({ name: 'agent', os: 'linux', permittedSecurityProfiles: ['inspect', 'hostprocess'] }, choices).map(x => x.name), ['inspect']);
+  assert.deepEqual(deploymentSecurity.permittedSecurityProfiles(undefined, choices), []);
+});
+
+test('security profile request carries concurrency conditions and rejects stale or unapproved selections', () => {
+  const record = { uid: 'synthetic-kubernetes-uid', resourceVersion: '17' };
+  assert.deepEqual(deploymentSecurity.securityProfileChangeRequest(record, 'inspect', [{ name: 'inspect' }]), {
+    securityProfile: 'inspect', uid: record.uid, resourceVersion: '17'
+  });
+  assert.throws(() => deploymentSecurity.securityProfileChangeRequest({ uid: record.uid }, 'inspect', [{ name: 'inspect' }]), /Refresh/);
+  assert.throws(() => deploymentSecurity.securityProfileChangeRequest(record, 'unapproved', [{ name: 'inspect' }]), /approved/);
+});
+
+test('accepted template security summaries disclose host access, capability additions, and root permission', () => {
+  const summary = deploymentSecurity.summarizeAgentSecurity({ hostPID: true, privileged: true, capabilitiesAdd: ['SYS_ADMIN'], runAsNonRoot: false });
+  assert.match(summary, /host PID/);
+  assert.match(summary, /privileged/);
+  assert.match(summary, /SYS_ADMIN/);
+  assert.match(summary, /root permitted/);
+  assert.equal(deploymentSecurity.summarizeAgentSecurity(undefined), 'Security settings unavailable');
+});
+
+test('Grafana resource transport is the secure default while standalone remains isolated', () => {
+  assert.equal(runtime.detectGrafanaTransport(true), 'resources');
+  assert.equal(runtime.normalizeUrl('/agent-deployments', true, 'resources'), '/api/plugins/otel-collector-agent-fleet-management/resources/plugin-api/agent-deployments');
+  assert.equal(runtime.normalizeUrl('/agent-deployments', false, 'resources'), '/plugin-api/agent-deployments');
+});
 
 test('metric suggestion fills an empty query and replaces one metric token inside wrappers', () => {
   assert.deepEqual(promql.insertMetricSuggestion('', 'otelcol_a_total'), { query: 'otelcol_a_total', changed: true });
