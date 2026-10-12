@@ -4,7 +4,7 @@
 
 The Grafana workflow creates and manages allow-listed Kubernetes agent Deployments. The backend enrolls an agent using an audience-bound projected service-account token, verifies the TokenReview identity and the Pod → ReplicaSet → Deployment UID chain, and binds that workload to a durable fleet enrollment and Grafana organization. The OpAMP identity is server-owned; caller labels and tenant headers cannot choose it. Config offers and acknowledgements are scoped to that identity. A security-profile edit changes a Kubernetes Deployment template and is applied only by Kubernetes after RBAC and admission checks; OpAMP itself does not grant Linux capabilities or change host namespaces.
 
-The data model is already one MySQL database/schema shared by all Grafana organizations. `org_id`, Grafana-org mapping, ownership checks, and API RBAC provide the application boundary. Migration `0013_org_databases.sql` adds shared-schema indexes; it never provisions per-organization databases. Therefore there is no data merge to perform. Historical numbered migrations are retained for upgrades; do not squash or replay them against a populated database. The manual-test generator creates one SQL init script for a fresh synthetic fixture only.
+The application uses one MySQL database/schema shared by all Grafana organizations. `org_id`, Grafana-org mapping, ownership checks, and API RBAC provide the application boundary. Because this is a new, unreleased app, the old incremental files were consolidated into `0001_initial_schema.sql`; no production database or customer data was merged or altered. The local initializer refuses databases that already have tables. See the [MySQL ER graph](MYSQL_SCHEMA.md).
 
 ## Architecture choices
 

@@ -62,20 +62,15 @@ obtain explicit authorization before deleting `fleet_manual_test_mysql_data`.
 
 ## Schema generation
 
-`tests/manual/generate-init.cjs` reads the ordered production migrations and
-writes only `tests/manual/generated/init.sql`. It strips only
-`ADD COLUMN IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`, which MySQL 8 does
-not support in those forms, and appends fixture-only enum values for
-`unclassified` and `remote_config_status`. Production migration files are not
-modified or run against an existing database. The generated SQL is ignored by
-Git and should never be staged with credentials or other local artifacts.
-It also maps only synthetic Grafana organization 1 to the fresh default
-organization row, satisfying the explicit org-mapping migration in this test
-fixture; production organizations remain unmapped by default.
+`tests/manual/generate-init.cjs` reads the single fresh-install schema at
+`opamp-server/pkg/migrations/0001_initial_schema.sql` and writes only
+`tests/manual/generated/init.sql`, adding the fixture-only mapping of synthetic
+Grafana org 1 to the default organization. The generated SQL is ignored by Git.
+It is not an in-place migration and must not be applied to an existing DB.
 
 The init script is applied by MySQL only when its named data volume is first
 initialized. Later `up` runs preserve DB contents and do not reapply migrations.
-The app's normal migration runner is intentionally not used here.
+The root local initializer is not used for this separate test stack.
 
 The user reviews the UI in their own browser. The base stack does not exercise
 a real collector or remote OpAMP agent; the separate synthetic OpAMP test does.

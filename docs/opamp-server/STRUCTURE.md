@@ -17,7 +17,7 @@ opamp-server/
 │   │   ├── http.go                # HTTP routing (shared)
 │   │   ├── logger.go              # Logging utilities (shared)
 │   │   └── rbac.go                # RBAC middleware (shared)
-│   └── migrations/                # Database migrations
+│   └── migrations/                # Single fresh-install MySQL baseline
 ├── Dockerfile                      # Plugin backend Docker image
 ├── Dockerfile.standalone           # Standalone server Docker image
 └── go.mod                          # Go module definition

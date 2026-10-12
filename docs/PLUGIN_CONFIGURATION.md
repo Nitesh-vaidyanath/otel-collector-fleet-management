@@ -29,7 +29,7 @@ The `"backend": true` field tells Grafana that this plugin has server-side code 
 This plugin requires `backend: true` because it:
 
 - **Runs OpAMP Server**: Manages agent connections via OpAMP protocol
-- **Database Access**: Connects to MySQL/Cloud SQL/Spanner for data persistence
+- **Database Access**: Connects to MySQL or a MySQL-compatible Cloud SQL/AWS RDS endpoint
 - **Security**: Handles sensitive database credentials securely
 - **Performance**: Processes large amounts of agent data efficiently
 - **Real-time Operations**: Pushes configurations to agents, receives telemetry

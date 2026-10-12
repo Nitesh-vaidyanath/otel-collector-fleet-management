@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1060" viewBox="0 0 1500 1060" role="img" aria-labelledby="title desc">
+  <title id="title">Sidecar least-privilege discovery and software supply-chain pipeline</title>
+  <desc id="desc">Shows source and image security checks producing an SBOM and signed image, admission verification at deployment, a non-privileged per-Pod discovery sidecar, and a separate opt-in high-risk eBPF mode. Distinguishes declared libraries from actually loaded libraries.</desc>
+  <defs><style>
+    text{font-family:Inter,Arial,sans-serif;fill:#182940}.title{font-size:28px;font-weight:700}.sub{font-size:14px;fill:#53657b}.head{font-size:17px;font-weight:700}.body{font-size:13px}.small{font-size:12px;fill:#43566c}.tag{font-size:11px;font-weight:700;fill:#fff}.box{rx:13;stroke-width:1.5}.edge{stroke:#65758d;stroke-width:2;fill:none;marker-end:url(#arrow)}.risk{stroke:#bf615a;stroke-dasharray:7 5;stroke-width:2;fill:none;marker-end:url(#riskArrow)}
+  </style><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#65758d"/></marker><marker id="riskArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#bf615a"/></marker></defs>
+  <rect width="1500" height="1060" fill="#f7f9fc"/>
+  <text x="42" y="48" class="title">Sidecar discovery + SBOM / AST security path</text>
+  <text x="42" y="77" class="sub">Build-time evidence reduces risk; runtime evidence answers what is actually present and loaded. These are different claims.</text>
+
+  <!-- Supply chain pipeline -->
+  <text x="45" y="124" class="head">A · Build and verify each image before deployment</text>
+  <rect x="40" y="148" width="240" height="105" class="box" fill="#fff" stroke="#9eacbd"/>
+  <text x="62" y="180" class="head">Source + dependencies</text><text x="62" y="207" class="small">version-pinned inputs</text><text x="62" y="231" class="small">reviewed build context</text>
+  <rect x="335" y="148" width="260" height="105" class="box" fill="#eaf2ff" stroke="#7d9fca"/>
+  <text x="357" y="180" class="head">AST / SAST checks</text><text x="357" y="207" class="small">static code + dependency rules</text><text x="357" y="231" class="small">tests, lint, policy checks</text>
+  <rect x="650" y="148" width="260" height="105" class="box" fill="#e8f5ee" stroke="#6aa382"/>
+  <text x="672" y="180" class="head">SBOM + image scan</text><text x="672" y="207" class="small">packages declared in image</text><text x="672" y="231" class="small">CVE/license policy evaluation</text>
+  <rect x="965" y="148" width="230" height="105" class="box" fill="#f2ecfa" stroke="#a18ac0"/>
+  <text x="987" y="180" class="head">Provenance + sign</text><text x="987" y="207" class="small">digest-bound evidence</text><text x="987" y="231" class="small">trusted builder identity</text>
+  <rect x="1250" y="148" width="210" height="105" class="box" fill="#fff2df" stroke="#d3a85e"/>
+  <text x="1272" y="180" class="head">Admission verify</text><text x="1272" y="207" class="small">signature + policy</text><text x="1272" y="231" class="small">before Pod start</text>
+  <path d="M280 200H332M595 200H647M910 200H962M1195 200H1247" class="edge"/>
+
+  <!-- Runtime pod -->
+  <text x="45" y="316" class="head">B · Per-workload sidecar: low-privilege runtime discovery</text>
+  <rect x="40" y="338" width="920" height="330" class="box" fill="#eaf1f9" stroke="#8aa5c1"/>
+  <text x="65" y="372" class="head">One Kubernetes Pod · one workload boundary</text>
+  <rect x="78" y="402" width="365" height="122" class="box" fill="#fff" stroke="#95a8bf"/>
+  <text x="100" y="435" class="head">Application container</text>
+  <text x="100" y="463" class="small">emits app-level library/runtime metadata</text>
+  <text x="100" y="489" class="small">normal OpAMP client or local telemetry</text>
+  <rect x="520" y="402" width="385" height="122" class="box" fill="#e8f5ee" stroke="#6aa382"/>
+  <text x="542" y="435" class="head">Drift Watch sidecar</text>
+  <text x="542" y="463" class="small">verified image SBOM + read-only Pod metadata</text>
+  <text x="542" y="489" class="small">optional scoped same-Pod process discovery</text>
+  <path d="M443 462H517" class="edge"/>
+  <rect x="78" y="548" width="827" height="87" class="box" fill="#fff" stroke="#bec9d6"/>
+  <text x="100" y="577" class="body">Default securityContext: non-root · read-only root · no privilege escalation · drop ALL · RuntimeDefault seccomp</text>
+  <text x="100" y="605" class="body">No hostPID / hostNetwork / privileged / hostPath. Agent SA gets only the audience-bound projected OpAMP token.</text>
+
+  <!-- Evidence confidence -->
+  <rect x="1000" y="338" width="460" height="330" class="box" fill="#fff" stroke="#9eacbd"/>
+  <text x="1025" y="372" class="head">What each evidence source proves</text>
+  <text x="1025" y="412" class="body">SBOM / image scan</text><text x="1025" y="435" class="small">What packages/files are shipped in this image.</text>
+  <text x="1025" y="471" class="body">AST / SAST</text><text x="1025" y="494" class="small">What source paths/dependencies appear in analyzed code.</text>
+  <text x="1025" y="530" class="body">Process loader / maps telemetry</text><text x="1025" y="553" class="small">Which libraries are mapped into a running process</text><text x="1025" y="574" class="small">at observation time, within granted process visibility.</text>
+  <text x="1025" y="610" class="body">Network / gateway telemetry</text><text x="1025" y="633" class="small">Observed endpoints/protocols, not library identity.</text>
+
+  <!-- Higher privilege pathway -->
+  <text x="45" y="720" class="head">C · Optional host-level eBPF is a different deployment and approval tier</text>
+  <rect x="40" y="746" width="420" height="110" class="box" fill="#fff0ed" stroke="#c77770"/>
+  <text x="64" y="780" class="head">Opt-in node inspector</text><text x="64" y="808" class="small">separate signed image + separate SA</text><text x="64" y="833" class="small">strict node / namespace allow-list</text>
+  <rect x="570" y="746" width="390" height="110" class="box" fill="#fff" stroke="#c77770"/>
+  <text x="594" y="780" class="head">Host process / kernel boundary</text><text x="594" y="808" class="small">processes across workload Pods</text><text x="594" y="833" class="small">kernel-version and attach-method dependent</text>
+  <path d="M460 801H567" class="risk"/>
+  <rect x="1000" y="746" width="460" height="110" class="box" fill="#fff0ed" stroke="#c77770"/>
+  <text x="1024" y="780" class="head">Explicit elevated profile only</text><text x="1024" y="808" class="small">tested uprobes required CAP_SYS_ADMIN;</text><text x="1024" y="833" class="small">CAP_SYS_PTRACE can expose process data.</text>
+  <path d="M960 801H997" class="risk"/>
+
+  <!-- Evidence pipeline result -->
+  <rect x="40" y="895" width="1420" height="105" class="box" fill="#edf2f7" stroke="#bec9d6"/>
+  <text x="64" y="931" class="head">Decision rule</text>
+  <text x="64" y="960" class="body">Use SBOM + AST/SAST + admission for supply-chain assurance; use app metadata or scoped sidecar discovery for loaded libraries; enable host eBPF only when needed and separately approved.</text>
+  <text x="64" y="984" class="small">A package in an SBOM is not proof it was loaded. A process map is more direct but needs additional process visibility and carries privacy risk.</text>
+</svg>

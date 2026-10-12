@@ -10,20 +10,19 @@ The plugin can be configured through Grafana's plugin settings UI or via provisi
 
 #### Database Configuration
 
-The plugin supports multiple database backends:
+The backend uses MySQL (or a compatible MySQL endpoint):
 
 1. **MySQL** (Standard MySQL/MariaDB)
 2. **Google Cloud SQL (MySQL)**
 3. **AWS RDS (MySQL)**
-4. **Google Cloud Spanner**
 
 #### JSON Data (Non-sensitive)
 
 These settings are stored in `plugin.json` and can be configured via the Grafana UI:
 
-- **dbType**: Type of database (`mysql`, `cloudsql-mysql`, `aws-rds-mysql`, `spanner`)
+- **dbType**: MySQL connection type (`mysql`, `cloudsql-mysql`, `aws-rds-mysql`)
 - **dbHost**: Database server hostname or IP address
-- **dbPort**: Database server port (default: 3306 for MySQL, 5432 for PostgreSQL)
+- **dbPort**: Database server port (default: 3306)
 - **dbName**: Name of the database
 - **dbUser**: Database username
 - **opampEndpoint**: Address and port for the OpAMP server (default: `0.0.0.0:4321`)
@@ -34,7 +33,6 @@ These settings are encrypted and stored securely:
 
 - **dbPassword**: Database password
 - **cloudSQLInstance**: For Cloud SQL: `project:region:instance`
-- **spannerDatabase**: For Spanner: `projects/PROJECT/instances/INSTANCE/databases/DATABASE`
 
 ---
 
@@ -158,70 +156,31 @@ plugins:
 3. Use the RDS endpoint as `dbHost`
 4. Ensure SSL is enabled for secure connections
 
-### Google Cloud Spanner
-
-```yaml
-apiVersion: 1
-
-plugins:
-  - name: otel-collector-agent-fleet-management
-    type: app
-    enabled: true
-    jsonData:
-      dbType: spanner
-      dbHost: spanner.googleapis.com
-      dbPort: 443
-      dbName: grafana_agents
-      dbUser: ""
-      opampEndpoint: 0.0.0.0:4321
-    secureJsonData:
-      spannerDatabase: projects/my-project/instances/my-instance/databases/grafana_agents
-```
-
-**Setup Steps:**
-
-The current backend uses a single MySQL database/schema for all organizations.
-Organization isolation is enforced by `org_id` in application queries and the
-Grafana-org mapping; there is no per-organization database provisioning or
-Spanner driver in this repository.
+Organization isolation is enforced by `org_id` foreign keys, application
+queries and the verified Grafana-org mapping. There is no per-organization
+database provisioning.
 
 ---
 
 ## Database Migrations
 
-The backend does not automatically apply migrations at startup. Apply the
-numbered MySQL migrations deliberately before upgrading the backend. For a new
-local manual-test database, `tests/manual/generate-init.cjs` creates one
-synthetic fixture init script from the migration history.
+The backend does not automatically apply database schema at startup. This is a
+new, unreleased app, so the previous 20-step migration chain has been replaced
+by one clean MySQL 8 baseline: `opamp-server/pkg/migrations/0001_initial_schema.sql`.
+The schema contains the current tables and columns, including managed-agent
+enrollment. It uses one MySQL database for all Grafana organizations.
 
 ### Migration status
 
-There is no checked-in migration runner or migration ledger. Do not run the
-numbered files repeatedly against a populated database: several are one-time
-DDL, and migration `0018` moves legacy bridge rows. For an existing database,
-take a backup and review/apply the required version steps once using the
-deployment's approved database process. The generated SQL is only for a new,
-disposable manual-test volume; it is not an upgrade bundle.
+`scripts/run-migrations.sh` initializes only an empty database in the root local
+Compose MySQL service and refuses to run if tables already exist. It does not
+drop data, migrate a previous deployment, or run on application startup. The
+manual-test SQL generator reads the same baseline and adds only a synthetic
+Grafana-org mapping for its isolated fixture. Existing local database volumes
+are not automatically reset or modified by this cleanup.
 
-### Migration Files
-
-- `0001_init.sql`: Initial schema (agents, organizations, configs)
-- `0002_config_templates.sql`: Configuration templates
-- `0003_add_capabilities.sql`: Agent capabilities tracking
-- `0004_config_approval.sql`: Configuration approval workflow
-- `0005_activity_and_current_config.sql`: Activity logs and current config tracking
-- `0006_organizations.sql`: Organizations support
-- `0007_component_types.sql`: Component type definitions
-- `0008_agent_telemetry.sql`: Telemetry data storage
-- `0009_fix_checksum.sql`: Checksum fixes
-- `0010_approval_comments.sql`: Approval comments
-- `0011_pending_config_queue.sql`: Pending config queue
-- `0012_track_config_version.sql`: Config version tracking
-- `0013_org_databases.sql`: Indexes supporting organization scoping in the shared schema
-- `0014_pushed_at_tracking.sql`: Config push tracking
-- `0015_config_status_tracking.sql`: Remote config status tracking
-- `0016_cleanup_unused_tables.sql`: Historical cleanup migration
-- `0017_add_k8s_columns.sql` through `0020_managed_agent_enrollments.sql`: Kubernetes identity, Grafana-org mapping, and managed-agent enrollment
+See [MySQL schema and relationship graph](./MYSQL_SCHEMA.md) for table ownership,
+foreign keys, tenant keys and a visual ER diagram.
 
 ---
 
@@ -302,9 +261,6 @@ OPAMP_ENDPOINT=0.0.0.0:4321
 # Cloud SQL specific
 CLOUD_SQL_INSTANCE=my-project:us-central1:my-instance
 
-# Spanner specific
-SPANNER_DATABASE=projects/my-project/instances/my-instance/databases/grafana_agents
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 ```
 
 ### Complete DSN Format
@@ -419,10 +375,6 @@ services:
 
 For detailed TLS configuration guide, see [MySQL TLS Configuration](./MYSQL_TLS_CONFIG.md).
 
-### Spanner
-
-Spanner uses gRPC with TLS by default. Ensure `GOOGLE_APPLICATION_CREDENTIALS` is set.
-
 ---
 
 ## Troubleshooting
@@ -445,14 +397,14 @@ Spanner uses gRPC with TLS by default. Ensure `GOOGLE_APPLICATION_CREDENTIALS` i
    - Grafana logs: `/var/log/grafana/grafana.log`
    - Plugin logs: Check Grafana UI → Administration → Plugins → OTel Collector Agent Fleet Management
 
-### Migration Issues
+### Schema initialization issues
 
 If migrations fail:
 
-1. Check database permissions
-2. Verify database exists
-3. Check migration files are present
-4. Review error messages in logs
+1. Verify the root Compose `mysql` service is running
+2. Verify `DB_NAME` exists and is an empty schema
+3. Check that `scripts/run-migrations.sh` reports a concrete MySQL error
+4. Never drop a populated schema to make the initializer pass
 
 ### Performance Issues
 

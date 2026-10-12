@@ -1,36 +1,38 @@
-#!/bin/bash
-# Run database migrations for OTel Collector Agent Fleet Management
+#!/usr/bin/env bash
+# Initialize an empty local Compose MySQL database from the single baseline.
+# This intentionally refuses to alter or upgrade a populated database.
+set -euo pipefail
 
-set -e
-
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-echo "Running database migrations..."
-
-# Get database connection from environment or use defaults
-DB_HOST="${DB_HOST:-mysql}"
-DB_PORT="${DB_PORT:-3306}"
-DB_USER="${DB_USER:-grafana}"
-DB_PASSWORD="${DB_PASSWORD:-grafana123}"
 DB_NAME="${DB_NAME:-grafana_agents}"
+SCHEMA_FILE="opamp-server/pkg/migrations/0001_initial_schema.sql"
 
-# Check if running via docker-compose
-if docker compose ps grafana_mysql 2>/dev/null | grep -q "running"; then
-    echo -e "${GREEN}Using Docker MySQL container${NC}"
-    for migration in opamp-server/pkg/migrations/*.sql; do
-        if [ -f "$migration" ]; then
-            echo "  Running: $(basename $migration)"
-            docker compose exec -T mysql mysql -uroot -proot "$DB_NAME" < "$migration" 2>/dev/null || true
-        fi
-    done
-    echo -e "${GREEN}✓ Migrations complete${NC}"
-else
-    echo -e "${YELLOW}MySQL container not running. Please start it first:${NC}"
-    echo "  docker compose up -d mysql"
-    echo "  or"
-    echo "  make docker-up"
-    exit 1
+if [[ ! "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "DB_NAME must contain only letters, digits, and underscores." >&2
+  exit 2
+fi
+if [[ ! -f "$SCHEMA_FILE" ]]; then
+  echo "Baseline schema not found: $SCHEMA_FILE" >&2
+  exit 2
+fi
+if ! docker compose ps --status running --services mysql | grep -Fxq mysql; then
+  echo "The root Compose mysql service is not running. Start it first with: docker compose up -d mysql" >&2
+  exit 1
 fi
 
+table_count="$(docker compose exec -T mysql sh -c \
+  'export MYSQL_PWD="${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is not configured}"; exec mysql -uroot --batch --skip-column-names "$1" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()"' \
+  sh "$DB_NAME")"
+if [[ ! "$table_count" =~ ^[0-9]+$ ]]; then
+  echo "Could not determine whether database '$DB_NAME' is empty; refusing to apply schema." >&2
+  exit 1
+fi
+if (( table_count != 0 )); then
+  echo "Database '$DB_NAME' already contains $table_count tables. This is a fresh-install initializer, not an upgrade; no changes made." >&2
+  exit 1
+fi
+
+echo "Initializing empty local database '$DB_NAME' from the single MySQL baseline..."
+docker compose exec -T mysql sh -c \
+  'export MYSQL_PWD="${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is not configured}"; exec mysql -uroot --default-character-set=utf8mb4 "$1"' \
+  sh "$DB_NAME" < "$SCHEMA_FILE"
+echo "Schema initialization complete. No existing data was modified."

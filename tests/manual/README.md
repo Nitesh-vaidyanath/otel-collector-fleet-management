@@ -7,10 +7,9 @@ by `make manual-test-down`; do not use `docker compose down -v` unless you
 intentionally want to erase this fixture's Grafana/MySQL test state.
 
 Before the first start, `tests/manual/generate-init.cjs` emits
-`tests/manual/generated/init.sql` from the historical application migrations.
-That SQL is initialized only when the isolated MySQL volume is empty. It is a
-single-schema fixture, not a production schema merger or a safe in-place
-upgrade. Current deployments also use one MySQL database for all organizations,
+`tests/manual/generated/init.sql` from `opamp-server/pkg/migrations/0001_initial_schema.sql`.
+That SQL is initialized only when the isolated MySQL volume is empty. It is not
+a safe in-place upgrade. The app uses one MySQL database for all organizations,
 scoped by `org_id`; Grafana's own internal database is separate and must not be
 merged into the application schema.
 

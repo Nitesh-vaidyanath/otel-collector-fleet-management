@@ -121,7 +121,6 @@ The standalone OpAMP server supports the following flags:
 - `-db-user`: Database user
 - `-db-password`: Database password
 - `-cloudsql-instance`: Cloud SQL instance connection name
-- `-spanner-database`: Spanner database path
 
 ## TLS/HTTPS Support
 

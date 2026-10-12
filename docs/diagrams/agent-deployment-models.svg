@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="980" viewBox="0 0 1480 980" role="img" aria-labelledby="title desc">
+  <title id="title">Agent deployment models and privilege trade-offs</title>
+  <desc id="desc">Compares a per-workload sidecar, one managed agent per selected node, a privileged node discovery DaemonSet, and an operator-managed deployment control plane.</desc>
+  <defs><style>
+    text{font-family:Inter,Arial,sans-serif;fill:#192940}.title{font-size:27px;font-weight:700}.subtitle{font-size:14px;fill:#52647b}.head{font-size:18px;font-weight:700}.label{font-size:14px;font-weight:700}.body{font-size:13px}.small{font-size:12px;fill:#43566e}.pill{font-size:11px;font-weight:700;fill:#fff}.box{rx:14;stroke-width:1.5}.edge{stroke:#65758d;stroke-width:2;fill:none;marker-end:url(#arrow)}.dash{stroke-dasharray:6 5}
+  </style><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#65758d"/></marker></defs>
+  <rect width="1480" height="980" fill="#f7f9fc"/>
+  <text x="42" y="48" class="title">Deployment choices for Drift Watch + managed agents</text>
+  <text x="42" y="76" class="subtitle">Choose the smallest observation scope that answers the operational question. Host inspection is a separate, explicit high-privilege profile.</text>
+
+  <!-- Model 1 -->
+  <rect x="35" y="112" width="690" height="355" class="box" fill="#fff" stroke="#9bb2c8"/>
+  <text x="60" y="150" class="head">1 · Per-workload sidecar (discovery-first default)</text>
+  <rect x="75" y="184" width="610" height="148" class="box" fill="#e9f1fb" stroke="#7094bc"/>
+  <text x="98" y="211" class="label">Pod boundary · one application workload</text>
+  <rect x="102" y="230" width="245" height="78" class="box" fill="#fff" stroke="#7c9cbf"/>
+  <text x="120" y="258" class="label">Application container</text><text x="120" y="283" class="small">app logs / metrics / OTLP</text>
+  <rect x="390" y="230" width="255" height="78" class="box" fill="#e6f5ed" stroke="#64a580"/>
+  <text x="408" y="258" class="label">Drift Watch sidecar</text><text x="408" y="283" class="small">read-only discovery / metadata</text>
+  <path d="M347 268H387" class="edge"/>
+  <text x="75" y="360" class="body">Baseline: no hostPID/network, no privileged mode, drop all caps, non-root, read-only root, RuntimeDefault seccomp.</text>
+  <text x="75" y="386" class="body">Scope: this Pod only. Image SBOM + app instrumentation identify likely/observed libraries without host scanning.</text>
+  <text x="75" y="412" class="small">Optional same-Pod process maps requires shared PID namespace; adds visibility and is opt-in. It still is not node-wide.</text>
+  <rect x="75" y="429" width="256" height="23" rx="11" fill="#39845e"/><text x="89" y="445" class="pill">LOW PRIVILEGE · RECOMMENDED</text>
+
+  <!-- Model 2 -->
+  <rect x="755" y="112" width="690" height="355" class="box" fill="#fff" stroke="#9bb2c8"/>
+  <text x="780" y="150" class="head">2 · Individually managed agent on a selected node</text>
+  <rect x="800" y="184" width="600" height="148" class="box" fill="#eef3fb" stroke="#7094bc"/>
+  <text x="824" y="211" class="label">Kubernetes node · placement pinned by allow-listed node affinity</text>
+  <rect x="830" y="230" width="240" height="78" class="box" fill="#fff" stroke="#7c9cbf"/>
+  <text x="850" y="258" class="label">Target workload</text><text x="850" y="283" class="small">no management RBAC</text>
+  <rect x="1120" y="230" width="250" height="78" class="box" fill="#e6f5ed" stroke="#64a580"/>
+  <text x="1140" y="258" class="label">Managed agent</text><text x="1140" y="283" class="small">OpAMP + projected token file</text>
+  <path d="M1070 268H1117" class="edge"/>
+  <text x="800" y="360" class="body">One Deployment, one service account, explicit image/profile, owner, org and node allow-list.</text>
+  <text x="800" y="386" class="body">Backend updates the Pod template; admission decides whether host flags/capabilities are accepted.</text>
+  <text x="800" y="412" class="small">Agent SA: identity token only. Backend SA: narrow Deployment/Pod reads + TokenReview; never Secret reads.</text>
+  <rect x="800" y="429" width="269" height="23" rx="11" fill="#4a78a8"/><text x="814" y="445" class="pill">TARGETED · ADMIN-CONTROLLED</text>
+
+  <!-- Model 3 -->
+  <rect x="35" y="495" width="690" height="355" class="box" fill="#fff" stroke="#d5a24e"/>
+  <text x="60" y="533" class="head">3 · Node-wide discovery DaemonSet (elevated mode)</text>
+  <rect x="75" y="566" width="610" height="130" class="box" fill="#fff3df" stroke="#d5a24e"/>
+  <text x="100" y="594" class="label">Node host boundary</text>
+  <rect x="110" y="615" width="200" height="58" class="box" fill="#fff" stroke="#c69a54"/>
+  <text x="128" y="640" class="label">Host processes</text><text x="128" y="660" class="small">other workloads</text>
+  <rect x="440" y="615" width="210" height="58" class="box" fill="#fde9e7" stroke="#cb7770"/>
+  <text x="458" y="640" class="label">eBPF inspector</text><text x="458" y="660" class="small">one per node</text>
+  <path d="M310 644H437" class="edge dash"/>
+  <text x="75" y="724" class="body">Only for validated kernel-level needs: process/network scope is node-wide; isolation and blast radius are larger.</text>
+  <text x="75" y="750" class="body">Use a distinct opt-in profile, signed image, explicit capability list, node selector and admission exception.</text>
+  <text x="75" y="776" class="small">Tested uprobe paths needed CAP_SYS_ADMIN on the examined kernels; not a universal rule for every kernel/attachment.</text>
+  <text x="75" y="802" class="small">CAP_SYS_PTRACE can expose process maps/memory. Avoid hostPID and hostNetwork unless a specific probe requires them.</text>
+  <rect x="75" y="817" width="274" height="23" rx="11" fill="#b65b52"/><text x="89" y="833" class="pill">HIGH PRIVILEGE · SEPARATE PROFILE</text>
+
+  <!-- Model 4 -->
+  <rect x="755" y="495" width="690" height="355" class="box" fill="#fff" stroke="#9b83bd"/>
+  <text x="780" y="533" class="head">4 · Dedicated policy operator (stronger separation)</text>
+  <rect x="800" y="566" width="600" height="130" class="box" fill="#f2ecfa" stroke="#9b83bd"/>
+  <rect x="835" y="600" width="190" height="62" class="box" fill="#fff" stroke="#a68ec5"/>
+  <text x="853" y="626" class="label">Grafana backend</text><text x="853" y="648" class="small">config + requests</text>
+  <rect x="1080" y="600" width="275" height="62" class="box" fill="#fff" stroke="#a68ec5"/>
+  <text x="1100" y="626" class="label">Policy operator</text><text x="1100" y="648" class="small">sole Deployment writer</text>
+  <path d="M1025 631H1077" class="edge"/>
+  <text x="800" y="724" class="body">OpAMP handles supported application config; operator reconciles approved security-profile resources.</text>
+  <text x="800" y="750" class="body">Backend loses Deployment write permissions; operator holds scoped write rights and admission remains final gate.</text>
+  <text x="800" y="776" class="small">Cleaner separation of duties, but adds a CRD/controller lifecycle and a second policy implementation to secure.</text>
+  <text x="800" y="802" class="small">Useful when security governance requires distinct ownership of runtime privilege changes.</text>
+  <rect x="800" y="817" width="279" height="23" rx="11" fill="#775aa0"/><text x="814" y="833" class="pill">SEPARATION OF DUTIES · MORE COMPONENTS</text>
+
+  <rect x="35" y="878" width="1410" height="70" class="box" fill="#e8edf4" stroke="#b6c1d0"/>
+  <text x="60" y="907" class="label">Recommendation</text>
+  <text x="60" y="930" class="body">Start with model 1 for low-privilege discovery; use model 2 for node-targeted agents; reserve model 3 for justified eBPF deep inspection. Model 4 is a future governance option.</text>
+</svg>

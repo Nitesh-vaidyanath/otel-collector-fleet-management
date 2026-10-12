@@ -80,7 +80,7 @@ grafana-agents-app/
 │   │   ├── handlers.go      # HTTP handlers (shared)
 │   │   ├── opamp.go         # OpAMP logic (shared)
 │   │   └── ...              # Other shared files
-│   └── pkg/migrations/      # Database migrations
+│   └── pkg/migrations/      # Single fresh-install MySQL baseline (new app)
 ├── docs/                     # Documentation
 ├── docker-compose.yml        # Standard development stack
 └── tests/
@@ -153,7 +153,7 @@ For detailed architecture and data model, see [Data Model and Architecture](./do
 - **Grafana**: v11.0 or later
 - **Node.js**: LTS version (for plugin development)
 - **Go**: 1.21 or later (for backend development)
-- **Database**: MySQL 8.0+, Cloud SQL, AWS RDS, or Cloud Spanner
+- **Database**: MySQL 8.0+ (including MySQL-compatible Cloud SQL or AWS RDS endpoints)
 
 ### Installation Steps
 
@@ -233,7 +233,9 @@ All documentation is organized in the [`docs/`](./docs/) folder. See [Documentat
 - **[WSS/TLS Setup Guide](./docs/WSS_TLS_SETUP.md)** 🔒 - Enable secure WebSocket connections with TLS/SSL
 - **[MySQL TLS Configuration](./docs/MYSQL_TLS_CONFIG.md)** 🔒 - Secure MySQL connections with TLS/SSL and certificate authentication
 - **[API Specification](./docs/API_SPEC.md)** - Complete REST API reference
-- **[Backend Configuration](./docs/BACKEND_CONFIG.md)** - Database setup (MySQL, Cloud SQL, RDS, Spanner)
+- **[Backend Configuration](./docs/BACKEND_CONFIG.md)** - MySQL database setup
+- **[MySQL Schema](./docs/MYSQL_SCHEMA.md)** - Tables, foreign keys, indexes, relationship graph
+- **[Agent Deployment Models](./docs/AGENT_DEPLOYMENT_MODELS.md)** - Least-privilege sidecar, RBAC, SBOM/AST and eBPF models
 - **[Standalone OpAMP Setup](./docs/STANDALONE_OPAMP_SETUP.md)** - Running OpAMP server separately
 - **[Troubleshooting](./docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
@@ -330,7 +332,6 @@ See [MySQL TLS Configuration](./docs/MYSQL_TLS_CONFIG.md) for detailed TLS setup
 - **MySQL**: Standard MySQL 8.0+
 - **Google Cloud SQL**: Direct TCP connection or Unix socket
 - **AWS RDS**: MySQL-compatible with SSL support
-- **Google Cloud Spanner**: Fully managed database
 
 See [Backend Configuration](./docs/BACKEND_CONFIG.md) for detailed setup.
 

@@ -36,7 +36,7 @@ The plugin frontend (React/TypeScript) communicates with the backend service (Go
                    │ Database Queries
                    │
 ┌──────────────────▼──────────────────────────────────────┐
-│  Database (MySQL/Cloud SQL/Spanner)                      │
+│  Database (MySQL / compatible MySQL service)              │
 └──────────────────────────────────────────────────────────┘
 ```
 

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="940" viewBox="0 0 1480 940" role="img" aria-labelledby="title desc">
+  <title id="title">Least-privilege permission model for agent management</title>
+  <desc id="desc">Separates Grafana roles, backend Kubernetes permissions, agent projected identity, and admission controls. Host privileges are platform-granted Pod settings, not OpAMP permissions.</desc>
+  <defs><style>
+    text{font-family:Inter,Arial,sans-serif;fill:#17263c}.title{font-size:28px;font-weight:700}.sub{font-size:14px;fill:#50627a}.head{font-size:17px;font-weight:700}.body{font-size:13px}.small{font-size:12px;fill:#42546b}.tag{font-size:11px;font-weight:700;fill:#fff}.box{rx:13;stroke-width:1.5}.edge{stroke:#65758d;stroke-width:2;fill:none;marker-end:url(#arrow)}.deny{stroke:#ba5656;stroke-width:2;fill:none;stroke-dasharray:6 5;marker-end:url(#cross)}
+  </style><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L0 6L9 3z" fill="#65758d"/></marker><marker id="cross" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto"><path d="M1 1L7 7M7 1L1 7" stroke="#ba5656" stroke-width="1.8"/></marker></defs>
+  <rect width="1480" height="940" fill="#f7f9fc"/>
+  <text x="42" y="48" class="title">Least privilege: who can do what?</text>
+  <text x="42" y="76" class="sub">Four distinct authorization layers. Grafana role ≠ Kubernetes RBAC ≠ Pod capability ≠ OpAMP protocol capability.</text>
+
+  <!-- Grafana roles -->
+  <rect x="40" y="118" width="400" height="270" class="box" fill="#fff" stroke="#83a0bd"/>
+  <text x="64" y="154" class="head">1 · Grafana identity + role</text>
+  <rect x="64" y="178" width="350" height="52" class="box" fill="#eef3f8" stroke="#bec9d6"/>
+  <text x="84" y="202" class="body">Viewer</text><text x="180" y="202" class="small">read agents, configs, deployment status</text>
+  <rect x="64" y="240" width="350" height="52" class="box" fill="#eaf2ff" stroke="#9bb6d8"/>
+  <text x="84" y="264" class="body">Editor</text><text x="180" y="264" class="small">draft/edit app config; no Pod security</text>
+  <rect x="64" y="302" width="350" height="62" class="box" fill="#fff2df" stroke="#d3ad6c"/>
+  <text x="84" y="327" class="body">Org Admin</text><text x="180" y="327" class="small">approve policy-bound actions on owned</text><text x="180" y="347" class="small">deployments; cannot exceed allow-list</text>
+
+  <!-- Backend SA -->
+  <rect x="540" y="118" width="400" height="270" class="box" fill="#eaf5ee" stroke="#67a17e"/>
+  <text x="564" y="154" class="head">2 · Backend ServiceAccount</text>
+  <text x="564" y="188" class="body">Namespace-scoped only:</text>
+  <text x="584" y="218" class="small">apps/deployments: get, list, create, patch, delete</text>
+  <text x="584" y="244" class="small">apps/replicasets: get</text>
+  <text x="584" y="270" class="small">core/pods: get</text>
+  <text x="584" y="296" class="small">authentication.k8s.io/tokenreviews: create</text>
+  <text x="564" y="335" class="body">Never grant Secret get/list, exec, arbitrary</text><text x="564" y="357" class="body">namespace writes or cluster-admin by default.</text>
+
+  <!-- Agent SA -->
+  <rect x="1040" y="118" width="400" height="270" class="box" fill="#eaf2ff" stroke="#7199c6"/>
+  <text x="1064" y="154" class="head">3 · Agent ServiceAccount</text>
+  <text x="1064" y="188" class="body">Projected short-lived token for one OpAMP audience;</text>
+  <text x="1064" y="213" class="body">mounted read-only into the managed client only.</text>
+  <text x="1064" y="252" class="small">No Kubernetes Deployment write permissions</text>
+  <text x="1064" y="278" class="small">No Secret access or token in env / database / logs</text>
+  <text x="1064" y="304" class="small">No privilege grant through OpAMP messages</text>
+  <text x="1064" y="344" class="small">Use a distinct SA from the backend manager.</text>
+
+  <path d="M440 245H537" class="edge"/><text x="456" y="232" class="small">trusted org + role</text>
+  <path d="M940 245H1037" class="edge"/><text x="956" y="232" class="small">API creates Pod template</text>
+
+  <!-- Kubernetes gate -->
+  <rect x="185" y="448" width="1110" height="154" class="box" fill="#f2ecfa" stroke="#9a7ab8"/>
+  <text x="212" y="484" class="head">4 · Kubernetes RBAC + admission are the privilege gate</text>
+  <rect x="220" y="510" width="310" height="66" class="box" fill="#fff" stroke="#c0b1d0"/>
+  <text x="242" y="538" class="body">RBAC authorizes API verbs</text><text x="242" y="559" class="small">which identity may change Deployment</text>
+  <rect x="570" y="510" width="310" height="66" class="box" fill="#fff" stroke="#c0b1d0"/>
+  <text x="592" y="538" class="body">Admission validates Pod spec</text><text x="592" y="559" class="small">host namespaces / caps / privilege / OS</text>
+  <rect x="920" y="510" width="330" height="66" class="box" fill="#fff" stroke="#c0b1d0"/>
+  <text x="942" y="538" class="body">Kubelet + kernel enforce runtime</text><text x="942" y="559" class="small">not the Grafana role or OpAMP server</text>
+  <path d="M530 543H567M880 543H917" class="edge"/>
+  <path d="M740 388V445" class="edge"/>
+
+  <!-- Safe profile / high risk -->
+  <rect x="40" y="656" width="650" height="214" class="box" fill="#e8f5ee" stroke="#67a17e"/>
+  <text x="66" y="694" class="head">Default discovery profile</text>
+  <text x="66" y="728" class="body">runAsNonRoot · allowPrivilegeEscalation=false · read-only root</text>
+  <text x="66" y="757" class="body">drop ALL capabilities · RuntimeDefault seccomp · no hostPID/network</text>
+  <text x="66" y="795" class="small">Sidecar can inspect its own container and declared inputs. Broader process</text>
+  <text x="66" y="817" class="small">visibility needs explicit namespace sharing/instrumentation or a separate mode.</text>
+  <rect x="66" y="834" width="152" height="22" rx="11" fill="#39845e"/><text x="81" y="849" class="tag">LOW PRIVILEGE</text>
+
+  <rect x="790" y="656" width="650" height="214" class="box" fill="#fff0ed" stroke="#ca7770"/>
+  <text x="816" y="694" class="head">Exceptional deep-inspection profile</text>
+  <text x="816" y="728" class="body">Add only measured requirements; isolate by node, namespace and duration.</text>
+  <text x="816" y="757" class="body">CAP_SYS_ADMIN: broad kernel authority; tested uprobe path needed it.</text>
+  <text x="816" y="786" class="body">CAP_SYS_PTRACE: can expose other process maps/memory when permitted.</text>
+  <text x="816" y="817" class="small">No universal kernel claim. Admission exception and explicit Admin approval required.</text>
+  <rect x="816" y="834" width="185" height="22" rx="11" fill="#b65b52"/><text x="831" y="849" class="tag">HIGH HOST RISK</text>
+  <path d="M730 602V636H365V653M730 636H1115V653" class="edge"/>
+
+  <text x="42" y="914" class="small">Change path: Grafana Admin request → backend validates owner/profile → Kubernetes RBAC → admission → new Pod → token/UID verified OpAMP reconnect.</text>
+</svg>

@@ -546,7 +546,7 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 
 	// Get all OpAMP Bridges from bridges table (NOT agents table)
 	// CRITICAL: Bridges are stored in bridges table, collectors in agents table
-	// Fallback: If bridges table doesn't exist (migration not run), query agents table
+	// Fallback for a database that was not initialized with the current baseline.
 	var bridgeRows *sql.Rows
 	var err error
 
@@ -561,8 +561,8 @@ func bridgesCollectionHandler(w http.ResponseWriter, r *http.Request, c reqCtx) 
 
 	// If bridges table doesn't exist, fall back to agents table (for backward compatibility)
 	if err != nil {
-		log.Printf("WARNING: bridges table not found (migration may not have run). Falling back to agents table. Error: %v", err)
-		log.Printf("Please run migration 0018_create_bridges_table.sql to fix this.")
+		log.Printf("WARNING: bridges table not found (database schema may be outdated). Falling back to agents table. Error: %v", err)
+		log.Printf("Verify the database was initialized from pkg/migrations/0001_initial_schema.sql.")
 		// Fallback: Query agents table for bridges (old behavior)
 		bridgeRows, err = db.Query(`
 		SELECT a.id, a.org_id, a.agent_uid, a.name, COALESCE(a.version,''), a.status, a.last_seen_at, a.labels_json, a.capabilities_json

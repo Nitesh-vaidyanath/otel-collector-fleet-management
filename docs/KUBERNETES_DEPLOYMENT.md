@@ -241,12 +241,11 @@ kubectl port-forward -n platform deployment/grafana 3000:3000
 
 ## Next Steps
 
-1. **Run database migrations**:
-   ```bash
-   # From Grafana pod or a migration job
-   kubectl exec -it deployment/grafana -n platform -- \
-     /var/lib/grafana/plugins/otel-collector-agent-fleet-management/plugin_linux_amd64 migrate
-   ```
+1. **Provision the fleet MySQL schema before deploying Grafana**. For a new
+   empty MySQL database, use the repository's
+   `opamp-server/pkg/migrations/0001_initial_schema.sql` with your approved
+   database deployment process. The backend binary has no `migrate` command,
+   and the local Compose initializer is not a Kubernetes migration job.
 
 2. **Configure OpAMP Bridge**:
    Update OpAMP Bridge configuration to point to your Grafana OpAMP service:

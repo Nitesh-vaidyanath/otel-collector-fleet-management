@@ -30,7 +30,7 @@ func main() {
 	enableTLS := flag.Bool("tls", false, "Enable TLS/HTTPS")
 	certFile := flag.String("cert", "", "Path to TLS certificate file (required if TLS enabled)")
 	keyFile := flag.String("key", "", "Path to TLS private key file (required if TLS enabled)")
-	dbType := flag.String("db-type", "", "Database type (mysql, cloudsql-mysql, aws-rds-mysql, spanner)")
+	dbType := flag.String("db-type", "", "Database type (mysql, cloudsql-mysql, aws-rds-mysql)")
 	dbHost := flag.String("db-host", "", "Database host")
 	dbPort := flag.String("db-port", "", "Database port")
 	dbName := flag.String("db-name", "", "Database name")
@@ -38,7 +38,6 @@ func main() {
 	dbPassword := flag.String("db-password", "", "Database password")
 	dbDSN := flag.String("db-dsn", "", "Complete database DSN (overrides individual db-* flags)")
 	cloudSQLInstance := flag.String("cloudsql-instance", "", "Cloud SQL instance connection name (for cloudsql-mysql)")
-	spannerDatabase := flag.String("spanner-database", "", "Spanner database path (for spanner)")
 	flag.Parse()
 
 	// Set up logger
@@ -66,9 +65,6 @@ func main() {
 		}
 		if *cloudSQLInstance != "" {
 			os.Setenv("CLOUD_SQL_INSTANCE", *cloudSQLInstance)
-		}
-		if *spannerDatabase != "" {
-			os.Setenv("SPANNER_DATABASE", *spannerDatabase)
 		}
 	}
 

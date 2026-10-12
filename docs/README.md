@@ -14,16 +14,21 @@ Complete documentation for OTel Collector Agent Fleet Management plugin.
   - Best practices and examples
 
 - **[Backend Configuration](./BACKEND_CONFIG.md)**
-  - Database setup (MySQL, Cloud SQL, AWS RDS, Spanner)
+  - Database setup (MySQL and MySQL-compatible services)
   - Connection strings and authentication
   - Cloud SQL direct TCP connection
-  - Spanner configuration
 
 - **[Standalone OpAMP Setup](./STANDALONE_OPAMP_SETUP.md)**
   - Running OpAMP server as separate service
   - Docker Compose configuration
   - TLS/HTTPS setup
   - Switching between modes
+
+- **[MySQL Schema and Relationship Graph](./MYSQL_SCHEMA.md)**
+  - Single-database baseline, table keys and foreign-key diagram
+- **[Agent Deployment Models](./AGENT_DEPLOYMENT_MODELS.md)**
+  - Least-privilege sidecar, per-node agent, eBPF and operator alternatives
+  - Grafana/Kubernetes permission boundaries, SBOM and AST/SAST pipeline
 
 ### API & Communication
 - **[API Specification](./API_SPEC.md)**

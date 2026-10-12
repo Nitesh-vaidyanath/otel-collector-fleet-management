@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1060" viewBox="0 0 1460 1060" role="img" aria-labelledby="title desc">
+  <title id="title">Fleet Management MySQL entity relationship diagram</title>
+  <desc id="desc">One organizations table owns tenant-scoped agent, config, template, component, audit, telemetry, queue, bridge, and managed-enrollment tables. Agent identifiers are logical relationships; config record identifiers are foreign keys.</desc>
+  <defs>
+    <style>
+      text{font-family:Inter,Arial,sans-serif;fill:#14243a}.title{font-size:28px;font-weight:700}.sub{font-size:14px;fill:#42536b}.head{font-size:16px;font-weight:700}.field{font-size:12px}.tag{font-size:11px;font-weight:700;fill:#fff}.edge{stroke:#66758c;stroke-width:1.7;fill:none}.logical{stroke:#9674bc;stroke-width:1.7;stroke-dasharray:7 6;fill:none}.node{rx:9;stroke-width:1.5}.muted{fill:#506176;font-size:12px}
+    </style>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0L0 6L8 3z" fill="#66758c"/></marker>
+  </defs>
+  <rect width="1460" height="1060" fill="#f7f9fc"/>
+  <text x="40" y="48" class="title">Fleet Management · MySQL 8 schema</text>
+  <text x="40" y="74" class="sub">One shared database · tenant rows carry org_id · solid = enforced foreign key · dashed = application-level identity</text>
+
+  <!-- Tenant parent -->
+  <rect x="560" y="100" width="340" height="110" class="node" fill="#dceaff" stroke="#4b7ec2"/>
+  <text x="580" y="128" class="head">organizations</text>
+  <text x="580" y="151" class="field">PK id · UQ name · UQ grafana_org_id</text>
+  <text x="580" y="174" class="field">Grafana org mapping is nullable until verified</text>
+
+  <!-- Tenant ownership bus -->
+  <path d="M730 210V246M180 246H1440" class="edge"/>
+  <text x="744" y="235" class="muted">FK org_id: tenant ownership / isolation</text>
+  <path d="M180 246V265" class="edge" marker-end="url(#arrow)"/><path d="M540 246V265" class="edge" marker-end="url(#arrow)"/><path d="M900 246V265" class="edge" marker-end="url(#arrow)"/><path d="M1260 246V265" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- Core tables -->
+  <g>
+    <rect x="30" y="270" width="300" height="140" class="node" fill="#e8f5ee" stroke="#4a9b72"/>
+    <text x="48" y="298" class="head">agents</text><rect x="255" y="280" width="55" height="20" rx="10" fill="#39845e"/><text x="265" y="294" class="tag">RUNTIME</text>
+    <text x="48" y="324" class="field">PK id · FK org_id</text><text x="48" y="347" class="field">UQ (org_id, agent_uid)</text>
+    <text x="48" y="370" class="field">desired/effective config hashes</text><text x="48" y="393" class="field">status · labels · Kubernetes identity</text>
+  </g>
+  <g>
+    <rect x="390" y="270" width="300" height="140" class="node" fill="#fff2df" stroke="#c68a2d"/>
+    <text x="408" y="298" class="head">agent_configs</text><rect x="620" y="280" width="52" height="20" rx="10" fill="#a46b1e"/><text x="628" y="294" class="tag">CONFIG</text>
+    <text x="408" y="324" class="field">PK id · FK org_id</text><text x="408" y="347" class="field">agent_uid · version · YAML · SHA-256</text>
+    <text x="408" y="370" class="field">approval / approver / pushed state</text><text x="408" y="393" class="field">UQ is not imposed on version history</text>
+  </g>
+  <g>
+    <rect x="750" y="270" width="300" height="140" class="node" fill="#fff2df" stroke="#c68a2d"/>
+    <text x="768" y="298" class="head">config_templates</text>
+    <text x="768" y="324" class="field">PK id · FK org_id</text><text x="768" y="347" class="field">name · description</text>
+    <text x="768" y="370" class="field">receivers / processors / exporters JSON</text><text x="768" y="393" class="field">reusable app-config building blocks</text>
+  </g>
+  <g>
+    <rect x="1110" y="270" width="320" height="140" class="node" fill="#fff2df" stroke="#c68a2d"/>
+    <text x="1128" y="298" class="head">component_types</text>
+    <text x="1128" y="324" class="field">PK id · FK org_id</text><text x="1128" y="347" class="field">UQ (org_id, category, type_name)</text>
+    <text x="1128" y="370" class="field">built-in + custom Collector components</text><text x="1128" y="393" class="field">default config · system/custom flags</text>
+  </g>
+
+  <!-- Relationship bus for config references -->
+  <path d="M540 410V444H300V463" class="edge" marker-end="url(#arrow)"/><path d="M540 444H900V463" class="edge" marker-end="url(#arrow)"/>
+  <text x="554" y="438" class="muted">agent_configs.id → optional config_id (audit SET NULL · queue CASCADE)</text>
+  <!-- Tenant bus to second row -->
+  <path d="M1440 246V450H180M180 450H1260" class="edge" opacity=".5"/>
+  <path d="M180 450V463" class="edge" marker-end="url(#arrow)"/><path d="M540 450V463" class="edge" marker-end="url(#arrow)"/><path d="M900 450V463" class="edge" marker-end="url(#arrow)"/><path d="M1260 450V463" class="edge" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="30" y="468" width="300" height="140" class="node" fill="#e8f5ee" stroke="#4a9b72"/>
+    <text x="48" y="496" class="head">bridges</text><text x="48" y="522" class="field">PK id · FK org_id</text>
+    <text x="48" y="545" class="field">UQ (org_id, bridge_uid)</text><text x="48" y="568" class="field">kept distinct from individual agents</text>
+    <text x="48" y="591" class="field">status · capabilities · labels</text>
+  </g>
+  <g>
+    <rect x="390" y="468" width="300" height="140" class="node" fill="#f2eafa" stroke="#9674bc"/>
+    <text x="408" y="496" class="head">agent_activity_log</text><text x="408" y="522" class="field">PK id · FK org_id</text>
+    <text x="408" y="545" class="field">optional FK config_id → agent_configs</text><text x="408" y="568" class="field">audit type · actor · timestamp · metadata</text>
+    <text x="408" y="591" class="field">config delete sets config_id NULL</text>
+  </g>
+  <g>
+    <rect x="750" y="468" width="300" height="140" class="node" fill="#fff2df" stroke="#c68a2d"/>
+    <text x="768" y="496" class="head">pending_config_queue</text><text x="768" y="522" class="field">PK id · FK org_id</text>
+    <text x="768" y="545" class="field">optional FK config_id → agent_configs</text><text x="768" y="568" class="field">UQ (org_id, agent_uid): one pending offer</text>
+    <text x="768" y="591" class="field">send attempts · hash · ack lifecycle</text>
+  </g>
+  <g>
+    <rect x="1110" y="468" width="320" height="140" class="node" fill="#eaf2fb" stroke="#6886aa"/>
+    <text x="1128" y="496" class="head">telemetry_settings</text><text x="1128" y="522" class="field">PK + FK org_id (one row per tenant)</text>
+    <text x="1128" y="545" class="field">datasource / query settings JSON</text><text x="1128" y="568" class="field">no agent credentials stored here</text>
+  </g>
+
+  <!-- Telemetry tables -->
+  <path d="M1440 246V644M180 644H1440" class="edge" opacity=".55"/><path d="M180 644V660" class="edge" opacity=".55" marker-end="url(#arrow)"/><path d="M540 644V660" class="edge" opacity=".55" marker-end="url(#arrow)"/><path d="M900 644V660" class="edge" opacity=".55" marker-end="url(#arrow)"/><path d="M1260 644V660" class="edge" opacity=".55" marker-end="url(#arrow)"/>
+  <text x="744" y="638" class="muted">FK org_id (all four tables)</text>
+  <g>
+    <rect x="30" y="665" width="300" height="150" class="node" fill="#eaf2fb" stroke="#6886aa"/>
+    <text x="48" y="693" class="head">agent_telemetry</text><text x="48" y="719" class="field">PK id · FK org_id</text>
+    <text x="48" y="742" class="field">JSON payload · type · reported_at</text><text x="48" y="765" class="field">optional usage / pipeline columns</text><text x="48" y="792" class="field">indexes by agent + time / type</text>
+  </g>
+  <g>
+    <rect x="390" y="665" width="300" height="150" class="node" fill="#eaf2fb" stroke="#6886aa"/>
+    <text x="408" y="693" class="head">agent_health_history</text><text x="408" y="719" class="field">PK id · FK org_id</text>
+    <text x="408" y="742" class="field">healthy · last error · status</text><text x="408" y="765" class="field">recorded_at history</text><text x="408" y="792" class="field">agent_uid is a logical reference</text>
+  </g>
+  <g>
+    <rect x="750" y="665" width="300" height="150" class="node" fill="#eaf2fb" stroke="#6886aa"/>
+    <text x="768" y="693" class="head">agent_pipeline_status</text><text x="768" y="719" class="field">PK id · FK org_id</text>
+    <text x="768" y="742" class="field">UQ (org_id, agent_uid, pipeline_name)</text><text x="768" y="765" class="field">pipeline type · status · error</text><text x="768" y="792" class="field">agent_uid is a logical reference</text>
+  </g>
+  <g>
+    <rect x="1110" y="665" width="320" height="150" class="node" fill="#f2eafa" stroke="#9674bc"/>
+    <text x="1128" y="693" class="head">managed_agent_enrollments</text><text x="1128" y="719" class="field">PK fleet_id · UQ agent_uid · FK org_id</text>
+    <text x="1128" y="742" class="field">Deployment UID · owner · ServiceAccount</text><text x="1128" y="765" class="field">current Pod UID · profile/config status</text><text x="1128" y="792" class="field">never stores projected token contents</text>
+  </g>
+
+  <!-- Legend clarifies FK vs logical joins; logical edges are omitted to avoid hiding table fields. -->
+  <path d="M40 944H66" class="edge"/><text x="78" y="949" class="muted">Solid: enforced FK (org ownership, config references)</text>
+  <path d="M520 944H550" class="logical"/><text x="562" y="949" class="muted">Dashed: logical join (org_id + agent_uid); not a database FK</text>
+  <text x="40" y="1008" class="muted">Logical joins connect agents to telemetry, config targets, pending queues and managed enrollments while allowing offline/history retention.</text>
+  <text x="40" y="1032" class="muted">Baseline: opamp-server/pkg/migrations/0001_initial_schema.sql · no data migration · fresh empty DB only.</text>
+</svg>

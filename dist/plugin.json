@@ -95,8 +95,7 @@
       "options": [
         {"label": "MySQL", "value": "mysql"},
         {"label": "Google Cloud SQL (MySQL)", "value": "cloudsql-mysql"},
-        {"label": "AWS RDS (MySQL)", "value": "aws-rds-mysql"},
-        {"label": "Google Cloud Spanner", "value": "spanner"}
+        {"label": "AWS RDS (MySQL)", "value": "aws-rds-mysql"}
       ]
     },
     {
@@ -164,12 +163,6 @@
       "path": "cloudSQLInstance",
       "name": "Cloud SQL Instance Connection Name",
       "description": "For Cloud SQL: project:region:instance",
-      "type": "string"
-    },
-    {
-      "path": "spannerDatabase",
-      "name": "Spanner Database Path",
-      "description": "For Spanner: projects/PROJECT/instances/INSTANCE/databases/DATABASE",
       "type": "string"
     }
   ],

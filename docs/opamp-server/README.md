@@ -6,7 +6,7 @@ OpAMP server implementation for managing OpenTelemetry Collector agents. This se
 
 - **OpAMP Server**: Implements the OpenTelemetry Agent Management Protocol
 - **REST API**: Provides HTTP endpoints for agent and configuration management
-- **Database Support**: MySQL, Cloud SQL, AWS RDS, and Google Cloud Spanner
+- **Database Support**: MySQL, including MySQL-compatible Cloud SQL and AWS RDS endpoints
 - **Agent Health Monitoring**: Tracks agent status and connectivity
 - **Configuration Management**: Handles configuration versioning and approval workflow
 
@@ -77,7 +77,7 @@ Example payload:
 ### Prerequisites
 
 - Go 1.21 or later
-- Database (MySQL, Cloud SQL, AWS RDS, or Spanner)
+- Database (MySQL, including MySQL-compatible Cloud SQL or AWS RDS)
 
 ### Build for Linux AMD64
 
@@ -96,13 +96,15 @@ cd opamp-server
 
 ## Database Migrations
 
-Migrations are not automatically applied when the backend starts. Apply the numbered
-MySQL migrations as an explicit deployment step. For an isolated fresh manual-test
-database, use the generated fixture init SQL described in `tests/manual/README.md`.
+The backend does not apply schema at startup. For a fresh local Compose database,
+`scripts/run-migrations.sh` applies the single baseline only if the target database
+has no tables. For the isolated manual stack, use the generated fixture SQL described
+in `tests/manual/README.md`.
 
-For populated databases, back up and review the required one-time migrations
-with the database operator. There is no migration ledger/runner in this repo;
-the manual-test init script is for a fresh disposable test volume only.
+This app has not been released, so the old chain is removed. Future schema changes
+should add a numbered migration after the baseline; do not edit the baseline after
+the first release. The current initializer is fresh-install-only and refuses a
+non-empty database.
 
 ## API Endpoints
 
@@ -167,7 +169,7 @@ The backend service is bundled with the Grafana plugin and runs as a plugin back
 
 1. Check database permissions
 2. Verify database exists
-3. Review migration files
+3. Verify the database was initialized from the current baseline
 
 ## License
 

@@ -18,7 +18,7 @@ A Grafana app plugin for managing OpenTelemetry Collector agents using the OpAMP
 
 - Grafana v11.0 or later
 - Node.js LTS version
-- Database: MySQL, Cloud SQL, AWS RDS, or Google Cloud Spanner
+- Database: MySQL, including MySQL-compatible Cloud SQL or AWS RDS
 
 ### Development Setup
 
